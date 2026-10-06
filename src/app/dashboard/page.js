@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { auth, database } from '../../lib/firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { ref, push, set, onValue } from 'firebase/database';
+import { ref, push, set, onValue, get } from 'firebase/database';
 
 const Icons = {
   add: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>,
@@ -24,10 +24,30 @@ export default function Dashboard() {
   const [newKidEmail, setNewKidEmail] = useState('');
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
         setUser(currentUser);
-        // Fetch kids from realtime DB
+        
+        // 1. Check if this logged in user is actually a STUDENT
+        const safeEmail = (currentUser.email || '').toLowerCase().replace(/\./g, ',');
+        const linkRef = ref(database, `studentLinks/${safeEmail}`);
+        
+        try {
+          const snapshot = await get(linkRef);
+          if (snapshot.exists()) {
+            const linkData = snapshot.val();
+            // Prevent parents from being trapped if they used their own email
+            if (linkData.parentId !== currentUser.uid) {
+              // User is a student! Redirect them to their student hub
+              router.push(`/kid/${linkData.kidId}?parentId=${linkData.parentId}`);
+              return;
+            }
+          }
+        } catch(e) {
+          console.error("Error checking student links", e);
+        }
+
+        // 2. Fetch kids from realtime DB (Parent Mode)
         const kidsRef = ref(database, `users/${currentUser.uid}/kids`);
         onValue(kidsRef, (snapshot) => {
           const data = snapshot.val();
@@ -37,6 +57,17 @@ export default function Dashboard() {
               ...data[key]
             }));
             setKids(kidsList);
+
+            // Keep the studentLinks index updated
+            kidsList.forEach(kid => {
+              if (kid.email) {
+                const sEmail = kid.email.toLowerCase().replace(/\./g, ',');
+                set(ref(database, `studentLinks/${sEmail}`), {
+                  parentId: currentUser.uid,
+                  kidId: kid.id
+                }).catch(e => console.log('Link sync error:', e));
+              }
+            });
           } else {
             setKids([]);
           }
@@ -75,6 +106,14 @@ export default function Dashboard() {
         color: randomColor,
         createdAt: Date.now()
       });
+
+      const sEmail = newKidEmail.trim().toLowerCase().replace(/\./g, ',');
+      if (sEmail) {
+        await set(ref(database, `studentLinks/${sEmail}`), {
+          parentId: user.uid,
+          kidId: newKidRef.key
+        });
+      }
       
       setShowAddKidModal(false);
       setNewKidName('');
