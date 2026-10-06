@@ -309,7 +309,7 @@ export default function KidProfile() {
               id: key,
               ...data[key]
             }));
-            const foundKid = kidsList.find(k => k.name.toLowerCase() === decodeURIComponent(params.id).toLowerCase() || k.id === params.id);
+            const foundKid = kidsList.find(k => k.name.toLowerCase() === decodeURIComponent(searchParams.get("id")).toLowerCase() || k.id === searchParams.get("id"));
             
             if (foundKid) {
               setKid(foundKid);
@@ -354,7 +354,7 @@ export default function KidProfile() {
     });
 
     return () => unsubscribe();
-  }, [router, params.id, searchParams]);
+  }, [router, searchParams.get("id"), searchParams]);
 
   const handleGlobalAdd = async (e) => {
     e.preventDefault();
@@ -890,7 +890,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
       <main className="view-container">
         <div className="card" style={{ textAlign: 'center' }}>
           <h2>Kid not found</h2>
-          <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>We couldn't find a profile for "{params.id}".</p>
+          <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>We couldn't find a profile for "{searchParams.get("id")}".</p>
           <Link href="/dashboard" style={{ color: 'var(--accent-primary)', textDecoration: 'none', fontWeight: 600 }}>← Back to Dashboard</Link>
         </div>
       </main>
@@ -1018,7 +1018,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
               const progressPercent = totalChapters > 0 ? Math.round((completedChapters / totalChapters) * 100) : 0;
               const queryParentId = searchParams.get("parentId");
               const parentIdQuery = queryParentId ? `&parentId=${queryParentId}` : '';
-              const subjectHubHref = `/kid/${params.id}/${subjectSlug}?subjectId=${subject.id}${parentIdQuery}`;
+              const subjectHubHref = `/kid/subject?id=${searchParams.get("id")}&subject=${subjectSlug}&subjectId=${subject.id}${parentIdQuery}`;
 
               return (
                 <div 
@@ -1132,7 +1132,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                         {subjectExams.map(ex => {
                           const queryParentId = searchParams.get("parentId");
                           const parentIdQuery = queryParentId ? `&parentId=${queryParentId}` : '';
-                          const examHref = `/kid/${params.id}/${subjectSlug}/exam/${ex.id}?subjectId=${subject.id}${parentIdQuery}`;
+                          const examHref = `/kid/exam?id=${searchParams.get("id")}&subject=${subjectSlug}&examId=${ex.id}&subjectId=${subject.id}${parentIdQuery}`;
                           return (
                             <Link
                               key={ex.id}

@@ -286,9 +286,13 @@ export default function ChapterPage() {
   const [aiError, setAiError] = useState('');
   
   // Extract route params and format them nicely for display
-  const formattedSubject = params.subject ? params.subject.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : '';
-  const formattedChapter = params.chapter ? params.chapter.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : '';
-  const kidName = params.id ? params.id.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : '';
+  const paramSubject = searchParams.get("subject") || "";
+  const paramChapter = searchParams.get("chapter") || "";
+  const paramId = searchParams.get("id") || "";
+  
+  const formattedSubject = paramSubject ? paramSubject.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : '';
+  const formattedChapter = paramChapter ? paramChapter.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : '';
+  const kidName = paramId ? paramId.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : '';
 
   useEffect(() => {
     // Basic auth check
@@ -310,20 +314,20 @@ export default function ChapterPage() {
           
           for (const kId in kidsData) {
              const k = kidsData[kId];
-             if ((k.name && k.name.toLowerCase() === decodeURIComponent(params.id).toLowerCase()) || kId === params.id) {
+             if ((k.name && k.name.toLowerCase() === decodeURIComponent(paramId).toLowerCase()) || kId === paramId) {
                 foundKidId = kId;
                 if (k.subjects) {
                    for (const sId in k.subjects) {
                       const s = k.subjects[sId];
                       const sSlug = s.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-                      if (sSlug === params.subject) {
+                      if (sSlug === paramSubject) {
                          foundSubjId = sId;
                          if (s.chapters) {
                             for (const eId in s.chapters) {
                                for (const cId in s.chapters[eId]) {
                                   const c = s.chapters[eId][cId];
                                   const cSlug = c.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-                                  if (cSlug === params.chapter) {
+                                  if (cSlug === paramChapter) {
                                      foundExamId = eId;
                                      foundChapId = cId;
                                      foundPdfUrl = s.bookUrl || '';
@@ -370,7 +374,7 @@ export default function ChapterPage() {
       }
     });
     return () => unsubscribe();
-  }, [router, params.id, params.subject, params.chapter, searchParams]);
+  }, [router, searchParams]);
 
   // Pre-fill the AI Prompt when context is loaded
   useEffect(() => {

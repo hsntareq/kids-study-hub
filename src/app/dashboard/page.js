@@ -39,7 +39,7 @@ export default function Dashboard() {
             // Prevent parents from being trapped if they used their own email
             if (linkData.parentId !== currentUser.uid) {
               // User is a student! Redirect them to their student hub
-              router.push(`/kid/${linkData.kidId}?parentId=${linkData.parentId}`);
+              router.push(`/kid/profile?id=${linkData.kidId}&parentId=${linkData.parentId}`);
               return;
             }
           }
@@ -188,7 +188,7 @@ export default function Dashboard() {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '1rem' }}>
             
             {kids.map(kid => (
-              <div key={kid.id} onClick={() => router.push(`/kid/${kid.name.toLowerCase()}`)} style={{ padding: '1.5rem 1rem', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--glass-border)', borderRadius: '16px', textAlign: 'center', cursor: 'pointer', transition: 'all 0.2s ease', boxShadow: '0 4px 6px rgba(0,0,0,0.1)' }} onMouseOver={(e) => { e.currentTarget.style.borderColor = kid.color; e.currentTarget.style.transform = 'translateY(-3px)'; }} onMouseOut={(e) => { e.currentTarget.style.borderColor = 'var(--glass-border)'; e.currentTarget.style.transform = 'translateY(0)'; }}>
+              <div key={kid.id} onClick={() => router.push(`/kid/profile?id=${kid.id}`)} style={{ padding: '1.5rem 1rem', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--glass-border)', borderRadius: '16px', textAlign: 'center', cursor: 'pointer', transition: 'all 0.2s ease', boxShadow: '0 4px 6px rgba(0,0,0,0.1)' }} onMouseOver={(e) => { e.currentTarget.style.borderColor = kid.color; e.currentTarget.style.transform = 'translateY(-3px)'; }} onMouseOut={(e) => { e.currentTarget.style.borderColor = 'var(--glass-border)'; e.currentTarget.style.transform = 'translateY(0)'; }}>
                 {kid.email ? (
                   <>
                     <img 

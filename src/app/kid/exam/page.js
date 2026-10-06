@@ -224,7 +224,8 @@ export default function ExamPage() {
           let matchedKidId = null;
 
           for (const kId in data) {
-            if (kId === params.id || (data[kId].name && data[kId].name.toLowerCase() === decodeURIComponent(params.id).toLowerCase())) {
+            const paramId = searchParams.get("id") || "";
+            if (kId === paramId || (data[kId].name && data[kId].name.toLowerCase() === decodeURIComponent(paramId).toLowerCase())) {
               matchedKid = data[kId];
               matchedKidId = kId;
               break;
@@ -245,7 +246,8 @@ export default function ExamPage() {
             for (const sId in matchedKid.subjects) {
               const s = matchedKid.subjects[sId];
               const sSlug = s.title ? s.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') : '';
-              if (sId === querySubjectId || sId === params.subject || sSlug === params.subject) {
+              const paramSubject = searchParams.get("subject") || "";
+              if (sId === querySubjectId || sId === paramSubject || sSlug === paramSubject) {
                 matchedSubj = s;
                 matchedSubjId = sId;
                 break;
@@ -264,7 +266,8 @@ export default function ExamPage() {
               for (const eId in matchedKid.exams) {
                 const ex = matchedKid.exams[eId];
                 const eSlug = ex.title ? ex.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') : '';
-                if (eId === params.examId || eSlug === params.examId) {
+                const paramExamId = searchParams.get("examId") || "";
+                if (eId === paramExamId || eSlug === paramExamId) {
                   matchedEx = ex;
                   matchedExId = eId;
                   break;
@@ -287,7 +290,7 @@ export default function ExamPage() {
     });
 
     return () => unsubscribe();
-  }, [params.id, params.subject, params.examId, searchParams, router]);
+  }, [searchParams, router]);
 
   // Exam status and progress calculations
   const chaptersMap = (subject && exam && subject.chapters && subject.chapters[exam.id]) || {};
@@ -579,7 +582,7 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
           <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
             We couldn't locate the requested exam workspace.
           </p>
-          <Link href={`/kid/${params.id}`} style={{ color: 'var(--accent-primary)', textDecoration: 'none', fontWeight: 600 }}>
+          <Link href={`/kid/profile?id=${searchParams.get("id")}`} style={{ color: 'var(--accent-primary)', textDecoration: 'none', fontWeight: 600 }}>
             ← Back to Kid Profile
           </Link>
         </div>
@@ -611,7 +614,7 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
         {/* Breadcrumb Navigation */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '0.6rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.88rem', color: 'var(--text-secondary)' }}>
-            <Link href={`/kid/${params.id}`} style={{ color: 'var(--text-secondary)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '0.35rem', transition: 'color 0.2s' }}>
+            <Link href={`/kid/profile?id=${searchParams.get("id")}`} style={{ color: 'var(--text-secondary)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '0.35rem', transition: 'color 0.2s' }}>
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
               <span>{kid.name || 'Kid Profile'}</span>
             </Link>
@@ -621,7 +624,7 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
             <span style={{ color: '#fff', fontWeight: 600 }}>{exam.title}</span>
           </div>
 
-          <Link href={`/kid/${params.id}`} style={{ padding: '0.35rem 0.8rem', fontSize: '0.8rem', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--glass-border)', borderRadius: '6px', color: 'var(--text-secondary)', textDecoration: 'none' }}>
+          <Link href={`/kid/profile?id=${searchParams.get("id")}`} style={{ padding: '0.35rem 0.8rem', fontSize: '0.8rem', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--glass-border)', borderRadius: '6px', color: 'var(--text-secondary)', textDecoration: 'none' }}>
             ← All Subjects
           </Link>
         </div>
@@ -823,7 +826,7 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
                 const chapSlug = chap.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
                 const queryParentId = searchParams.get("parentId");
                 const parentIdQuery = queryParentId ? `?parentId=${queryParentId}` : '';
-                const readHref = `/kid/${params.id}/${subjectSlug}/${chapSlug}${parentIdQuery}`;
+                const readHref = `/kid/chapter?id=${searchParams.get("id")}&subject=${subjectSlug}&chapter=${chapSlug}${parentIdQuery.replace('?', '&')}`;
 
                 return (
                   <div
