@@ -5,6 +5,7 @@ import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { auth, database } from '../../../../../lib/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { ref, onValue, set, push, update } from 'firebase/database';
+import { generateGeminiContent } from '../../../../../lib/gemini';
 
 const ExerciseViewer = ({ ex }) => {
   let parsed = null;
@@ -397,21 +398,15 @@ Please generate questions covering the core concepts of this chapter according t
     setAiError('');
     setGeneratedQuestions('');
     try {
-      const res = await fetch('/api/generate-questions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: aiPrompt })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to generate questions');
-      setGeneratedQuestions(data.questions);
+      const questionsText = await generateGeminiContent(aiPrompt);
+      setGeneratedQuestions(questionsText);
 
       // Save to Firebase
       if (user && kidData) {
         const exercisesRef = ref(database, `users/${user.uid}/kids/${kidData.kidId}/subjects/${kidData.subjectId}/chapters/${kidData.examId}/${kidData.chapterId}/exercises`);
         await push(exercisesRef, {
           title: `Generated Questions - ${new Date().toLocaleDateString()}`,
-          question: data.questions,
+          question: questionsText,
           solution: '', // Empty solution by default
           createdAt: Date.now()
         });
