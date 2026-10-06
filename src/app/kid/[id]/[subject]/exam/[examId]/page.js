@@ -5,6 +5,7 @@ import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { auth, database } from '../../../../../../lib/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { ref, onValue, set, push, remove } from 'firebase/database';
+import { generateGeminiContent } from '../../../../../../lib/gemini';
 import Link from 'next/link';
 
 export default function ExamPage() {
@@ -374,14 +375,7 @@ ${testMarkDistribution ? `Mark Distribution Structure:\n${testMarkDistribution}\
 ${selectedChapterTitles.length > 0 ? `Syllabus Chapters to cover:\n${selectedChapterTitles.join(', ')}\n` : ''}
 ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n` : ''}`;
 
-      const res = await fetch('/api/generate-questions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: promptText })
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to generate model test questions');
+      const questionsText = await generateGeminiContent(promptText);
 
       const testsRef = ref(database, `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${subject.id}/modelTests/${exam.id}`);
       const newTestRef = push(testsRef);
@@ -394,7 +388,7 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
         chapters: selectedChapterTitles,
         markDistribution: testMarkDistribution.trim(),
         customInstruction: customInstructions.trim(),
-        questions: data.questions,
+        questions: questionsText,
         studentAnswers: {},
         uploadedPages: [],
         examinerGrading: null,

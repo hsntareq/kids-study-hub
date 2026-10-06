@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { auth, database } from '../../../lib/firebase';
+import { generateGeminiContent } from '../../../lib/gemini';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { ref, get, push, set, onValue, remove } from 'firebase/database';
 import Link from 'next/link';
@@ -539,13 +540,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
   ]
 }`;
 
-      const res = await fetch('/api/generate-questions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to generate model test');
+      const questionsText = await generateGeminiContent(prompt);
 
       // Update exam mark distribution if changed in modal
       if (testMarkDistribution.trim()) {
@@ -564,7 +559,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
         chapters: selectedChapterTitles,
         markDistribution: testMarkDistribution.trim(),
         customInstruction: customInstructions.trim(),
-        questions: data.questions,
+        questions: questionsText,
         studentAnswers: {},
         uploadedPages: [],
         examinerGrading: null,

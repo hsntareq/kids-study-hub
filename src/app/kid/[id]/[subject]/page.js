@@ -5,6 +5,7 @@ import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { auth, database } from '../../../../lib/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { ref, onValue, set, push, remove } from 'firebase/database';
+import { generateGeminiContent } from '../../../../lib/gemini';
 import Link from 'next/link';
 
 export default function SubjectPage() {
@@ -468,17 +469,10 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
   ]
 }`;
 
-      const res = await fetch('/api/generate-questions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to generate model test');
-
-      let parsedQuestions = parseQuestionsData(data.questions || data);
+      const questionsText = await generateGeminiContent(prompt);
+      let parsedQuestions = parseQuestionsData(questionsText);
       if (!parsedQuestions || parsedQuestions.length === 0) {
-        parsedQuestions = parseQuestionsData(data);
+        throw new Error('Failed to parse generated questions');
       }
 
       const testsRef = ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${subject.id}/modelTests/${exam.id}`);
