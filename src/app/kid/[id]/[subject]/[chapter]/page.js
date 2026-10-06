@@ -1,19 +1,280 @@
 "use client";
 
 import { useEffect, useState } from 'react';
-import { useRouter, useParams } from 'next/navigation';
+import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { auth, database } from '../../../../../lib/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
-import { ref, onValue, set } from 'firebase/database';
+import { ref, onValue, set, push, update } from 'firebase/database';
+
+const ExerciseViewer = ({ ex }) => {
+  let parsed = null;
+  try {
+    let rawStr = ex.question || '';
+    if (typeof rawStr === 'string') {
+      const match = rawStr.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+      const cleanStr = match ? match[1].trim() : rawStr.replace(/```json/gi, '').replace(/```/g, '').trim();
+      parsed = JSON.parse(cleanStr);
+    }
+  } catch(e) {
+    console.warn("JSON parse failed for exercise:", e);
+  }
+
+  const extractQuestions = (obj, sectionName = 'Question') => {
+    let qs = [];
+    if (!obj) return qs;
+    
+    if (Array.isArray(obj)) {
+      obj.forEach(item => qs.push(...extractQuestions(item, sectionName)));
+    } else if (typeof obj === 'object') {
+      // If it looks like a question object (has options or answer and a question text)
+      if (obj.question && typeof obj.question === 'string') {
+        // Only consider it a question if it has typical question fields like options or answer
+        if (obj.options || obj.answer || obj.question_no || obj.type) {
+           qs.push({ section: obj.section_name || sectionName, ...obj });
+           return qs; // Don't recurse deeper if we found a question
+        }
+      }
+      
+      const currentSection = obj.section_name || obj.section || sectionName;
+      for (const key in obj) {
+        qs.push(...extractQuestions(obj[key], currentSection));
+      }
+    }
+    return qs;
+  };
+
+  let allQuestions = [];
+  if (parsed) {
+    allQuestions = extractQuestions(parsed);
+    // Remove duplicates just in case
+    allQuestions = allQuestions.filter((v,i,a)=>a.findIndex(t=>(t.question === v.question))===i);
+  }
+
+  // Robust Fallback: If JSON is permanently truncated or malformed in the database, extract questions manually via regex
+  if (allQuestions.length === 0) {
+    let rawText = ex.question || '';
+    
+    // Try to match question blocks manually
+    const questionBlocks = rawText.match(/{\s*"question_no"[\s\S]*?(?=\s*{\s*"question_no"|\s*]\s*})/g) || [];
+    
+    if (questionBlocks.length > 0) {
+       questionBlocks.forEach(block => {
+          const qMatch = block.match(/"question"\s*:\s*"([^"]+)"/);
+          const aMatch = block.match(/"answer"\s*:\s*"([^"]+)"/);
+          const numMatch = block.match(/"question_no"\s*:\s*(\d+)/);
+          
+          let options = [];
+          const optBlock = block.match(/"options"\s*:\s*\[([\s\S]*?)\]/);
+          if (optBlock) {
+             const optMatches = optBlock[1].match(/"([^"]+)"/g);
+             if (optMatches) {
+                options = optMatches.map(o => o.replace(/"/g, ''));
+             }
+          }
+          
+          if (qMatch) {
+             allQuestions.push({
+                question_no: numMatch ? parseInt(numMatch[1]) : '',
+                question: qMatch[1],
+                options: options,
+                answer: aMatch ? aMatch[1] : '',
+                section: 'Recovered Questions'
+             });
+          }
+       });
+    } else {
+       // Super basic fallback if even the block regex fails
+       const qMatches = [...rawText.matchAll(/"question"\s*:\s*"([^"]+)"/g)];
+       if (qMatches.length > 0) {
+          qMatches.forEach((m, i) => {
+             allQuestions.push({
+                question_no: i + 1,
+                question: m[1],
+                options: [],
+                answer: '',
+                section: 'Recovered Questions'
+             });
+          });
+       }
+    }
+  }
+
+  const [slideIdx, setSlideIdx] = useState(0);
+  const [selectedAnswers, setSelectedAnswers] = useState({});
+  const [submittedAnswers, setSubmittedAnswers] = useState({});
+
+  const handleSelect = (opt) => {
+    if (submittedAnswers[slideIdx]) return;
+    setSelectedAnswers(prev => ({ ...prev, [slideIdx]: opt }));
+  };
+
+  const handleSubmit = () => {
+    if (!selectedAnswers[slideIdx]) return;
+    setSubmittedAnswers(prev => ({ ...prev, [slideIdx]: true }));
+  };
+
+  if (allQuestions.length > 0) {
+    const q = allQuestions[slideIdx];
+    return (
+      <div style={{ padding: '1.5rem', background: 'rgba(0,0,0,0.2)', position: 'relative', overflow: 'hidden' }}>
+        <div style={{ position: 'absolute', top: 0, left: 0, height: '3px', background: 'rgba(255,255,255,0.05)', width: '100%' }}>
+           <div style={{ width: `${((slideIdx + 1) / allQuestions.length) * 100}%`, height: '100%', background: 'var(--accent-gradient)', transition: 'width 0.3s ease-out' }}></div>
+        </div>
+        
+        <div style={{ marginTop: '0.2rem', display: 'flex', justifyContent: 'space-between', color: 'var(--accent-primary)', fontSize: '0.85rem', fontWeight: 600 }}>
+          <span>{q.section || 'Question'}</span>
+          <span>Question {slideIdx + 1} of {allQuestions.length}</span>
+        </div>
+
+        <h4 style={{ color: '#fff', fontSize: '1.15rem', margin: '1.25rem 0', lineHeight: 1.5 }}>
+          {q.question_no ? `${q.question_no}. ` : ''}{q.question}
+        </h4>
+
+        {q.options && Array.isArray(q.options) && (
+           <div style={{ display: 'grid', gap: '0.6rem', marginBottom: '1.5rem' }}>
+              {q.options.map((opt, i) => {
+                 const isSelected = selectedAnswers[slideIdx] === opt;
+                 const isSubmitted = submittedAnswers[slideIdx];
+                 
+                 // If submitted, check if this option is the correct answer
+                 // Simple string matching. Often AI adds "A) ", so check if q.answer contains it.
+                 let isCorrect = false;
+                 let isWrong = false;
+                 if (isSubmitted) {
+                    const cleanAns = (q.answer || '').toLowerCase();
+                    const cleanOpt = opt.toLowerCase();
+                    if (cleanAns === cleanOpt || cleanAns.includes(cleanOpt) || cleanOpt.includes(cleanAns)) {
+                       isCorrect = true;
+                    }
+                    if (isSelected && !isCorrect) {
+                       isWrong = true;
+                    }
+                 }
+
+                 let bg = 'rgba(255,255,255,0.03)';
+                 let border = '1px solid rgba(255,255,255,0.08)';
+                 let color = '#e2e8f0';
+
+                 if (isSubmitted) {
+                    if (isCorrect) {
+                       bg = 'rgba(16, 185, 129, 0.15)';
+                       border = '1px solid rgba(16, 185, 129, 0.4)';
+                       color = '#34d399';
+                    } else if (isWrong) {
+                       bg = 'rgba(239, 68, 68, 0.15)';
+                       border = '1px solid rgba(239, 68, 68, 0.4)';
+                       color = '#f87171';
+                    }
+                 } else if (isSelected) {
+                    bg = 'rgba(139, 92, 246, 0.15)';
+                    border = '1px solid var(--accent-primary)';
+                 }
+
+                 return (
+                   <div 
+                     key={i} 
+                     onClick={() => handleSelect(opt)}
+                     style={{ 
+                       padding: '0.8rem 1rem', 
+                       background: bg, 
+                       borderRadius: '8px', 
+                       border: border, 
+                       color: color, 
+                       fontSize: '0.95rem',
+                       cursor: isSubmitted ? 'default' : 'pointer',
+                       transition: 'all 0.2s ease'
+                     }}
+                   >
+                      {opt}
+                   </div>
+                 );
+              })}
+           </div>
+        )}
+
+        {!submittedAnswers[slideIdx] && q.options && q.options.length > 0 && (
+           <button 
+             onClick={handleSubmit} 
+             disabled={!selectedAnswers[slideIdx]}
+             style={{ 
+               padding: '0.65rem 1.25rem', 
+               background: selectedAnswers[slideIdx] ? 'var(--accent-gradient)' : 'rgba(255,255,255,0.1)', 
+               border: 'none', 
+               borderRadius: '8px', 
+               color: '#fff', 
+               fontWeight: 600,
+               cursor: selectedAnswers[slideIdx] ? 'pointer' : 'not-allowed',
+               opacity: selectedAnswers[slideIdx] ? 1 : 0.5,
+               marginBottom: '1rem',
+               display: 'block',
+               width: '100%'
+             }}
+           >
+             Check Answer
+           </button>
+        )}
+
+        {(submittedAnswers[slideIdx] || (!q.options || q.options.length === 0)) && q.answer && (
+           <div style={{ background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.2)', padding: '1rem', borderRadius: '8px', color: '#34d399', fontSize: '0.95rem', marginTop: '1rem' }}>
+             <strong style={{ display: 'block', marginBottom: '0.3rem' }}>Correct Answer:</strong> {q.answer}
+             {q.explanation && (
+                <div style={{ marginTop: '0.5rem', color: '#9ca3af', fontSize: '0.88rem' }}>
+                  <strong>Explanation:</strong> {q.explanation}
+                </div>
+             )}
+           </div>
+        )}
+
+        <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1.5rem', justifyContent: 'space-between', paddingTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+           <button onClick={() => setSlideIdx(Math.max(0, slideIdx - 1))} disabled={slideIdx === 0} style={{ padding: '0.6rem 1.2rem', background: 'rgba(255,255,255,0.08)', border: 'none', borderRadius: '8px', color: '#fff', cursor: slideIdx === 0 ? 'not-allowed' : 'pointer', opacity: slideIdx === 0 ? 0.4 : 1, fontWeight: 500 }}>← Previous</button>
+           <button onClick={() => setSlideIdx(Math.min(allQuestions.length - 1, slideIdx + 1))} disabled={slideIdx === allQuestions.length - 1} style={{ padding: '0.6rem 1.2rem', background: 'var(--accent-primary)', border: 'none', borderRadius: '8px', color: '#fff', cursor: slideIdx === allQuestions.length - 1 ? 'not-allowed' : 'pointer', opacity: slideIdx === allQuestions.length - 1 ? 0.4 : 1, fontWeight: 600 }}>Next →</button>
+        </div>
+      </div>
+    );
+  }
+
+  // Fallback to normal rendering, but format it better if it looks like raw JSON
+  let displayText = ex.question;
+  if (typeof displayText === 'string' && (displayText.trim().startsWith('{') || displayText.trim().startsWith('['))) {
+    try {
+       // Attempt to format it beautifully even if we couldn't parse the specific schema
+       const match = displayText.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+       const clean = match ? match[1].trim() : displayText.replace(/```json/gi, '').replace(/```/g, '').trim();
+       const testObj = JSON.parse(clean);
+       displayText = JSON.stringify(testObj, null, 2);
+    } catch(e) {}
+  }
+
+  return (
+    <div style={{ padding: '1.5rem' }}>
+      <div style={{ background: 'rgba(0,0,0,0.2)', padding: '1.2rem', borderRadius: '12px', marginBottom: '1rem', color: 'var(--text-secondary)', fontSize: '0.95rem', borderLeft: '3px solid #6b7280' }}>
+        <strong style={{ color: '#fff', display: 'block', marginBottom: '0.5rem' }}>Generated Content:</strong> 
+        <div style={{ whiteSpace: 'pre-wrap', lineHeight: '1.6', fontFamily: (typeof displayText === 'string' && (displayText.includes('{') || displayText.includes('['))) ? 'monospace' : 'inherit', background: 'rgba(0,0,0,0.3)', padding: '1rem', borderRadius: '8px' }}>
+          {displayText}
+        </div>
+      </div>
+      
+      {ex.solution && (
+        <div style={{ background: 'rgba(124, 58, 237, 0.1)', border: '1px solid rgba(124, 58, 237, 0.2)', padding: '1.2rem', borderRadius: '12px', color: '#fff', fontSize: '0.95rem', borderLeft: '3px solid var(--accent-primary)' }}>
+          <strong style={{ color: 'var(--accent-primary)', display: 'block', marginBottom: '0.5rem' }}>Solution:</strong> 
+          <div style={{ whiteSpace: 'pre-wrap', lineHeight: '1.6' }}>{ex.solution}</div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 export default function ChapterPage() {
   const router = useRouter();
   const params = useParams();
+  const searchParams = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState(null);
   const [kidData, setKidData] = useState(null);
   const [pdfUrl, setPdfUrl] = useState('');
   const [pdfPage, setPdfPage] = useState('');
+  const [exercises, setExercises] = useState([]);
+  const [isStudentView, setIsStudentView] = useState(false);
   
   // AI Feature States
   const [chapterContext, setChapterContext] = useState(null);
@@ -33,17 +294,22 @@ export default function ChapterPage() {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
         setUser(currentUser);
-        
         // Fetch kids data to find the exact chapter by slug
-        const kidsRef = ref(database, `users/${currentUser.uid}/kids`);
+        const queryParentId = searchParams.get("parentId");
+        if (queryParentId) {
+          setIsStudentView(true);
+        }
+        
+        const kidsRef = ref(database, `users/${queryParentId || currentUser.uid}/kids`);
         onValue(kidsRef, (snap) => {
           const kidsData = snap.val() || {};
           let foundKidId, foundSubjId, foundExamId, foundChapId, foundPdfUrl, foundPdfPage;
           let ctxSubjectTitle = '', ctxExamTitle = '', ctxChapterTitle = '', ctxMarkDist = '';
+          let chapterExercises = [];
           
           for (const kId in kidsData) {
              const k = kidsData[kId];
-             if (k.name && k.name.toLowerCase() === params.id.toLowerCase()) {
+             if ((k.name && k.name.toLowerCase() === decodeURIComponent(params.id).toLowerCase()) || kId === params.id) {
                 foundKidId = kId;
                 if (k.subjects) {
                    for (const sId in k.subjects) {
@@ -65,6 +331,8 @@ export default function ChapterPage() {
                                      ctxChapterTitle = c.title || '';
                                      ctxExamTitle = (k.exams && k.exams[eId]) ? k.exams[eId].title : '';
                                      ctxMarkDist = (s.examSettings && s.examSettings[eId] && s.examSettings[eId].markDistribution) ? s.examSettings[eId].markDistribution : '';
+                                     const rawExercises = c.exercises || {};
+                                     chapterExercises = Object.keys(rawExercises).map(key => ({ id: key, ...rawExercises[key] })).sort((a, b) => b.createdAt - a.createdAt);
                                   }
                                }
                             }
@@ -87,10 +355,12 @@ export default function ChapterPage() {
                pdfPage: foundPdfPage,
                markDistribution: ctxMarkDist
              });
+             setExercises(chapterExercises);
           } else {
              setPdfUrl('');
              setPdfPage('');
              setChapterContext(null);
+             setExercises([]);
           }
           setLoading(false);
         });
@@ -99,7 +369,7 @@ export default function ChapterPage() {
       }
     });
     return () => unsubscribe();
-  }, [router]);
+  }, [router, params.id, params.subject, params.chapter, searchParams]);
 
   // Pre-fill the AI Prompt when context is loaded
   useEffect(() => {
@@ -135,6 +405,17 @@ Please generate questions covering the core concepts of this chapter according t
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to generate questions');
       setGeneratedQuestions(data.questions);
+
+      // Save to Firebase
+      if (user && kidData) {
+        const exercisesRef = ref(database, `users/${user.uid}/kids/${kidData.kidId}/subjects/${kidData.subjectId}/chapters/${kidData.examId}/${kidData.chapterId}/exercises`);
+        await push(exercisesRef, {
+          title: `Generated Questions - ${new Date().toLocaleDateString()}`,
+          question: data.questions,
+          solution: '', // Empty solution by default
+          createdAt: Date.now()
+        });
+      }
     } catch (err) {
       setAiError(err.message);
     } finally {
@@ -209,43 +490,43 @@ Please generate questions covering the core concepts of this chapter according t
                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
                 Exercises & Solutions
               </h2>
-              <button style={{ background: 'var(--accent-primary)', color: '#fff', border: 'none', borderRadius: '8px', padding: '0.6rem 1rem', fontSize: '0.95rem', fontWeight: '500', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.5rem', boxShadow: '0 4px 12px rgba(124, 58, 237, 0.4)', transition: 'transform 0.2s' }} onMouseOver={(e) => e.currentTarget.style.transform='translateY(-2px)'} onMouseOut={(e) => e.currentTarget.style.transform='translateY(0)'}>
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                Add Exercise
-              </button>
+              {!isStudentView && (
+                <button style={{ background: 'var(--accent-primary)', color: '#fff', border: 'none', borderRadius: '8px', padding: '0.6rem 1rem', fontSize: '0.95rem', fontWeight: '500', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.5rem', boxShadow: '0 4px 12px rgba(124, 58, 237, 0.4)', transition: 'transform 0.2s' }} onMouseOver={(e) => e.currentTarget.style.transform='translateY(-2px)'} onMouseOut={(e) => e.currentTarget.style.transform='translateY(0)'}>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                  Add Exercise
+                </button>
+              )}
             </div>
             
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
               
-              {/* Placeholder for an exercise item */}
-              <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--glass-border)', borderRadius: '16px', overflow: 'hidden' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '1.5rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                  <h3 style={{ margin: 0, fontSize: '1.2rem', color: '#fff' }}>Example Exercise 1</h3>
-                  <div style={{ display: 'flex', gap: '0.5rem' }}>
-                    <button title="Edit" style={{ background: 'rgba(255,255,255,0.05)', border: 'none', color: 'var(--accent-primary)', cursor: 'pointer', padding: '0.4rem', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
-                    </button>
-                  </div>
+              {exercises.length === 0 ? (
+                <div style={{ padding: '2rem', textAlign: 'center', background: 'rgba(255,255,255,0.02)', borderRadius: '16px', border: '1px dashed rgba(255,255,255,0.1)', color: 'var(--text-secondary)' }}>
+                  {isStudentView ? "Your parent hasn't added any exercises for this chapter yet." : "No exercises added yet. Use the generator below to create some."}
                 </div>
-                
-                <div style={{ padding: '1.5rem' }}>
-                  <div style={{ background: 'rgba(0,0,0,0.2)', padding: '1.2rem', borderRadius: '12px', marginBottom: '1rem', color: 'var(--text-secondary)', fontSize: '0.95rem', borderLeft: '3px solid #6b7280' }}>
-                    <strong style={{ color: '#fff', display: 'block', marginBottom: '0.5rem' }}>Question:</strong> 
-                    Write an example of a math problem here.
+              ) : (
+                exercises.map((ex, idx) => (
+                  <div key={ex.id} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--glass-border)', borderRadius: '16px', overflow: 'hidden' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '1.5rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                      <h3 style={{ margin: 0, fontSize: '1.2rem', color: '#fff' }}>{ex.title || `Exercise ${idx + 1}`}</h3>
+                      <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        <button title="Edit" style={{ background: 'rgba(255,255,255,0.05)', border: 'none', color: 'var(--accent-primary)', cursor: 'pointer', padding: '0.4rem', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
+                        </button>
+                      </div>
+                    </div>
+                    
+                    <ExerciseViewer ex={ex} />
                   </div>
-                  
-                  <div style={{ background: 'rgba(124, 58, 237, 0.1)', border: '1px solid rgba(124, 58, 237, 0.2)', padding: '1.2rem', borderRadius: '12px', color: '#fff', fontSize: '0.95rem', borderLeft: '3px solid var(--accent-primary)' }}>
-                    <strong style={{ color: 'var(--accent-primary)', display: 'block', marginBottom: '0.5rem' }}>Solution:</strong> 
-                    This is where the step-by-step solution will be displayed.
-                  </div>
-                </div>
-              </div>
+                ))
+              )}
 
             </div>
           </div>
 
           {/* AI Question Generator Section */}
-          <div className="card" style={{ padding: '2rem', textAlign: 'left', background: 'linear-gradient(to bottom right, rgba(20, 20, 30, 0.8), rgba(30, 20, 40, 0.8))', border: '1px solid rgba(124, 58, 237, 0.3)' }}>
+          {!isStudentView && (
+            <div className="card" style={{ padding: '2rem', textAlign: 'left', background: 'linear-gradient(to bottom right, rgba(20, 20, 30, 0.8), rgba(30, 20, 40, 0.8))', border: '1px solid rgba(124, 58, 237, 0.3)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
               <h2 style={{ margin: 0, fontSize: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#fff' }}>
                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
@@ -290,18 +571,9 @@ Please generate questions covering the core concepts of this chapter according t
               )}
             </button>
             
-            {generatedQuestions && (
-              <div style={{ marginTop: '2rem', background: 'rgba(0,0,0,0.2)', padding: '2rem', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)' }}>
-                <h3 style={{ margin: '0 0 1.5rem 0', color: 'var(--accent-primary)', fontSize: '1.2rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
-                  Generated Output
-                </h3>
-                <div style={{ whiteSpace: 'pre-wrap', color: '#fff', lineHeight: '1.6', fontSize: '0.95rem' }}>
-                  {generatedQuestions}
-                </div>
-              </div>
-            )}
+
           </div>
+          )}
 
         </div>
       </div>
