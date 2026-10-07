@@ -12,6 +12,7 @@ function ExamPageContent() {
   const router = useRouter();
   const params = useParams();
   const searchParams = useSearchParams();
+  const isStudentView = !!searchParams.get('parentId');
 
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState(null);
