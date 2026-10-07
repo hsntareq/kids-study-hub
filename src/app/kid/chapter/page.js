@@ -193,19 +193,32 @@ const ExerciseViewer = ({ ex }) => {
            </div>
         )}
 
-        {!submittedAnswers[slideIdx] && q.options && q.options.length > 0 && (
+        {(!q.options || q.options.length === 0) && (
+           <div style={{ marginBottom: '1.5rem' }}>
+              <textarea 
+                value={selectedAnswers[slideIdx] || ''}
+                onChange={(e) => !submittedAnswers[slideIdx] && setSelectedAnswers(prev => ({ ...prev, [slideIdx]: e.target.value }))}
+                disabled={submittedAnswers[slideIdx]}
+                placeholder="Write your answer here..."
+                rows={4}
+                style={{ width: '100%', padding: '1rem', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: '#fff', fontSize: '0.95rem', resize: 'vertical' }}
+              />
+           </div>
+        )}
+
+        {!submittedAnswers[slideIdx] && (
            <button 
              onClick={handleSubmit} 
-             disabled={!selectedAnswers[slideIdx]}
+             disabled={!selectedAnswers[slideIdx] || selectedAnswers[slideIdx].trim() === ''}
              style={{ 
                padding: '0.65rem 1.25rem', 
-               background: selectedAnswers[slideIdx] ? 'var(--accent-gradient)' : 'rgba(255,255,255,0.1)', 
+               background: (selectedAnswers[slideIdx] && selectedAnswers[slideIdx].trim() !== '') ? 'var(--accent-gradient)' : 'rgba(255,255,255,0.1)', 
                border: 'none', 
                borderRadius: '8px', 
                color: '#fff', 
                fontWeight: 600,
-               cursor: selectedAnswers[slideIdx] ? 'pointer' : 'not-allowed',
-               opacity: selectedAnswers[slideIdx] ? 1 : 0.5,
+               cursor: (selectedAnswers[slideIdx] && selectedAnswers[slideIdx].trim() !== '') ? 'pointer' : 'not-allowed',
+               opacity: (selectedAnswers[slideIdx] && selectedAnswers[slideIdx].trim() !== '') ? 1 : 0.5,
                marginBottom: '1rem',
                display: 'block',
                width: '100%'
@@ -215,7 +228,7 @@ const ExerciseViewer = ({ ex }) => {
            </button>
         )}
 
-        {(submittedAnswers[slideIdx] || (!q.options || q.options.length === 0)) && q.answer && (
+        {submittedAnswers[slideIdx] && q.answer && (
            <div style={{ background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.2)', padding: '1rem', borderRadius: '8px', color: '#34d399', fontSize: '0.95rem', marginTop: '1rem' }}>
              <strong style={{ display: 'block', marginBottom: '0.3rem' }}>Correct Answer:</strong> {q.answer}
              {q.explanation && (
