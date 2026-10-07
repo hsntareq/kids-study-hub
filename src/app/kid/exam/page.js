@@ -1,14 +1,14 @@
 "use client";
 
-import { useEffect, useState, useRef } from 'react';
+import { Suspense, useEffect, useState, useRef } from 'react';
 import { useRouter, useParams, useSearchParams } from 'next/navigation';
-import { auth, database } from '../../../../../../lib/firebase';
+import { auth, database } from '../../../lib/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { ref, onValue, set, push, remove } from 'firebase/database';
-import { generateGeminiContent } from '../../../../../../lib/gemini';
+import { generateGeminiContent } from '../../../lib/gemini';
 import Link from 'next/link';
 
-export default function ExamPage() {
+function ExamPageContent() {
   const router = useRouter();
   const params = useParams();
   const searchParams = useSearchParams();
@@ -1824,5 +1824,13 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
       )}
 
     </main>
+  );
+}
+
+export default function ExamPage() {
+  return (
+    <Suspense fallback={<div className="view-container" style={{ padding: '2rem', color: '#fff', textAlign: 'center' }}>Loading exam workspace...</div>}>
+      <ExamPageContent />
+    </Suspense>
   );
 }

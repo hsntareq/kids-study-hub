@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from 'react';
+import { Suspense, useEffect, useState, useRef } from 'react';
 import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { auth, database } from '../../../lib/firebase';
 import { generateGeminiContent } from '../../../lib/gemini';
@@ -8,7 +8,7 @@ import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { ref, get, push, set, onValue, remove } from 'firebase/database';
 import Link from 'next/link';
 
-export default function KidProfile() {
+function KidProfileContent() {
   const router = useRouter();
   const params = useParams();
   const searchParams = useSearchParams();
@@ -2490,5 +2490,13 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
         </div>
       )}
     </main>
+  );
+}
+
+export default function KidProfile() {
+  return (
+    <Suspense fallback={<div className="view-container" style={{ padding: '2rem', color: '#fff', textAlign: 'center' }}>Loading student profile...</div>}>
+      <KidProfileContent />
+    </Suspense>
   );
 }

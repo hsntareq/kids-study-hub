@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useParams, useSearchParams } from 'next/navigation';
-import { auth, database } from '../../../../../lib/firebase';
+import { auth, database } from '../../../lib/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { ref, onValue, set, push, update } from 'firebase/database';
-import { generateGeminiContent } from '../../../../../lib/gemini';
+import { generateGeminiContent } from '../../../lib/gemini';
 
 const ExerciseViewer = ({ ex }) => {
   let parsed = null;
@@ -265,7 +265,7 @@ const ExerciseViewer = ({ ex }) => {
   );
 };
 
-export default function ChapterPage() {
+function ChapterPageContent() {
   const router = useRouter();
   const params = useParams();
   const searchParams = useSearchParams();
@@ -577,5 +577,13 @@ Please generate questions covering the core concepts of this chapter according t
         </div>
       </div>
     </main>
+  );
+}
+
+export default function ChapterPage() {
+  return (
+    <Suspense fallback={<div className="view-container" style={{ padding: '2rem', color: '#fff' }}>Loading workspace...</div>}>
+      <ChapterPageContent />
+    </Suspense>
   );
 }
