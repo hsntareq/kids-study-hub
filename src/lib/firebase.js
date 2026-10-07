@@ -1,4 +1,4 @@
-import { initializeApp } from "firebase/app";
+import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider, signInWithPopup, createUserWithEmailAndPassword, signInWithEmailAndPassword } from "firebase/auth";
 import { getDatabase } from "firebase/database";
 
@@ -15,7 +15,12 @@ const firebaseConfig = {
   databaseURL: process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL
 };
 
-const app = initializeApp(firebaseConfig);
+// Standard Next.js singleton pattern
+// Provide a dummy databaseURL during static builds if env vars are missing
+const app = !getApps().length 
+  ? initializeApp(firebaseConfig.databaseURL ? firebaseConfig : { ...firebaseConfig, databaseURL: "https://dummy.firebaseio.com" })
+  : getApp();
+
 const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
 const database = getDatabase(app);
