@@ -17,12 +17,19 @@ const firebaseConfig = {
     : "https://dummy-default-rtdb.firebaseio.com"
 };
 
-// Standard Next.js singleton pattern
-const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+let app;
+let auth;
+let googleProvider;
+let database;
 
-const auth = getAuth(app);
-const googleProvider = new GoogleAuthProvider();
-const database = getDatabase(app);
+try {
+  app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+  auth = getAuth(app);
+  googleProvider = new GoogleAuthProvider();
+  database = getDatabase(app);
+} catch (error) {
+  console.warn("Firebase initialization failed. If this is a static build, this warning can be ignored. Error:", error.message);
+}
 
 // Uncomment the following line if you want to use the Local Auth Emulator
 // import { connectAuthEmulator } from "firebase/auth";
