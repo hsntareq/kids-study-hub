@@ -564,6 +564,18 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
     setTimeout(() => setCopiedSuccess(false), 2000);
   };
 
+  const getEmbedUrl = (url, page) => {
+    if (!url) return '';
+    let processed = url;
+    if (processed.includes('drive.google.com')) {
+      processed = processed.replace(/\/view.*$/, '/preview');
+    }
+    if (page) {
+      processed += `#page=${page}`;
+    }
+    return processed;
+  };
+
   if (loading) {
     return (
       <main className="view-container">
@@ -717,6 +729,40 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
               </div>
             </div>
           </div>
+        </div>
+
+        {/* 0. Subject Material Section (Textbook) */}
+        <div style={{ background: 'rgba(255,255,255,0.025)', border: '1px solid var(--glass-border)', borderRadius: '14px', padding: '1.5rem', marginBottom: '2rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.5rem' }}>
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16c0 1.1.9 2 2 2h12a2 2 0 0 0 2-2V8l-6-6z"></path><path d="M14 3v5h5M16 13H8M16 17H8M10 9H8"></path></svg>
+            <h2 style={{ margin: 0, fontSize: '1.15rem', color: '#fff', fontWeight: 600 }}>Subject Material (PDF)</h2>
+          </div>
+
+          {!subject.bookUrl ? (
+            <div style={{ background: 'rgba(0,0,0,0.2)', border: '1px dashed rgba(255,255,255,0.1)', borderRadius: '12px', padding: '2rem', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>
+              <span style={{ fontSize: '1rem', fontWeight: '500', color: '#fff', marginBottom: '0.5rem' }}>No Book Configured</span>
+              <span style={{ fontSize: '0.85rem', opacity: 0.7, textAlign: 'center', maxWidth: '300px' }}>Go to the Subject Settings to configure a Book URL.</span>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                  {isStudentView ? `Subject Textbook` : `Embedded PDF`}
+                </span>
+              </div>
+              
+              {isStudentView ? (
+                <div style={{ display: 'flex', justifyContent: 'center', padding: '2rem', background: 'rgba(0,0,0,0.2)', border: '1px dashed var(--glass-border)', borderRadius: '12px' }}>
+                  <a href={getEmbedUrl(subject.bookUrl)} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', background: 'var(--accent-primary)', color: '#fff', textDecoration: 'none', padding: '0.7rem 1.2rem', borderRadius: '8px', fontWeight: '600', fontSize: '0.95rem', transition: 'transform 0.2s', boxShadow: '0 4px 12px rgba(124, 58, 237, 0.4)' }} onMouseOver={(e) => e.currentTarget.style.transform='translateY(-2px)'} onMouseOut={(e) => e.currentTarget.style.transform='translateY(0)'}>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                    Open Textbook
+                  </a>
+                </div>
+              ) : (
+                <iframe src={getEmbedUrl(subject.bookUrl)} width="100%" height="500px" style={{ border: 'none', borderRadius: '12px', background: '#fff' }} title="Subject PDF"></iframe>
+              )}
+            </div>
+          )}
         </div>
 
         {/* 1. Mark Distribution Section */}

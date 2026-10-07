@@ -453,46 +453,6 @@ Please generate questions covering the core concepts of this chapter according t
         {/* Content Layout */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
           
-          {/* Chapter Material Section */}
-          <div className="card" style={{ padding: '2rem', textAlign: 'left' }}>
-            <h2 style={{ margin: '0 0 1.5rem 0', fontSize: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16c0 1.1.9 2 2 2h12a2 2 0 0 0 2-2V8l-6-6z"></path><path d="M14 3v5h5M16 13H8M16 17H8M10 9H8"></path></svg>
-              Chapter Material (PDF)
-            </h2>
-            
-            {/* PDF View or Input */}
-            {!pdfUrl && (
-              <div style={{ background: 'rgba(0,0,0,0.2)', border: '2px dashed rgba(255,255,255,0.1)', borderRadius: '16px', padding: '2.5rem', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>
-                <div style={{ background: 'var(--accent-primary)', color: '#fff', borderRadius: '50%', padding: '12px', marginBottom: '1rem', display: 'flex' }}>
-                   <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"></path></svg>
-                </div>
-                <span style={{ fontSize: '1.1rem', fontWeight: '500', color: '#fff' }}>No Book Configured</span>
-                <span style={{ fontSize: '0.9rem', opacity: 0.7, marginTop: '0.5rem', textAlign: 'center', maxWidth: '300px' }}>Please go back to the Subject list and click the Settings icon next to the Subject name to configure the Book URL.</span>
-              </div>
-            )}
-
-            {pdfUrl && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-                    {isStudentView ? `Chapter Textbook ${pdfPage ? `(Starts at Page ${pdfPage})` : ''}` : `Embedded PDF ${pdfPage ? `(Page ${pdfPage})` : ''}`}
-                  </span>
-                </div>
-                
-                {isStudentView ? (
-                  <div style={{ display: 'flex', justifyContent: 'center', padding: '3rem', background: 'rgba(0,0,0,0.2)', border: '1px dashed var(--glass-border)', borderRadius: '12px' }}>
-                    <a href={getEmbedUrl(pdfUrl, pdfPage)} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', background: 'var(--accent-primary)', color: '#fff', textDecoration: 'none', padding: '0.8rem 1.5rem', borderRadius: '8px', fontWeight: '600', fontSize: '1rem', transition: 'transform 0.2s', boxShadow: '0 4px 12px rgba(124, 58, 237, 0.4)' }} onMouseOver={(e) => e.currentTarget.style.transform='translateY(-2px)'} onMouseOut={(e) => e.currentTarget.style.transform='translateY(0)'}>
-                      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
-                      Open Textbook
-                    </a>
-                  </div>
-                ) : (
-                  <iframe src={getEmbedUrl(pdfUrl, pdfPage)} width="100%" height="700px" style={{ border: 'none', borderRadius: '12px', background: '#fff' }} title="Chapter PDF"></iframe>
-                )}
-              </div>
-            )}
-
-          </div>
 
           {/* Exercises Section */}
           <div className="card" style={{ padding: '2rem', textAlign: 'left' }}>
