@@ -949,8 +949,8 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
                           gap: '0.35rem'
                         }}
                       >
-                        <span>Study Chapter</span>
-                        <span>📖</span>
+                        <span>{isStudentView ? 'Study Chapter' : 'Generate Questions'}</span>
+                        <span>{isStudentView ? '📖' : '⚡'}</span>
                       </Link>
                     </div>
                   </div>
