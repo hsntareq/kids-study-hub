@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { auth, googleProvider, signInWithPopup, createUserWithEmailAndPassword, database } from '../../lib/firebase';
+import { onAuthStateChanged } from 'firebase/auth';
 import { ref, set } from 'firebase/database';
 
 const Icons = {
@@ -40,6 +41,20 @@ export default function SignupPage() {
     }
   };
 
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        try {
+          await saveUserProfile(user, user.displayName);
+        } catch (e) {
+          console.error("Failed to save user profile:", e);
+        }
+        router.push('/dashboard');
+      }
+    });
+    return () => unsubscribe();
+  }, [router]);
+
   const handleGoogleAuth = async (e) => {
     e.preventDefault();
     try {
@@ -49,7 +64,17 @@ export default function SignupPage() {
       router.push('/dashboard');
     } catch (error) {
       console.error("Google Auth Error:", error);
-      alert("Google Sign-Up failed. Please check the console for details.");
+      if (error.code === 'auth/popup-blocked') {
+        alert("Popup blocked by your browser! Attempting redirect instead...");
+        try {
+          const { signInWithRedirect } = require('firebase/auth');
+          await signInWithRedirect(auth, googleProvider);
+        } catch (redirectError) {
+          console.error("Redirect Auth Error:", redirectError);
+        }
+      } else {
+        alert("Google Sign-Up failed. Please check the console for details.");
+      }
     }
   };
 
