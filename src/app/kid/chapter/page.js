@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useParams, useSearchParams } from 'next/navigation';
-import { auth, database } from '../../../../../lib/firebase';
+import { auth, database } from '../../../lib/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { ref, onValue, set, push, update } from 'firebase/database';
-import { generateGeminiContent } from '../../../../../lib/gemini';
+import { generateGeminiContent } from '../../../lib/gemini';
 
 const ExerciseViewer = ({ ex }) => {
   let parsed = null;
@@ -265,7 +265,7 @@ const ExerciseViewer = ({ ex }) => {
   );
 };
 
-export default function ChapterPage() {
+function ChapterPageContent() {
   const router = useRouter();
   const params = useParams();
   const searchParams = useSearchParams();
@@ -286,9 +286,13 @@ export default function ChapterPage() {
   const [aiError, setAiError] = useState('');
   
   // Extract route params and format them nicely for display
-  const formattedSubject = params.subject ? params.subject.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : '';
-  const formattedChapter = params.chapter ? params.chapter.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : '';
-  const kidName = params.id ? params.id.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : '';
+  const paramSubject = searchParams.get("subject") || "";
+  const paramChapter = searchParams.get("chapter") || "";
+  const paramId = searchParams.get("id") || "";
+  
+  const formattedSubject = paramSubject ? paramSubject.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : '';
+  const formattedChapter = paramChapter ? paramChapter.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : '';
+  const kidName = paramId ? paramId.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : '';
 
   useEffect(() => {
     // Basic auth check
@@ -310,20 +314,20 @@ export default function ChapterPage() {
           
           for (const kId in kidsData) {
              const k = kidsData[kId];
-             if ((k.name && k.name.toLowerCase() === decodeURIComponent(params.id).toLowerCase()) || kId === params.id) {
+             if ((k.name && k.name.toLowerCase() === decodeURIComponent(paramId).toLowerCase()) || kId === paramId) {
                 foundKidId = kId;
                 if (k.subjects) {
                    for (const sId in k.subjects) {
                       const s = k.subjects[sId];
                       const sSlug = s.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-                      if (sSlug === params.subject) {
+                      if (sSlug === paramSubject) {
                          foundSubjId = sId;
                          if (s.chapters) {
                             for (const eId in s.chapters) {
                                for (const cId in s.chapters[eId]) {
                                   const c = s.chapters[eId][cId];
                                   const cSlug = c.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-                                  if (cSlug === params.chapter) {
+                                  if (cSlug === paramChapter) {
                                      foundExamId = eId;
                                      foundChapId = cId;
                                      foundPdfUrl = s.bookUrl || '';
@@ -370,7 +374,7 @@ export default function ChapterPage() {
       }
     });
     return () => unsubscribe();
-  }, [router, params.id, params.subject, params.chapter, searchParams]);
+  }, [router, searchParams]);
 
   // Pre-fill the AI Prompt when context is loaded
   useEffect(() => {
@@ -449,34 +453,6 @@ Please generate questions covering the core concepts of this chapter according t
         {/* Content Layout */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
           
-          {/* Chapter Material Section */}
-          <div className="card" style={{ padding: '2rem', textAlign: 'left' }}>
-            <h2 style={{ margin: '0 0 1.5rem 0', fontSize: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16c0 1.1.9 2 2 2h12a2 2 0 0 0 2-2V8l-6-6z"></path><path d="M14 3v5h5M16 13H8M16 17H8M10 9H8"></path></svg>
-              Chapter Material (PDF)
-            </h2>
-            
-            {/* PDF View or Input */}
-            {!pdfUrl && (
-              <div style={{ background: 'rgba(0,0,0,0.2)', border: '2px dashed rgba(255,255,255,0.1)', borderRadius: '16px', padding: '2.5rem', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>
-                <div style={{ background: 'var(--accent-primary)', color: '#fff', borderRadius: '50%', padding: '12px', marginBottom: '1rem', display: 'flex' }}>
-                   <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"></path></svg>
-                </div>
-                <span style={{ fontSize: '1.1rem', fontWeight: '500', color: '#fff' }}>No Book Configured</span>
-                <span style={{ fontSize: '0.9rem', opacity: 0.7, marginTop: '0.5rem', textAlign: 'center', maxWidth: '300px' }}>Please go back to the Subject list and click the Settings icon next to the Subject name to configure the Book URL.</span>
-              </div>
-            )}
-
-            {pdfUrl && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Embedded PDF {pdfPage ? `(Page ${pdfPage})` : ''}</span>
-                </div>
-                <iframe src={getEmbedUrl(pdfUrl, pdfPage)} width="100%" height="700px" style={{ border: 'none', borderRadius: '12px', background: '#fff' }} title="Chapter PDF"></iframe>
-              </div>
-            )}
-
-          </div>
 
           {/* Exercises Section */}
           <div className="card" style={{ padding: '2rem', textAlign: 'left' }}>
@@ -573,5 +549,13 @@ Please generate questions covering the core concepts of this chapter according t
         </div>
       </div>
     </main>
+  );
+}
+
+export default function ChapterPage() {
+  return (
+    <Suspense fallback={<div className="view-container" style={{ padding: '2rem', color: '#fff' }}>Loading workspace...</div>}>
+      <ChapterPageContent />
+    </Suspense>
   );
 }

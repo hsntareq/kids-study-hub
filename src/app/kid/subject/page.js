@@ -1,14 +1,14 @@
 "use client";
 
-import { useEffect, useState, useRef } from 'react';
+import { Suspense, useEffect, useState, useRef } from 'react';
 import { useRouter, useParams, useSearchParams } from 'next/navigation';
-import { auth, database } from '../../../../lib/firebase';
+import { auth, database } from '../../../lib/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { ref, onValue, set, push, remove } from 'firebase/database';
-import { generateGeminiContent } from '../../../../lib/gemini';
+import { generateGeminiContent } from '../../../lib/gemini';
 import Link from 'next/link';
 
-export default function SubjectPage() {
+function SubjectPageContent() {
   const router = useRouter();
   const params = useParams();
   const searchParams = useSearchParams();
@@ -233,7 +233,8 @@ export default function SubjectPage() {
           let matchedKidId = null;
 
           for (const kId in data) {
-            if (kId === params.id || (data[kId].name && data[kId].name.toLowerCase() === decodeURIComponent(params.id).toLowerCase())) {
+            const paramId = searchParams.get("id") || "";
+            if (kId === paramId || (data[kId].name && data[kId].name.toLowerCase() === decodeURIComponent(paramId).toLowerCase())) {
               matchedKid = data[kId];
               matchedKidId = kId;
               break;
@@ -254,7 +255,8 @@ export default function SubjectPage() {
             for (const sId in matchedKid.subjects) {
               const s = matchedKid.subjects[sId];
               const sSlug = s.title ? s.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') : '';
-              if (sId === querySubjectId || sId === params.subject || sSlug === params.subject) {
+              const paramSubject = searchParams.get("subject") || "";
+              if (sId === querySubjectId || sId === paramSubject || sSlug === paramSubject) {
                 matchedSubj = s;
                 matchedSubjId = sId;
                 break;
@@ -284,7 +286,7 @@ export default function SubjectPage() {
     });
 
     return () => unsubscribe();
-  }, [params.id, params.subject, searchParams, router]);
+  }, [searchParams, router]);
 
   // Calculate overall subject progress
   let totalSubjectChapters = 0;
@@ -629,7 +631,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
       <div className="container" style={{ textAlign: 'center', marginTop: '4rem' }}>
         <h2>Subject Not Found</h2>
         <p style={{ color: 'var(--text-secondary)' }}>Could not find subject or kid record.</p>
-        <Link href={`/kid/${params.id}`} style={{ color: 'var(--accent-primary)', textDecoration: 'none', fontWeight: 600 }}>
+        <Link href={`/kid/profile?id=${searchParams.get("id")}`} style={{ color: 'var(--accent-primary)', textDecoration: 'none', fontWeight: 600 }}>
           ← Back to Student Profile
         </Link>
       </div>
@@ -644,7 +646,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
       <nav style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.5rem', fontSize: '0.88rem', color: 'var(--text-secondary)' }}>
         <Link href="/" style={{ color: 'var(--text-secondary)', textDecoration: 'none' }}>Home</Link>
         <span>›</span>
-        <Link href={`/kid/${params.id}`} style={{ color: 'var(--text-secondary)', textDecoration: 'none' }}>{kid.name}</Link>
+        <Link href={`/kid/profile?id=${searchParams.get("id")}`} style={{ color: 'var(--text-secondary)', textDecoration: 'none' }}>{kid.name}</Link>
         <span>›</span>
         <span style={{ color: '#fff', fontWeight: 600 }}>{subject.title}</span>
       </nav>
@@ -811,7 +813,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
               const isEditingMarkDist = editingMarkDistExamId === exam.id;
               const queryParentId = searchParams.get("parentId");
               const parentIdQuery = queryParentId ? `&parentId=${queryParentId}` : '';
-              const examPageHref = `/kid/${params.id}/${subjectSlug}/exam/${exam.id}?subjectId=${subject.id}${parentIdQuery}`;
+              const examPageHref = `/kid/exam?id=${searchParams.get("id")}&subject=${subjectSlug}&examId=${exam.id}&subjectId=${subject.id}${parentIdQuery}`;
 
               const rawModelTests = (subject.modelTests && subject.modelTests[exam.id]) || {};
               const testsList = Object.entries(rawModelTests)
@@ -1048,7 +1050,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                               const chapSlug = chap.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
                               const queryParentId = searchParams.get("parentId");
                               const parentIdQuery = queryParentId ? `?parentId=${queryParentId}` : '';
-                              const linkHref = `/kid/${params.id}/${subjectSlug}/${chapSlug}${parentIdQuery}`;
+                              const linkHref = `/kid/chapter?id=${searchParams.get("id")}&subject=${subjectSlug}&chapter=${chapSlug}${parentIdQuery.replace('?', '&')}`;
 
                               return (
                                 <div
@@ -1754,5 +1756,13 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
         </div>
       )}
     </main>
+  );
+}
+
+export default function SubjectPage() {
+  return (
+    <Suspense fallback={<div className="view-container" style={{ padding: '2rem', color: '#fff', textAlign: 'center' }}>Loading subject...</div>}>
+      <SubjectPageContent />
+    </Suspense>
   );
 }
