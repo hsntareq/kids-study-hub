@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { auth, googleProvider, signInWithPopup, signInWithEmailAndPassword, database } from '../lib/firebase';
+import { auth, googleProvider, signInWithPopup, signInWithEmailAndPassword, signInWithRedirect, database } from '../lib/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { ref, set, get } from 'firebase/database';
 
@@ -74,7 +74,6 @@ export default function App() {
         alert("Popup blocked by your browser! Attempting redirect instead...");
         try {
           // Fallback for adblockers and strict browsers
-          const { signInWithRedirect } = require('firebase/auth');
           await signInWithRedirect(auth, googleProvider);
         } catch (redirectError) {
           console.error("Redirect Auth Error:", redirectError);

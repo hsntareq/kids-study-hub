@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
-import { getAuth, GoogleAuthProvider, signInWithPopup, createUserWithEmailAndPassword, signInWithEmailAndPassword } from "firebase/auth";
+import { getAuth, GoogleAuthProvider, signInWithPopup, createUserWithEmailAndPassword, signInWithEmailAndPassword, signInWithRedirect } from "firebase/auth";
 import { getDatabase } from "firebase/database";
 
 // TODO: Replace this with your actual Firebase project configuration
@@ -43,4 +43,4 @@ try {
 // import { connectAuthEmulator } from "firebase/auth";
 // connectAuthEmulator(auth, "http://127.0.0.1:9099");
 
-export { auth, googleProvider, signInWithPopup, createUserWithEmailAndPassword, signInWithEmailAndPassword, database };
+export { auth, googleProvider, signInWithPopup, signInWithRedirect, createUserWithEmailAndPassword, signInWithEmailAndPassword, database };

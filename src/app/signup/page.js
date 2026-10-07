@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { auth, googleProvider, signInWithPopup, createUserWithEmailAndPassword, database } from '../../lib/firebase';
+import { auth, googleProvider, signInWithPopup, createUserWithEmailAndPassword, signInWithRedirect, database } from '../../lib/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { ref, set } from 'firebase/database';
 
@@ -67,7 +67,6 @@ export default function SignupPage() {
       if (error.code === 'auth/popup-blocked') {
         alert("Popup blocked by your browser! Attempting redirect instead...");
         try {
-          const { signInWithRedirect } = require('firebase/auth');
           await signInWithRedirect(auth, googleProvider);
         } catch (redirectError) {
           console.error("Redirect Auth Error:", redirectError);
