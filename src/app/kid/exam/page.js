@@ -832,7 +832,7 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
               </div>
             </div>
           ) : (
-            <div style={{ background: 'rgba(0,0,0,0.22)', border: '1px solid rgba(255,255,255,0.04)', borderRadius: '10px', padding: '1rem' }}>
+            <div style={{ textAlign: 'left', background: 'rgba(0,0,0,0.22)', border: '1px solid rgba(255,255,255,0.04)', borderRadius: '10px', padding: '1rem' }}>
               {markDistValue ? (
                 <p style={{ margin: 0, fontSize: '0.92rem', color: '#cbd5e1', whiteSpace: 'pre-line', lineHeight: 1.55 }}>
                   {markDistValue}
@@ -916,7 +916,7 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
                         {isCompleted && '✓'}
                       </button>
 
-                      <div>
+                      <div style={{ textAlign: 'left' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                           <span style={{ fontSize: '0.96rem', fontWeight: 600, color: isCompleted ? '#34d399' : '#fff' }}>
                             {chap.title}
@@ -1011,7 +1011,7 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
                       gap: '0.75rem'
                     }}
                   >
-                    <div>
+                    <div style={{ textAlign: 'left' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.2rem', flexWrap: 'wrap' }}>
                         <span style={{ fontSize: '0.98rem', fontWeight: 600, color: '#fff' }}>
                           {test.title || `Model Test - ${test.date}`}
