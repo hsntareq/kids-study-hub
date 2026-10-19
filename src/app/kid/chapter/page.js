@@ -434,6 +434,11 @@ function ChapterPageContent() {
   const [totalKidsCount, setTotalKidsCount] = useState(1);
   const [activeExerciseTab, setActiveExerciseTab] = useState({});
 
+  // Published Assessments Accordion & Sharing states
+  const [expandedExercises, setExpandedExercises] = useState({});
+  const [copiedExerciseId, setCopiedExerciseId] = useState(null);
+  const [shareModalData, setShareModalData] = useState(null);
+
   // Extract query params
   const paramSubject = searchParams.get("subject") || "";
   const paramSubjectId = searchParams.get("subjectId") || "";
@@ -441,6 +446,7 @@ function ChapterPageContent() {
   const paramChapterId = searchParams.get("chapterId") || "";
   const paramExamId = searchParams.get("examId") || "";
   const paramId = searchParams.get("id") || "";
+  const paramExerciseId = searchParams.get("exerciseId") || "";
   const queryParentId = searchParams.get("parentId");
 
   // Fetch Kid, Subject, Exam, and Chapter
@@ -526,6 +532,9 @@ function ChapterPageContent() {
               markDistribution: ctxMarkDist
             });
             setExercises(chapterExercises);
+            if (paramExerciseId) {
+              setExpandedExercises(prev => ({ ...prev, [paramExerciseId]: true }));
+            }
           } else {
             setChapterContext(null);
             setExercises([]);
@@ -538,7 +547,7 @@ function ChapterPageContent() {
     });
 
     return () => unsubscribe();
-  }, [router, searchParams, paramChapter, paramChapterId, paramExamId, paramId, paramSubject, paramSubjectId, queryParentId]);
+  }, [router, searchParams, paramChapter, paramChapterId, paramExamId, paramId, paramSubject, paramSubjectId, paramExerciseId, queryParentId]);
 
   // Toggle chapter mastery status
   const handleToggleChapterMastery = async () => {
@@ -758,6 +767,74 @@ Include balanced questions from the selected types. Ensure math expressions are 
       totalStudents: totalKidsCount,
       highestScore
     };
+  };
+
+  // Accordion Expand/Collapse logic
+  const toggleExerciseAccordion = (exerciseId) => {
+    setExpandedExercises(prev => ({
+      ...prev,
+      [exerciseId]: !prev[exerciseId]
+    }));
+  };
+
+  const allExercisesExpanded = useMemo(() => {
+    return exercises.length > 0 && exercises.every(ex => Boolean(expandedExercises[ex.id]));
+  }, [exercises, expandedExercises]);
+
+  const handleToggleExpandAll = () => {
+    if (allExercisesExpanded) {
+      setExpandedExercises({});
+    } else {
+      const next = {};
+      exercises.forEach(ex => { next[ex.id] = true; });
+      setExpandedExercises(next);
+    }
+  };
+
+  // Build direct shareable link for students
+  const getShareUrl = (ex) => {
+    if (typeof window === 'undefined') return '';
+    const origin = window.location.origin;
+    const kidIdVal = kidData?.kidId || paramId;
+    const subjVal = paramSubject || kidData?.subjectId || '';
+    const examVal = kidData?.examId || paramExamId || '';
+    const chapVal = kidData?.chapterId || paramChapterId || paramChapter || '';
+    const parentVal = user?.uid || queryParentId || '';
+
+    const url = new URL(`${origin}/kid/chapter`);
+    if (kidIdVal) url.searchParams.set('id', kidIdVal);
+    if (subjVal) url.searchParams.set('subject', subjVal);
+    if (examVal) url.searchParams.set('examId', examVal);
+    if (chapVal) url.searchParams.set('chapterId', chapVal);
+    if (ex?.id) url.searchParams.set('exerciseId', ex.id);
+    if (parentVal) url.searchParams.set('parentId', parentVal);
+
+    return url.toString();
+  };
+
+  // Handle Share & Assign button click: copies link immediately and opens modal dialog
+  const handleShareExercise = async (ex) => {
+    const url = getShareUrl(ex);
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url);
+      }
+    } catch (e) {
+      console.error('Clipboard copy error:', e);
+    }
+
+    setCopiedExerciseId(ex.id);
+    setTimeout(() => {
+      setCopiedExerciseId(null);
+    }, 2500);
+
+    setPublishSuccessNotice(`🔗 Link for "${ex.title || 'Assessment'}" copied to clipboard! Ready to share with students.`);
+
+    setShareModalData({
+      ex,
+      url,
+      copied: true
+    });
   };
 
   if (loading) {
@@ -1371,10 +1448,34 @@ Include balanced questions from the selected types. Ensure math expressions are 
             </p>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <span style={{ fontSize: '0.78rem', background: 'rgba(255,255,255,0.06)', padding: '0.25rem 0.65rem', borderRadius: '12px', color: 'var(--text-secondary)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '0.78rem', background: 'rgba(255,255,255,0.06)', padding: '0.28rem 0.75rem', borderRadius: '12px', color: 'var(--text-secondary)' }}>
               {exercises.length} {exercises.length === 1 ? 'Assessment' : 'Assessments'} Published
             </span>
+
+            {exercises.length > 0 && (
+              <button
+                type="button"
+                onClick={handleToggleExpandAll}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.35rem',
+                  fontSize: '0.78rem',
+                  fontWeight: 600,
+                  padding: '0.28rem 0.75rem',
+                  borderRadius: '12px',
+                  background: allExercisesExpanded ? 'rgba(99, 102, 241, 0.22)' : 'rgba(255, 255, 255, 0.06)',
+                  border: allExercisesExpanded ? '1px solid rgba(129, 140, 248, 0.45)' : '1px solid rgba(255, 255, 255, 0.12)',
+                  color: allExercisesExpanded ? '#c7d2fe' : '#e2e8f0',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease'
+                }}
+                title={allExercisesExpanded ? "Collapse all question sets" : "Expand all question sets"}
+              >
+                <span>{allExercisesExpanded ? '▲ Collapse All' : '▼ Expand All'}</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -1453,6 +1554,7 @@ Include balanced questions from the selected types. Ensure math expressions are 
             {exercises.map((ex, idx) => {
               const metrics = getAssessmentMetrics(ex);
               const isBreakdownTab = activeExerciseTab[ex.id] === 'breakdown';
+              const isExpanded = Boolean(expandedExercises[ex.id]);
 
               // Extract questions array if available
               let questionsList = [];
@@ -1467,35 +1569,148 @@ Include balanced questions from the selected types. Ensure math expressions are 
               }
 
               return (
-                <div key={ex.id} style={{ background: 'rgba(255,255,255,0.025)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '16px', overflow: 'hidden' }}>
+                <div
+                  key={ex.id}
+                  style={{
+                    background: 'rgba(255,255,255,0.025)',
+                    border: isExpanded ? '1px solid rgba(129, 140, 248, 0.35)' : '1px solid rgba(255,255,255,0.08)',
+                    borderRadius: '16px',
+                    overflow: 'hidden',
+                    transition: 'border 0.2s ease, box-shadow 0.2s ease',
+                    boxShadow: isExpanded ? '0 8px 30px -8px rgba(0,0,0,0.5)' : 'none'
+                  }}
+                >
                   
-                  {/* Exercise Header */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1.1rem 1.4rem', borderBottom: '1px solid rgba(255,255,255,0.06)', background: 'rgba(255,255,255,0.02)' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                  {/* Exercise Header - Clickable Accordion Header */}
+                  <div
+                    onClick={() => toggleExerciseAccordion(ex.id)}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '1.1rem 1.4rem',
+                      borderBottom: (isExpanded || !isStudentView) ? '1px solid rgba(255,255,255,0.06)' : 'none',
+                      background: isExpanded ? 'rgba(255,255,255,0.035)' : 'rgba(255,255,255,0.02)',
+                      cursor: 'pointer',
+                      userSelect: 'none',
+                      flexWrap: 'wrap',
+                      gap: '0.75rem',
+                      transition: 'background 0.15s ease'
+                    }}
+                  >
+                    {/* Left: Title + Share & Assign Button + Badges */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
                       <span style={{ fontSize: '0.78rem', padding: '0.15rem 0.5rem', borderRadius: '8px', background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', fontWeight: 700 }}>
                         ✓ Published
                       </span>
+                      
                       <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 700, color: '#fff' }}>
                         {ex.title || `Exercise ${idx + 1}`}
                       </h3>
+
+                      {/* Clickable 'Share & Assign' Button next to Title */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleShareExercise(ex);
+                        }}
+                        title="Click to copy assignment link and open share menu"
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.4rem',
+                          padding: '0.3rem 0.75rem',
+                          background: copiedExerciseId === ex.id
+                            ? 'rgba(16, 185, 129, 0.25)'
+                            : 'linear-gradient(135deg, rgba(99, 102, 241, 0.22), rgba(168, 85, 247, 0.2))',
+                          border: copiedExerciseId === ex.id
+                            ? '1px solid #10b981'
+                            : '1px solid rgba(129, 140, 248, 0.45)',
+                          borderRadius: '8px',
+                          color: copiedExerciseId === ex.id ? '#34d399' : '#c7d2fe',
+                          fontSize: '0.78rem',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          transition: 'all 0.15s ease',
+                          boxShadow: copiedExerciseId === ex.id ? '0 0 12px rgba(16, 185, 129, 0.4)' : 'none'
+                        }}
+                      >
+                        {copiedExerciseId === ex.id ? (
+                          <>
+                            <span style={{ fontSize: '0.85rem' }}>✓</span>
+                            <span>Link Copied!</span>
+                          </>
+                        ) : (
+                          <>
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+                            </svg>
+                            <span>Share & Assign</span>
+                          </>
+                        )}
+                      </button>
+
                       {questionsList.length > 0 && (
-                        <span style={{ fontSize: '0.74rem', padding: '0.12rem 0.45rem', borderRadius: '6px', background: 'rgba(255,255,255,0.06)', color: 'var(--text-secondary)' }}>
+                        <span style={{ fontSize: '0.74rem', padding: '0.12rem 0.48rem', borderRadius: '6px', background: 'rgba(255,255,255,0.06)', color: 'var(--text-secondary)' }}>
                           {questionsList.length} Questions
                         </span>
                       )}
                     </div>
 
-                    {!isStudentView && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                    {/* Right: Accordion Toggle + Delete Button */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
+                      
+                      {/* Accordion Pill / Chevron */}
+                      <div
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.4rem',
+                          padding: '0.35rem 0.8rem',
+                          borderRadius: '8px',
+                          background: isExpanded ? 'rgba(99, 102, 241, 0.18)' : 'rgba(255,255,255,0.06)',
+                          border: isExpanded ? '1px solid rgba(129, 140, 248, 0.4)' : '1px solid rgba(255,255,255,0.1)',
+                          color: isExpanded ? '#c7d2fe' : 'var(--text-secondary)',
+                          fontSize: '0.78rem',
+                          fontWeight: 600,
+                          transition: 'all 0.15s ease'
+                        }}
+                      >
+                        <span>{isExpanded ? 'Collapse' : 'Expand Questions'}</span>
+                        <svg
+                          width="12"
+                          height="12"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          style={{
+                            transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                            transition: 'transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)'
+                          }}
+                        >
+                          <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                      </div>
+
+                      {!isStudentView && (
                         <button
-                          onClick={() => handleDeleteExercise(ex.id)}
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteExercise(ex.id);
+                          }}
                           title="Delete this exercise"
                           style={{ padding: '0.35rem 0.65rem', background: 'rgba(239, 68, 68, 0.1)', border: 'none', borderRadius: '6px', color: '#f87171', fontSize: '0.76rem', cursor: 'pointer', fontWeight: 600 }}
                         >
                           Delete
                         </button>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </div>
 
                   {/* INSTRUCTOR PERFORMANCE METRICS QUICK GLANCE STRIP */}
@@ -1608,10 +1823,16 @@ Include balanced questions from the selected types. Ensure math expressions are 
                       <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center' }}>
                         <button
                           type="button"
-                          onClick={() => setActiveExerciseTab(prev => ({
-                            ...prev,
-                            [ex.id]: prev[ex.id] === 'breakdown' ? 'preview' : 'breakdown'
-                          }))}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (!isExpanded) {
+                              setExpandedExercises(prev => ({ ...prev, [ex.id]: true }));
+                            }
+                            setActiveExerciseTab(prev => ({
+                              ...prev,
+                              [ex.id]: prev[ex.id] === 'breakdown' ? 'preview' : 'breakdown'
+                            }));
+                          }}
                           style={{
                             padding: '0.5rem 0.95rem',
                             background: isBreakdownTab ? 'rgba(99, 102, 241, 0.25)' : 'rgba(255,255,255,0.06)',
@@ -1634,117 +1855,410 @@ Include balanced questions from the selected types. Ensure math expressions are 
                     </div>
                   )}
 
-                  {/* TAB 1: INSTRUCTOR ANALYTICS & SOLUTIONS BREAKDOWN */}
-                  {isBreakdownTab && !isStudentView ? (
-                    <div style={{ padding: '1.4rem', textAlign: 'left' }}>
-                      {/* Score Distribution Breakdown Bar */}
-                      <div style={{ marginBottom: '1.5rem', background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.06)' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.82rem', fontWeight: 600, color: '#fff', marginBottom: '0.5rem' }}>
-                          <span>Class Performance Distribution</span>
-                          <span style={{ color: 'var(--text-secondary)', fontSize: '0.76rem' }}>
-                            Pass Benchmark: 70%
-                          </span>
-                        </div>
-                        {/* Segmented Tier Bar */}
-                        <div style={{ height: '8px', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '6px', overflow: 'hidden', display: 'flex', marginBottom: '0.6rem' }}>
-                          <div style={{ width: `${metrics.passRate}%`, background: '#10b981' }} title={`Passing: ${metrics.passRate}%`} />
-                          <div style={{ width: `${100 - metrics.passRate}%`, background: '#f59e0b' }} title={`Review Needed: ${100 - metrics.passRate}%`} />
-                        </div>
-                        <div style={{ display: 'flex', gap: '1rem', fontSize: '0.74rem', color: '#94a3b8' }}>
-                          <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981' }}></span>
-                            Passing Standard (≥70%): <strong>{metrics.passRate}%</strong>
-                          </span>
-                          <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#f59e0b' }}></span>
-                            Needs Revision (&lt;70%): <strong>{100 - metrics.passRate}%</strong>
-                          </span>
-                        </div>
+                  {/* Compact Teaser Bar (Visible when Collapsed) */}
+                  {!isExpanded && (
+                    <div
+                      onClick={() => toggleExerciseAccordion(ex.id)}
+                      style={{
+                        padding: '0.85rem 1.4rem',
+                        background: 'rgba(0, 0, 0, 0.2)',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        cursor: 'pointer',
+                        borderTop: isStudentView ? 'none' : '1px solid rgba(255, 255, 255, 0.04)',
+                        transition: 'background 0.15s ease'
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.03)'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(0, 0, 0, 0.2)'}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                        <span style={{ fontSize: '0.95rem' }}>📂</span>
+                        <span style={{ fontSize: '0.82rem', color: '#cbd5e1' }}>
+                          Assessment question set is compact ({questionsList.length} total questions).
+                        </span>
+                        <span style={{ fontSize: '0.78rem', color: '#818cf8', fontWeight: 600 }}>
+                          Click to expand and view →
+                        </span>
                       </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: '#a5b4fc', fontSize: '0.78rem', fontWeight: 600 }}>
+                        <span>View Questions</span>
+                        <span>▾</span>
+                      </div>
+                    </div>
+                  )}
 
-                      {/* Question-by-Question Diagnostic Quick Table */}
-                      <h4 style={{ margin: '0 0 0.85rem 0', fontSize: '0.98rem', fontWeight: 700, color: '#fff', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                        <span>📋</span>
-                        <span>Assessment Question Diagnostic & Answer Matrix</span>
-                      </h4>
+                  {/* EXPANDED ACCORDION VIEW: QUESTION SET & DIAGNOSTICS */}
+                  {isExpanded && (
+                    <div style={{ borderTop: '1px solid rgba(255, 255, 255, 0.06)', animation: 'fadeIn 0.2s ease-out' }}>
+                      {/* TAB 1: INSTRUCTOR ANALYTICS & SOLUTIONS BREAKDOWN */}
+                      {isBreakdownTab && !isStudentView ? (
+                        <div style={{ padding: '1.4rem', textAlign: 'left' }}>
+                          {/* Score Distribution Breakdown Bar */}
+                          <div style={{ marginBottom: '1.5rem', background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.06)' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.82rem', fontWeight: 600, color: '#fff', marginBottom: '0.5rem' }}>
+                              <span>Class Performance Distribution</span>
+                              <span style={{ color: 'var(--text-secondary)', fontSize: '0.76rem' }}>
+                                Pass Benchmark: 70%
+                              </span>
+                            </div>
+                            {/* Segmented Tier Bar */}
+                            <div style={{ height: '8px', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '6px', overflow: 'hidden', display: 'flex', marginBottom: '0.6rem' }}>
+                              <div style={{ width: `${metrics.passRate}%`, background: '#10b981' }} title={`Passing: ${metrics.passRate}%`} />
+                              <div style={{ width: `${100 - metrics.passRate}%`, background: '#f59e0b' }} title={`Review Needed: ${100 - metrics.passRate}%`} />
+                            </div>
+                            <div style={{ display: 'flex', gap: '1rem', fontSize: '0.74rem', color: '#94a3b8' }}>
+                              <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981' }}></span>
+                                Passing Standard (≥70%): <strong>{metrics.passRate}%</strong>
+                              </span>
+                              <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#f59e0b' }}></span>
+                                Needs Revision (&lt;70%): <strong>{100 - metrics.passRate}%</strong>
+                              </span>
+                            </div>
+                          </div>
 
-                      {questionsList.length === 0 ? (
-                        <div style={{ padding: '1rem', background: 'rgba(0,0,0,0.15)', borderRadius: '8px', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                          No individual questions parsed. Use Student Practice View to inspect content.
+                          {/* Question-by-Question Diagnostic Quick Table */}
+                          <h4 style={{ margin: '0 0 0.85rem 0', fontSize: '0.98rem', fontWeight: 700, color: '#fff', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                            <span>📋</span>
+                            <span>Assessment Question Diagnostic & Answer Matrix</span>
+                          </h4>
+
+                          {questionsList.length === 0 ? (
+                            <div style={{ padding: '1rem', background: 'rgba(0,0,0,0.15)', borderRadius: '8px', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                              No individual questions parsed. Use Student Practice View to inspect content.
+                            </div>
+                          ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                              {questionsList.map((q, qIdx) => (
+                                <div
+                                  key={qIdx}
+                                  style={{
+                                    background: 'rgba(0, 0, 0, 0.3)',
+                                    border: '1px solid rgba(255, 255, 255, 0.06)',
+                                    borderRadius: '10px',
+                                    padding: '1rem',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '0.45rem'
+                                  }}
+                                >
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                      <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#a5b4fc' }}>
+                                        Q{qIdx + 1}.
+                                      </span>
+                                      <span style={{
+                                        fontSize: '0.68rem',
+                                        fontWeight: 700,
+                                        padding: '0.12rem 0.45rem',
+                                        borderRadius: '6px',
+                                        background: 'rgba(255, 255, 255, 0.06)',
+                                        color: 'var(--text-secondary)',
+                                        textTransform: 'uppercase'
+                                      }}>
+                                        {q.type || 'Question'}
+                                      </span>
+                                    </div>
+                                  </div>
+
+                                  <div style={{ color: '#fff', fontSize: '0.92rem', fontWeight: 600 }}>
+                                    {q.question}
+                                  </div>
+
+                                  {q.options && Array.isArray(q.options) && (
+                                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.2rem', fontSize: '0.78rem', color: '#cbd5e1' }}>
+                                      {q.options.map((opt, oIdx) => (
+                                        <span key={oIdx} style={{ background: 'rgba(255,255,255,0.04)', padding: '0.15rem 0.5rem', borderRadius: '4px' }}>
+                                          {String.fromCharCode(65 + oIdx)}) {opt}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
+
+                                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.4rem', fontSize: '0.85rem', color: '#34d399', fontWeight: 600, marginTop: '0.2rem' }}>
+                                    <span>Correct Answer:</span>
+                                    <span>{q.answer}</span>
+                                  </div>
+
+                                  {q.explanation && (
+                                    <div style={{ fontSize: '0.78rem', color: '#94a3b8', lineHeight: 1.4 }}>
+                                      <em>Explanation: {q.explanation}</em>
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       ) : (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                          {questionsList.map((q, qIdx) => (
-                            <div
-                              key={qIdx}
-                              style={{
-                                background: 'rgba(0, 0, 0, 0.3)',
-                                border: '1px solid rgba(255, 255, 255, 0.06)',
-                                borderRadius: '10px',
-                                padding: '1rem',
-                                display: 'flex',
-                                flexDirection: 'column',
-                                gap: '0.45rem'
-                              }}
-                            >
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                  <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#a5b4fc' }}>
-                                    Q{qIdx + 1}.
-                                  </span>
-                                  <span style={{
-                                    fontSize: '0.68rem',
-                                    fontWeight: 700,
-                                    padding: '0.12rem 0.45rem',
-                                    borderRadius: '6px',
-                                    background: 'rgba(255, 255, 255, 0.06)',
-                                    color: 'var(--text-secondary)',
-                                    textTransform: 'uppercase'
-                                  }}>
-                                    {q.type || 'Question'}
-                                  </span>
-                                </div>
-                              </div>
-
-                              <div style={{ color: '#fff', fontSize: '0.92rem', fontWeight: 600 }}>
-                                {q.question}
-                              </div>
-
-                              {q.options && Array.isArray(q.options) && (
-                                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.2rem', fontSize: '0.78rem', color: '#cbd5e1' }}>
-                                  {q.options.map((opt, oIdx) => (
-                                    <span key={oIdx} style={{ background: 'rgba(255,255,255,0.04)', padding: '0.15rem 0.5rem', borderRadius: '4px' }}>
-                                      {String.fromCharCode(65 + oIdx)}) {opt}
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
-
-                              <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.4rem', fontSize: '0.85rem', color: '#34d399', fontWeight: 600, marginTop: '0.2rem' }}>
-                                <span>Correct Answer:</span>
-                                <span>{q.answer}</span>
-                              </div>
-
-                              {q.explanation && (
-                                <div style={{ fontSize: '0.78rem', color: '#94a3b8', lineHeight: 1.4 }}>
-                                  <em>Explanation: {q.explanation}</em>
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
+                        /* TAB 2: INTERACTIVE STUDENT PRACTICE VIEWER */
+                        <ExerciseViewer ex={ex} />
                       )}
+
+                      {/* Accordion Footer Collapse Button */}
+                      <div style={{
+                        padding: '0.75rem 1.4rem',
+                        background: 'rgba(0, 0, 0, 0.25)',
+                        borderTop: '1px solid rgba(255, 255, 255, 0.05)',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center'
+                      }}>
+                        <span style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+                          Viewing {questionsList.length} assessment {questionsList.length === 1 ? 'question' : 'questions'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => toggleExerciseAccordion(ex.id)}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: '#a5b4fc',
+                            fontSize: '0.78rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.35rem'
+                          }}
+                        >
+                          <span>Collapse Questions</span>
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="18 15 12 9 6 15" />
+                          </svg>
+                        </button>
+                      </div>
                     </div>
-                  ) : (
-                    /* TAB 2: INTERACTIVE STUDENT PRACTICE VIEWER */
-                    <ExerciseViewer ex={ex} />
                   )}
+
                 </div>
               );
             })}
           </div>
         )}
       </div>
+
+      {/* SHARE & ASSIGN MODAL DIALOG */}
+      {shareModalData && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0, 0, 0, 0.78)',
+            backdropFilter: 'blur(8px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 120,
+            padding: '1rem'
+          }}
+          onClick={() => setShareModalData(null)}
+        >
+          <div
+            style={{
+              background: '#131826',
+              border: '1px solid rgba(129, 140, 248, 0.35)',
+              borderRadius: '18px',
+              width: '100%',
+              maxWidth: '560px',
+              boxShadow: '0 24px 48px rgba(0, 0, 0, 0.7), 0 0 40px rgba(99, 102, 241, 0.15)',
+              overflow: 'hidden'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Gradient Top Bar */}
+            <div style={{ height: '4px', background: 'linear-gradient(90deg, #6366f1, #8b5cf6, #ec4899)' }} />
+
+            {/* Modal Header */}
+            <div style={{ padding: '1.25rem 1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255, 255, 255, 0.08)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                <div style={{ width: '38px', height: '38px', borderRadius: '10px', background: 'rgba(99, 102, 241, 0.15)', border: '1px solid rgba(129, 140, 248, 0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#818cf8', fontSize: '1.15rem' }}>
+                  🔗
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 700, color: '#fff' }}>
+                    Share & Assign Assessment
+                  </h3>
+                  <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                    Provide students with direct access to this chapter assessment
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShareModalData(null)}
+                style={{ background: 'rgba(255,255,255,0.06)', border: 'none', borderRadius: '8px', color: '#94a3b8', width: '32px', height: '32px', cursor: 'pointer', fontSize: '0.9rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+              
+              {/* Target Assessment Summary Card */}
+              <div style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: '12px', padding: '0.9rem 1.1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <div style={{ fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.04em', color: '#a5b4fc', fontWeight: 700 }}>
+                    Assessment Target
+                  </div>
+                  <div style={{ fontSize: '1rem', fontWeight: 700, color: '#fff', marginTop: '0.15rem' }}>
+                    {shareModalData.ex.title || 'Chapter Assessment'}
+                  </div>
+                  <div style={{ fontSize: '0.76rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
+                    {chapterContext?.chapterTitle || 'Chapter'} • {chapterContext?.subjectTitle || 'Subject'}
+                  </div>
+                </div>
+                <span style={{ fontSize: '0.75rem', padding: '0.2rem 0.6rem', borderRadius: '8px', background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', fontWeight: 700 }}>
+                  Ready to Assign
+                </span>
+              </div>
+
+              {/* 1. Direct Student URL with Copy Button */}
+              <div>
+                <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: '#e2e8f0', marginBottom: '0.45rem' }}>
+                  Direct Student Practice Link
+                </label>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <input
+                    type="text"
+                    readOnly
+                    value={shareModalData.url}
+                    onClick={(e) => e.target.select()}
+                    style={{
+                      flex: 1,
+                      padding: '0.65rem 0.85rem',
+                      background: 'rgba(0, 0, 0, 0.35)',
+                      border: '1px solid rgba(255, 255, 255, 0.12)',
+                      borderRadius: '8px',
+                      color: '#93c5fd',
+                      fontSize: '0.82rem',
+                      fontFamily: 'monospace',
+                      outline: 'none'
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (navigator?.clipboard?.writeText) {
+                        navigator.clipboard.writeText(shareModalData.url);
+                      }
+                      setCopiedExerciseId(shareModalData.ex.id);
+                      setTimeout(() => setCopiedExerciseId(null), 2500);
+                    }}
+                    style={{
+                      padding: '0.65rem 1.1rem',
+                      background: copiedExerciseId === shareModalData.ex.id ? '#10b981' : '#6366f1',
+                      border: 'none',
+                      borderRadius: '8px',
+                      color: '#fff',
+                      fontWeight: 700,
+                      fontSize: '0.82rem',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.4rem',
+                      whiteSpace: 'nowrap',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    {copiedExerciseId === shareModalData.ex.id ? '✓ Copied!' : 'Copy Link'}
+                  </button>
+                </div>
+              </div>
+
+              {/* 2. Formatted Assignment Message */}
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.45rem' }}>
+                  <label style={{ fontSize: '0.8rem', fontWeight: 600, color: '#e2e8f0' }}>
+                    Student Invitation Template
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const text = `Hi! Please complete this practice assessment for ${chapterContext?.chapterTitle || 'our chapter'}: "${shareModalData.ex.title}". Click the link to start:\n${shareModalData.url}`;
+                      if (navigator?.clipboard?.writeText) {
+                        navigator.clipboard.writeText(text);
+                      }
+                      setPublishSuccessNotice('📋 Full assignment message copied to clipboard!');
+                      setTimeout(() => setPublishSuccessNotice(''), 3000);
+                    }}
+                    style={{ background: 'transparent', border: 'none', color: '#a5b4fc', fontSize: '0.74rem', cursor: 'pointer', fontWeight: 600, textDecoration: 'underline' }}
+                  >
+                    Copy Full Message
+                  </button>
+                </div>
+                <div style={{ padding: '0.75rem 0.9rem', background: 'rgba(0, 0, 0, 0.25)', border: '1px dashed rgba(255, 255, 255, 0.12)', borderRadius: '8px', fontSize: '0.8rem', color: '#cbd5e1', lineHeight: 1.45 }}>
+                  Hi! Please complete this practice assessment for <strong>{chapterContext?.chapterTitle || 'our chapter'}</strong>: <em>"{shareModalData.ex.title}"</em>. Click the link to start:
+                  <div style={{ color: '#60a5fa', wordBreak: 'break-all', marginTop: '0.35rem', fontSize: '0.76rem' }}>
+                    {shareModalData.url}
+                  </div>
+                </div>
+              </div>
+
+              {/* 3. Quick Share Options */}
+              <div>
+                <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.45rem' }}>
+                  Quick Share Channels
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.65rem' }}>
+                  {/* WhatsApp */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const text = `Hi! Please complete this practice assessment for ${chapterContext?.chapterTitle || 'our chapter'}: "${shareModalData.ex.title}". Link: ${shareModalData.url}`;
+                      window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`, '_blank');
+                    }}
+                    style={{ padding: '0.6rem 0.5rem', background: 'rgba(37, 211, 102, 0.12)', border: '1px solid rgba(37, 211, 102, 0.3)', borderRadius: '8px', color: '#4ade80', fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem' }}
+                  >
+                    <span>💬</span> WhatsApp
+                  </button>
+
+                  {/* Email */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const subject = `Study Assignment: ${shareModalData.ex.title} (${chapterContext?.chapterTitle || 'Chapter'})`;
+                      const body = `Hi,\n\nPlease solve the practice assessment "${shareModalData.ex.title}" for ${chapterContext?.chapterTitle || 'Chapter'}.\n\nAccess link: ${shareModalData.url}\n\nGood luck!`;
+                      window.open(`mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`);
+                    }}
+                    style={{ padding: '0.6rem 0.5rem', background: 'rgba(56, 189, 248, 0.12)', border: '1px solid rgba(56, 189, 248, 0.3)', borderRadius: '8px', color: '#38bdf8', fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem' }}
+                  >
+                    <span>✉️</span> Email
+                  </button>
+
+                  {/* Test Student View */}
+                  <button
+                    type="button"
+                    onClick={() => window.open(shareModalData.url, '_blank')}
+                    style={{ padding: '0.6rem 0.5rem', background: 'rgba(255, 255, 255, 0.06)', border: '1px solid rgba(255, 255, 255, 0.12)', borderRadius: '8px', color: '#e2e8f0', fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem' }}
+                  >
+                    <span>↗️</span> Student View
+                  </button>
+                </div>
+              </div>
+
+            </div>
+
+            {/* Modal Footer */}
+            <div style={{ padding: '1rem 1.5rem', background: 'rgba(0, 0, 0, 0.25)', borderTop: '1px solid rgba(255, 255, 255, 0.08)', display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => setShareModalData(null)}
+                style={{ padding: '0.55rem 1.3rem', background: 'rgba(255, 255, 255, 0.08)', border: 'none', borderRadius: '8px', color: '#fff', fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer' }}
+              >
+                Done
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
 
     </main>
   );
