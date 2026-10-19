@@ -25,6 +25,7 @@ function KidProfileContent() {
   const [selectedExamId, setSelectedExamId] = useState('');
   const [newTitle, setNewTitle] = useState('');
   const [expandedSubjects, setExpandedSubjects] = useState({});
+  const [subjectsLayoutMode, setSubjectsLayoutMode] = useState('grid'); // 'grid' | 'carousel'
   const [expandedExams, setExpandedExams] = useState({});
   const [editingId, setEditingId] = useState(null);
   const [editTitle, setEditTitle] = useState('');
@@ -93,6 +94,20 @@ function KidProfileContent() {
   const countWords = (text) => {
     if (!text) return 0;
     return text.trim().split(/\s+/).filter(Boolean).length;
+  };
+
+  const getSubjectIcon = (title) => {
+    const t = (title || '').toLowerCase();
+    if (t.includes('math')) return '📐';
+    if (t.includes('scien') || t.includes('physic') || t.includes('chem') || t.includes('bio')) return '🔬';
+    if (t.includes('eng') || t.includes('lit') || t.includes('gram') || t.includes('read') || t.includes('lang')) return '📖';
+    if (t.includes('hist') || t.includes('geog') || t.includes('social') || t.includes('civic')) return '🌍';
+    if (t.includes('comp') || t.includes('ict') || t.includes('code') || t.includes('tech') || t.includes('program')) return '💻';
+    if (t.includes('art') || t.includes('draw')) return '🎨';
+    if (t.includes('music')) return '🎵';
+    if (t.includes('islam') || t.includes('relig') || t.includes('moral')) return '🕌';
+    if (t.includes('bangla') || t.includes('bengali')) return '🇧🇩';
+    return '📚';
   };
 
   // Image compressor for answer sheet upload
@@ -974,15 +989,187 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
 
         {/* Subjects, Exams, and Syllabus Section */}
         <div style={{ marginTop: '2.5rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-            <h2 style={{ textAlign: 'left', fontSize: '1.5rem', margin: 0 }}>Subjects</h2>
-            <button onClick={() => { setNewTitle(''); setAddType('subject'); setShowAddModal(true); }} style={{ background: 'var(--accent-primary)', color: '#fff', border: 'none', borderRadius: '50%', width: '36px', height: '36px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }} title="Add Subject / Exam / Chapter">
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-            </button>
+          
+          {/* Section Header with View Mode Switcher and Add Subject Action */}
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: '1rem',
+            marginBottom: '1.5rem'
+          }}>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+                <h2 style={{ textAlign: 'left', fontSize: '1.5rem', fontWeight: 700, margin: 0, color: '#fff', letterSpacing: '-0.02em' }}>
+                  Enrolled Subjects
+                </h2>
+                <span style={{
+                  fontSize: '0.74rem',
+                  fontWeight: 700,
+                  padding: '0.15rem 0.55rem',
+                  borderRadius: '9999px',
+                  background: 'rgba(99, 102, 241, 0.18)',
+                  border: '1px solid rgba(129, 140, 248, 0.35)',
+                  color: '#a5b4fc'
+                }}>
+                  {subjects.length} {subjects.length === 1 ? 'Subject' : 'Subjects'}
+                </span>
+              </div>
+              <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.84rem', color: 'var(--text-secondary)' }}>
+                Curriculum syllabus readiness, upcoming exam workspaces, and dedicated subject hubs
+              </p>
+            </div>
+
+            {/* Actions: Responsive View Switcher (Grid vs Horizontal Scroll) + Add Subject */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+              
+              {/* View Switcher Capsule (Grid vs Carousel) */}
+              {subjects.length > 1 && (
+                <div style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  background: 'rgba(0, 0, 0, 0.35)',
+                  padding: '0.25rem',
+                  borderRadius: '10px',
+                  border: '1px solid rgba(255, 255, 255, 0.08)'
+                }}>
+                  <button
+                    type="button"
+                    onClick={() => setSubjectsLayoutMode('grid')}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.35rem',
+                      padding: '0.35rem 0.65rem',
+                      borderRadius: '7px',
+                      fontSize: '0.78rem',
+                      fontWeight: 600,
+                      border: 'none',
+                      background: subjectsLayoutMode === 'grid' ? 'rgba(99, 102, 241, 0.3)' : 'transparent',
+                      color: subjectsLayoutMode === 'grid' ? '#fff' : '#94a3b8',
+                      boxShadow: subjectsLayoutMode === 'grid' ? '0 2px 8px rgba(0,0,0,0.3)' : 'none',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease'
+                    }}
+                    title="Responsive Grid Layout"
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="3" y="3" width="7" height="7"></rect>
+                      <rect x="14" y="3" width="7" height="7"></rect>
+                      <rect x="14" y="14" width="7" height="7"></rect>
+                      <rect x="3" y="14" width="7" height="7"></rect>
+                    </svg>
+                    <span>Grid</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setSubjectsLayoutMode('carousel')}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.35rem',
+                      padding: '0.35rem 0.65rem',
+                      borderRadius: '7px',
+                      fontSize: '0.78rem',
+                      fontWeight: 600,
+                      border: 'none',
+                      background: subjectsLayoutMode === 'carousel' ? 'rgba(99, 102, 241, 0.3)' : 'transparent',
+                      color: subjectsLayoutMode === 'carousel' ? '#fff' : '#94a3b8',
+                      boxShadow: subjectsLayoutMode === 'carousel' ? '0 2px 8px rgba(0,0,0,0.3)' : 'none',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease'
+                    }}
+                    title="Horizontal Scroll Strip for Mobile & Touch"
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="2" y="5" width="20" height="14" rx="2"></rect>
+                      <line x1="2" y1="10" x2="22" y2="10"></line>
+                    </svg>
+                    <span>Carousel</span>
+                  </button>
+                </div>
+              )}
+
+              {/* Add Subject Button */}
+              <button
+                onClick={() => { setNewTitle(''); setAddType('subject'); setShowAddModal(true); }}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.45rem',
+                  padding: '0.55rem 1.15rem',
+                  background: 'var(--accent-gradient, linear-gradient(135deg, #6366f1, #8b5cf6))',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '10px',
+                  fontSize: '0.84rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  boxShadow: '0 4px 14px rgba(99, 102, 241, 0.35)',
+                  transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = 'translateY(-2px)';
+                  e.currentTarget.style.boxShadow = '0 8px 24px rgba(99, 102, 241, 0.5)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.boxShadow = '0 4px 14px rgba(99, 102, 241, 0.35)';
+                }}
+                onMouseDown={(e) => e.currentTarget.style.transform = 'scale(0.98)'}
+                title="Add Subject / Exam / Chapter"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                <span>Add Subject</span>
+              </button>
+            </div>
           </div>
           
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.2rem' }}>
-            {subjects.length === 0 && <p style={{ color: 'var(--text-secondary)', textAlign: 'left' }}>No subjects added yet. Click the + icon to add one.</p>}
+          {/* Responsive Cards Container: Adaptive Grid or Horizontal Scroll */}
+          <div style={subjectsLayoutMode === 'carousel' ? {
+            display: 'flex',
+            gap: '1.25rem',
+            overflowX: 'auto',
+            paddingBottom: '1rem',
+            scrollSnapType: 'x mandatory',
+            WebkitOverflowScrolling: 'touch'
+          } : {
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))',
+            gap: '1.25rem',
+            alignItems: 'start'
+          }}>
+            {subjects.length === 0 && (
+              <div style={{
+                gridColumn: '1 / -1',
+                padding: '2.5rem 1.5rem',
+                background: 'rgba(255, 255, 255, 0.02)',
+                borderRadius: '16px',
+                border: '1px dashed rgba(255, 255, 255, 0.1)',
+                textAlign: 'center',
+                color: 'var(--text-secondary)'
+              }}>
+                <span style={{ fontSize: '2rem', display: 'block', marginBottom: '0.5rem' }}>📚</span>
+                <p style={{ margin: '0 0 1rem 0', fontSize: '0.95rem' }}>No subjects added yet. Click &quot;Add Subject&quot; above to map curriculum.</p>
+                <button
+                  type="button"
+                  onClick={() => { setNewTitle(''); setAddType('subject'); setShowAddModal(true); }}
+                  style={{
+                    padding: '0.5rem 1.25rem',
+                    background: 'var(--accent-gradient, linear-gradient(135deg, #6366f1, #8b5cf6))',
+                    color: '#fff',
+                    borderRadius: '10px',
+                    border: 'none',
+                    fontWeight: 600,
+                    cursor: 'pointer'
+                  }}
+                >
+                  + Add First Subject
+                </button>
+              </div>
+            )}
             {subjects.map(subject => {
               const subjectSlug = subject.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 
@@ -1075,215 +1262,425 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
               const parentIdQuery = queryParentId ? `&parentId=${queryParentId}` : '';
               const subjectHubHref = `/kid/subject?id=${searchParams.get("id")}&subject=${subjectSlug}&subjectId=${subject.id}${parentIdQuery}`;
 
+              const isExpanded = !!expandedSubjects[subject.id];
+
               return (
                 <div 
                   key={subject.id} 
                   style={{ 
-                    background: 'rgba(255, 255, 255, 0.03)', 
-                    border: '1px solid var(--glass-border)', 
-                    borderRadius: '16px', 
-                    padding: '1.4rem 1.6rem',
+                    background: 'linear-gradient(145deg, rgba(23, 28, 44, 0.95), rgba(15, 18, 32, 0.98))', 
+                    border: '1px solid rgba(255, 255, 255, 0.08)', 
+                    borderRadius: '18px', 
+                    padding: '1.35rem 1.45rem',
                     display: 'flex',
                     flexDirection: 'column',
-                    gap: '1.2rem',
+                    gap: '1.1rem',
                     textAlign: 'left',
-                    transition: 'all 0.2s',
-                    boxShadow: '0 4px 20px rgba(0,0,0,0.15)'
+                    transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+                    boxShadow: '0 8px 32px rgba(0, 0, 0, 0.28)',
+                    position: 'relative',
+                    ...(subjectsLayoutMode === 'carousel' ? {
+                      flex: '0 0 min(380px, 86vw)',
+                      scrollSnapAlign: 'start'
+                    } : {
+                      width: '100%',
+                      minWidth: 0
+                    })
+                  }}
+                  onMouseOver={(e) => {
+                    e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.35)';
+                    e.currentTarget.style.boxShadow = '0 12px 36px rgba(139, 92, 246, 0.12)';
+                  }}
+                  onMouseOut={(e) => {
+                    e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.08)';
+                    e.currentTarget.style.boxShadow = '0 8px 32px rgba(0, 0, 0, 0.28)';
                   }}
                 >
-                  {/* Subject Header Row */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-                      <h3 style={{ margin: 0, fontSize: '1.35rem', color: '#fff', fontWeight: 600 }}>
-                        {subject.title}
-                      </h3>
+                  {/* Subject Header Row: Icon, Title, Textbook Badge & Settings */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', minWidth: 0, flex: 1 }}>
+                      {/* Subject Icon Badge */}
+                      <div style={{
+                        width: '42px',
+                        height: '42px',
+                        borderRadius: '12px',
+                        background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.2), rgba(59, 130, 246, 0.15))',
+                        border: '1px solid rgba(139, 92, 246, 0.3)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '1.3rem',
+                        flexShrink: 0,
+                        boxShadow: '0 4px 12px rgba(139, 92, 246, 0.15)'
+                      }}>
+                        {getSubjectIcon(subject.title)}
+                      </div>
 
-                      <button 
-                        onClick={() => {
-                          setSettingsSubject(subject);
-                          setSubjectBookUrl(subject.bookUrl || '');
-                          setSubjectExamRetentionDays(subject.examRetentionDays !== undefined ? String(subject.examRetentionDays) : '7');
-                        }} 
-                        style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: '0.2rem', display: 'flex', alignItems: 'center', transition: 'color 0.2s' }} 
-                        onMouseOver={(e) => e.currentTarget.style.color = 'var(--accent-primary)'} 
-                        onMouseOut={(e) => e.currentTarget.style.color = 'var(--text-secondary)'} 
-                        title="Subject Settings & Auto-Archive Configuration"
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-                      </button>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                          <h3 style={{ margin: 0, fontSize: '1.22rem', color: '#fff', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {subject.title}
+                          </h3>
 
-                      {subject.bookUrl && (
-                        <span style={{ fontSize: '0.74rem', background: 'rgba(59, 130, 246, 0.15)', color: '#93c5fd', border: '1px solid rgba(59, 130, 246, 0.3)', padding: '0.15rem 0.5rem', borderRadius: '10px' }}>
-                          📖 Textbook
-                        </span>
-                      )}
+                          {subject.bookUrl && (
+                            <a 
+                              href={subject.bookUrl} 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              style={{ 
+                                fontSize: '0.7rem', 
+                                background: 'rgba(59, 130, 246, 0.15)', 
+                                color: '#93c5fd', 
+                                border: '1px solid rgba(59, 130, 246, 0.3)', 
+                                padding: '0.12rem 0.5rem', 
+                                borderRadius: '10px',
+                                textDecoration: 'none',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.25rem',
+                                transition: 'all 0.2s'
+                              }}
+                              onMouseOver={(e) => e.currentTarget.style.background = 'rgba(59, 130, 246, 0.28)'}
+                              onMouseOut={(e) => e.currentTarget.style.background = 'rgba(59, 130, 246, 0.15)'}
+                              title="Open Online Textbook / PDF"
+                            >
+                              <span>📖 Textbook</span>
+                              <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                            </a>
+                          )}
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginTop: '0.2rem', fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+                          <span>{totalChapters} {totalChapters === 1 ? 'Chapter' : 'Chapters'}</span>
+                          <span>•</span>
+                          <span>{subjectExams.length} {subjectExams.length === 1 ? 'Exam' : 'Exams'}</span>
+                          {totalTests > 0 && (
+                            <>
+                              <span>•</span>
+                              <span style={{ color: 'var(--accent-primary)', fontWeight: 600 }}>{totalTests} Tests</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
                     </div>
 
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.05)', padding: '0.25rem 0.65rem', borderRadius: '12px' }}>
-                        {totalChapters} {totalChapters === 1 ? 'Chapter' : 'Chapters'}
-                      </span>
-
-                      <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.05)', padding: '0.25rem 0.65rem', borderRadius: '12px' }}>
-                        {subjectExams.length} {subjectExams.length === 1 ? 'Exam' : 'Exams'}
-                      </span>
-
-                      {totalTests > 0 && (
-                        <span style={{ fontSize: '0.78rem', color: 'var(--accent-primary)', background: 'rgba(139, 92, 246, 0.15)', padding: '0.25rem 0.65rem', borderRadius: '12px', fontWeight: 600 }}>
-                          {totalTests} {totalTests === 1 ? 'Test' : 'Tests'}
-                        </span>
-                      )}
-
-                      {/* Primary Link Button to Subject Detail Page */}
-                      <Link
-                        href={subjectHubHref}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '0.4rem',
-                          padding: '0.42rem 1rem',
-                          fontSize: '0.82rem',
-                          fontWeight: 600,
-                          background: 'var(--accent-gradient)',
-                          color: '#fff',
-                          borderRadius: '16px',
-                          textDecoration: 'none',
-                          boxShadow: '0 2px 8px rgba(139, 92, 246, 0.25)',
-                          transition: 'all 0.2s'
-                        }}
-                        onMouseOver={(e) => e.currentTarget.style.transform = 'translateY(-1px)'}
-                        onMouseOut={(e) => e.currentTarget.style.transform = 'translateY(0)'}
-                      >
-                        <span>Open Subject Hub</span>
-                        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
-                      </Link>
-                    </div>
+                    {/* Subject Settings Button */}
+                    <button 
+                      onClick={() => {
+                        setSettingsSubject(subject);
+                        setSubjectBookUrl(subject.bookUrl || '');
+                        setSubjectExamRetentionDays(subject.examRetentionDays !== undefined ? String(subject.examRetentionDays) : '7');
+                      }} 
+                      style={{ 
+                        width: '34px',
+                        height: '34px',
+                        borderRadius: '10px',
+                        background: 'rgba(255, 255, 255, 0.04)', 
+                        border: '1px solid rgba(255, 255, 255, 0.08)', 
+                        color: 'var(--text-secondary)', 
+                        cursor: 'pointer', 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        justifyContent: 'center',
+                        transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+                        flexShrink: 0
+                      }} 
+                      onMouseOver={(e) => {
+                        e.currentTarget.style.color = '#fff';
+                        e.currentTarget.style.background = 'rgba(139, 92, 246, 0.22)';
+                        e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.4)';
+                        e.currentTarget.style.transform = 'rotate(45deg)';
+                      }} 
+                      onMouseOut={(e) => {
+                        e.currentTarget.style.color = 'var(--text-secondary)';
+                        e.currentTarget.style.background = 'rgba(255, 255, 255, 0.04)';
+                        e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.08)';
+                        e.currentTarget.style.transform = 'rotate(0deg)';
+                      }} 
+                      title="Subject Settings & Auto-Archive Configuration"
+                      aria-label="Subject Settings"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                    </button>
                   </div>
 
-                  {/* Syllabus Completion Visual Indicator: Dedicated SVG Circular Progress Ring */}
+                  {/* High-Contrast Circular Progress Ring & Syllabus Mastery */}
                   <div style={{
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '1.4rem',
-                    padding: '1.1rem 1.35rem',
-                    background: 'rgba(255, 255, 255, 0.02)',
+                    gap: '1.2rem',
+                    padding: '0.95rem 1.15rem',
+                    background: 'rgba(255, 255, 255, 0.025)',
                     border: '1px solid rgba(255, 255, 255, 0.06)',
                     borderRadius: '14px',
-                    flexWrap: 'wrap'
+                    position: 'relative'
                   }}>
-                    {/* SVG Circular Progress Ring */}
-                    <div style={{ position: 'relative', width: '72px', height: '72px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                      <svg width="72" height="72" viewBox="0 0 72 72" style={{ transform: 'rotate(-90deg)' }}>
+                    {/* SVG Circular Progress Dial */}
+                    <div style={{ position: 'relative', width: '74px', height: '74px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                      <svg width="74" height="74" viewBox="0 0 74 74" style={{ transform: 'rotate(-90deg)' }}>
                         <defs>
                           <linearGradient id={`prog-grad-${subject.id}`} x1="0%" y1="0%" x2="100%" y2="100%">
-                            <stop offset="0%" stopColor="#8b5cf6" />
-                            <stop offset="50%" stopColor="#3b82f6" />
-                            <stop offset="100%" stopColor="#06b6d4" />
+                            <stop offset="0%" stopColor="#38bdf8" />
+                            <stop offset="50%" stopColor="#818cf8" />
+                            <stop offset="100%" stopColor="#34d399" />
                           </linearGradient>
+                          <filter id={`glow-${subject.id}`} x="-20%" y="-20%" width="140%" height="140%">
+                            <feDropShadow dx="0" dy="0" stdDeviation="3" floodColor="#38bdf8" floodOpacity="0.7" />
+                          </filter>
                         </defs>
-                        {/* Background Ring Track */}
+                        
+                        {/* Outer delicate guide track */}
                         <circle
-                          cx="36"
-                          cy="36"
+                          cx="37"
+                          cy="37"
+                          r="33"
+                          stroke="rgba(255, 255, 255, 0.04)"
+                          strokeWidth="1"
+                          strokeDasharray="2 3"
+                          fill="transparent"
+                        />
+
+                        {/* Background Base Ring */}
+                        <circle
+                          cx="37"
+                          cy="37"
                           r="28"
                           stroke="rgba(255, 255, 255, 0.08)"
                           strokeWidth="5"
                           fill="transparent"
                         />
-                        {/* Dynamic Progress Ring Fill */}
-                        <circle
-                          cx="36"
-                          cy="36"
-                          r="28"
-                          stroke={progressPercent === 100 ? '#10b981' : progressPercent > 0 ? `url(#prog-grad-${subject.id})` : 'rgba(255, 255, 255, 0.12)'}
-                          strokeWidth="5"
-                          strokeDasharray={175.93}
-                          strokeDashoffset={175.93 - (175.93 * progressPercent) / 100}
-                          strokeLinecap="round"
-                          fill="transparent"
-                          style={{ transition: 'stroke-dashoffset 0.6s cubic-bezier(0.4, 0, 0.2, 1)' }}
-                        />
+
+                        {/* Active Progress or High-Contrast Zero-State Track */}
+                        {progressPercent === 0 ? (
+                          <>
+                            <circle
+                              cx="37"
+                              cy="37"
+                              r="28"
+                              stroke="rgba(148, 163, 184, 0.2)"
+                              strokeWidth="5"
+                              strokeDasharray="2 4"
+                              fill="transparent"
+                            />
+                            {/* Starter 12 o'clock indicator dot for visual feedback at 0% */}
+                            <circle
+                              cx="37"
+                              cy="9"
+                              r="3"
+                              fill="#38bdf8"
+                              filter={`url(#glow-${subject.id})`}
+                            />
+                          </>
+                        ) : (
+                          <circle
+                            cx="37"
+                            cy="37"
+                            r="28"
+                            stroke={progressPercent === 100 ? '#10b981' : `url(#prog-grad-${subject.id})`}
+                            strokeWidth="5"
+                            strokeDasharray={175.93}
+                            strokeDashoffset={175.93 - (175.93 * progressPercent) / 100}
+                            strokeLinecap="round"
+                            fill="transparent"
+                            style={{ transition: 'stroke-dashoffset 0.6s cubic-bezier(0.4, 0, 0.2, 1)' }}
+                          />
+                        )}
                       </svg>
-                      {/* Centered Percentage & Label */}
+
+                      {/* Center Dial Mastery Label */}
                       <div style={{ position: 'absolute', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center' }}>
-                        <span style={{ fontSize: '1.05rem', fontWeight: 700, color: progressPercent === 100 ? '#34d399' : '#fff', lineHeight: 1 }}>
+                        <span style={{ 
+                          fontSize: '1.08rem', 
+                          fontWeight: 800, 
+                          color: progressPercent === 100 ? '#34d399' : progressPercent > 0 ? '#ffffff' : '#38bdf8', 
+                          lineHeight: 1,
+                          textShadow: progressPercent > 0 ? '0 0 10px rgba(56, 189, 248, 0.3)' : 'none'
+                        }}>
                           {progressPercent}%
                         </span>
-                        <span style={{ fontSize: '0.58rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.4px', marginTop: '2px' }}>
-                          Mastery
+                        <span style={{ 
+                          fontSize: '0.52rem', 
+                          color: progressPercent === 0 ? '#38bdf8' : 'var(--text-secondary)', 
+                          fontWeight: 700,
+                          textTransform: 'uppercase', 
+                          letterSpacing: '0.5px', 
+                          marginTop: '3px' 
+                        }}>
+                          {progressPercent === 0 ? 'READY' : progressPercent === 100 ? 'DONE' : 'MASTERY'}
                         </span>
                       </div>
                     </div>
 
-                    {/* Syllabus Metrics & Status Breakdown */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', flex: '1 1 240px', minWidth: '220px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
-                          <span style={{ fontSize: '0.92rem', fontWeight: 600, color: '#f1f5f9' }}>
-                            Syllabus Mastery
-                          </span>
-                          <span style={{
-                            fontSize: '0.68rem',
-                            padding: '0.14rem 0.52rem',
-                            borderRadius: '10px',
-                            fontWeight: 600,
-                            background: progressPercent === 100 ? 'rgba(16, 185, 129, 0.15)' : progressPercent > 0 ? 'rgba(139, 92, 246, 0.15)' : 'rgba(148, 163, 184, 0.1)',
-                            color: progressPercent === 100 ? '#34d399' : progressPercent > 0 ? '#c084fc' : '#94a3b8'
-                          }}>
-                            {progressPercent === 100 ? 'Mastered' : progressPercent > 0 ? 'In Progress' : totalChapters > 0 ? 'Not Started' : 'No Chapters'}
-                          </span>
-                        </div>
-                        <span style={{ fontSize: '0.8rem', fontWeight: 600, color: progressPercent === 100 ? '#34d399' : '#c4b5fd' }}>
-                          {progressPercent}% Complete ({completedChapters}/{totalChapters} Chapters Mastered)
+                    {/* Mastery Stats & Breakdown */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <span style={{
+                          fontSize: '0.68rem',
+                          padding: '0.16rem 0.55rem',
+                          borderRadius: '8px',
+                          fontWeight: 700,
+                          letterSpacing: '0.3px',
+                          textTransform: 'uppercase',
+                          background: progressPercent === 100 ? 'rgba(16, 185, 129, 0.15)' : progressPercent > 0 ? 'rgba(139, 92, 246, 0.15)' : 'rgba(56, 189, 248, 0.12)',
+                          color: progressPercent === 100 ? '#34d399' : progressPercent > 0 ? '#c084fc' : '#38bdf8',
+                          border: `1px solid ${progressPercent === 100 ? 'rgba(16, 185, 129, 0.3)' : progressPercent > 0 ? 'rgba(139, 92, 246, 0.3)' : 'rgba(56, 189, 248, 0.25)'}`
+                        }}>
+                          {progressPercent === 100 ? 'Mastered' : progressPercent > 0 ? 'In Progress' : totalChapters > 0 ? 'Curriculum Ready' : 'Setup Needed'}
+                        </span>
+                        <span style={{ fontSize: '0.78rem', color: '#e2e8f0', fontWeight: 600 }}>
+                          {completedChapters}/{totalChapters} Mastered
                         </span>
                       </div>
 
-                      {/* Milestone Details Chips */}
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap', fontSize: '0.74rem', color: 'var(--text-secondary)', marginTop: '0.1rem' }}>
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: completedChapters > 0 ? '#34d399' : 'var(--text-secondary)' }}>
-                          <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: completedChapters > 0 ? '#10b981' : 'rgba(255,255,255,0.2)' }}></span>
-                          {completedChapters} Mastered
+                      {/* Chips */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', flexWrap: 'wrap', fontSize: '0.73rem', color: 'var(--text-secondary)' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: completedChapters > 0 ? '#34d399' : 'var(--text-secondary)' }}>
+                          <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: completedChapters > 0 ? '#10b981' : 'rgba(255,255,255,0.2)' }}></span>
+                          {completedChapters} Done
                         </span>
                         <span style={{ color: 'rgba(255,255,255,0.2)' }}>•</span>
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                          <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: remainingChapters > 0 ? '#f59e0b' : 'rgba(255,255,255,0.2)' }}></span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                          <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: remainingChapters > 0 ? '#f59e0b' : 'rgba(255,255,255,0.2)' }}></span>
                           {remainingChapters} Remaining
                         </span>
-                        <span style={{ color: 'rgba(255,255,255,0.2)' }}>•</span>
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                          <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: 'rgba(139, 92, 246, 0.7)' }}></span>
-                          {totalChapters} Total {totalChapters === 1 ? 'Chapter' : 'Chapters'}
-                        </span>
-                        {totalChapters === 0 && (
-                          <>
-                            <span style={{ color: 'rgba(255,255,255,0.2)' }}>•</span>
-                            <span style={{ color: '#94a3b8', fontStyle: 'italic' }}>
-                              Add chapters in Subject Hub to map curriculum
-                            </span>
-                          </>
-                        )}
                       </div>
                     </div>
                   </div>
 
-                  {/* Quick Access to Exams with 'Next Up' Highlight */}
+                  {/* Immediate Next Exam Snapshot Capsule */}
+                  {nextUpExam && (
+                    <div style={{
+                      padding: '0.75rem 0.95rem',
+                      background: 'rgba(245, 158, 11, 0.05)',
+                      border: '1px solid rgba(245, 158, 11, 0.22)',
+                      borderRadius: '12px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '0.75rem'
+                    }}>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.2rem' }}>
+                          <span style={{ fontSize: '0.64rem', fontWeight: 700, textTransform: 'uppercase', color: '#fbbf24', letterSpacing: '0.5px' }}>
+                            ⚡ Next Up Exam
+                          </span>
+                        </div>
+                        <span style={{ fontSize: '0.86rem', fontWeight: 600, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'block' }}>
+                          {nextUpExam.title}
+                        </span>
+                      </div>
+
+                      <Link
+                        href={`/kid/exam?id=${searchParams.get("id")}&subject=${subjectSlug}&examId=${nextUpExam.id}&subjectId=${subject.id}${parentIdQuery}`}
+                        style={{
+                          fontSize: '0.75rem',
+                          fontWeight: 600,
+                          color: '#fbbf24',
+                          background: 'rgba(245, 158, 11, 0.12)',
+                          border: '1px solid rgba(245, 158, 11, 0.25)',
+                          padding: '0.32rem 0.65rem',
+                          borderRadius: '8px',
+                          textDecoration: 'none',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.3rem',
+                          flexShrink: 0,
+                          transition: 'all 0.2s'
+                        }}
+                        onMouseOver={(e) => {
+                          e.currentTarget.style.background = 'rgba(245, 158, 11, 0.25)';
+                          e.currentTarget.style.transform = 'translateX(2px)';
+                        }}
+                        onMouseOut={(e) => {
+                          e.currentTarget.style.background = 'rgba(245, 158, 11, 0.12)';
+                          e.currentTarget.style.transform = 'translateX(0)';
+                        }}
+                      >
+                        <span>Workspace</span>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                      </Link>
+                    </div>
+                  )}
+
+                  {/* Collapsible Drawer Toggle Button for Exam Tracks & Tests */}
                   {subjectExams.length > 0 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem', marginTop: '0.1rem' }}>
+                    <button
+                      type="button"
+                      onClick={() => toggleSubject(subject.id)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '0.65rem 0.95rem',
+                        background: isExpanded ? 'rgba(139, 92, 246, 0.14)' : 'rgba(255, 255, 255, 0.035)',
+                        border: `1px solid ${isExpanded ? 'rgba(139, 92, 246, 0.35)' : 'rgba(255, 255, 255, 0.07)'}`,
+                        borderRadius: '12px',
+                        color: isExpanded ? '#c4b5fd' : 'var(--text-secondary)',
+                        fontSize: '0.8rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                        width: '100%'
+                      }}
+                      onMouseOver={(e) => {
+                        e.currentTarget.style.background = isExpanded ? 'rgba(139, 92, 246, 0.22)' : 'rgba(255, 255, 255, 0.06)';
+                        e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.4)';
+                        e.currentTarget.style.color = '#fff';
+                      }}
+                      onMouseOut={(e) => {
+                        e.currentTarget.style.background = isExpanded ? 'rgba(139, 92, 246, 0.14)' : 'rgba(255, 255, 255, 0.035)';
+                        e.currentTarget.style.borderColor = isExpanded ? 'rgba(139, 92, 246, 0.35)' : 'rgba(255, 255, 255, 0.07)';
+                        e.currentTarget.style.color = isExpanded ? '#c4b5fd' : 'var(--text-secondary)';
+                      }}
+                      aria-expanded={isExpanded}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span>📋</span>
+                        <span>
+                          {isExpanded 
+                            ? 'Hide Exam Tracks & Tests' 
+                            : `View ${subjectExams.length} Exams & ${totalTests} Model Tests`}
+                        </span>
+                      </div>
+
+                      <div style={{
+                        width: '24px',
+                        height: '24px',
+                        borderRadius: '50%',
+                        background: 'rgba(255, 255, 255, 0.06)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        transition: 'transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+                        transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)'
+                      }}>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                      </div>
+                    </button>
+                  )}
+
+                  {/* Expandable Content Area: Detailed Exam Cards & Model Tests */}
+                  {isExpanded && subjectExams.length > 0 && (
+                    <div style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '1rem',
+                      padding: '1rem 0.2rem 0.4rem 0.2rem',
+                      borderTop: '1px dashed rgba(255, 255, 255, 0.08)',
+                      animation: 'fadeIn 0.25s ease-out'
+                    }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <span style={{ fontSize: '0.74rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.6px' }}>
                           Exams & Workspaces
                         </span>
-                        <span style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.4)' }}>
+                        <span style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)' }}>
                           Click exam to enter study workspace
                         </span>
                       </div>
 
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '0.75rem' }}>
                         {subjectExams.map(ex => {
-                          const queryParentId = searchParams.get("parentId");
-                          const parentIdQuery = queryParentId ? `&parentId=${queryParentId}` : '';
                           const examHref = `/kid/exam?id=${searchParams.get("id")}&subject=${subjectSlug}&examId=${ex.id}&subjectId=${subject.id}${parentIdQuery}`;
-                          
                           const isNextUp = nextUpExam && ex.id === nextUpExam.id && ex.status !== 'Completed';
                           const isMajorExam = /final|term|annual|board|midterm|semester/i.test(ex.title);
 
@@ -1334,10 +1731,10 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
                                   {isNextUp && (
                                     <span style={{
-                                      fontSize: '0.68rem',
+                                      fontSize: '0.66rem',
                                       fontWeight: 700,
                                       letterSpacing: '0.4px',
-                                      padding: '0.18rem 0.55rem',
+                                      padding: '0.16rem 0.5rem',
                                       borderRadius: '8px',
                                       background: 'linear-gradient(135deg, #f59e0b, #ef4444)',
                                       color: '#ffffff',
@@ -1354,9 +1751,9 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
 
                                   {isMajorExam && (
                                     <span style={{
-                                      fontSize: '0.67rem',
+                                      fontSize: '0.66rem',
                                       fontWeight: 600,
-                                      padding: '0.16rem 0.48rem',
+                                      padding: '0.15rem 0.45rem',
                                       borderRadius: '8px',
                                       background: 'rgba(168, 85, 247, 0.15)',
                                       border: '1px solid rgba(168, 85, 247, 0.3)',
@@ -1366,15 +1763,14 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                                       gap: '0.25rem'
                                     }}>
                                       <span>🏆</span>
-                                      <span>Major Exam</span>
+                                      <span>Major</span>
                                     </span>
                                   )}
                                 </div>
 
-                                {/* Status Badge */}
                                 <span style={{
-                                  fontSize: '0.68rem',
-                                  padding: '0.14rem 0.48rem',
+                                  fontSize: '0.67rem',
+                                  padding: '0.12rem 0.45rem',
                                   borderRadius: '8px',
                                   fontWeight: 600,
                                   background:
@@ -1392,12 +1788,12 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                                 </span>
                               </div>
 
-                              {/* Middle: Title & Meta */}
+                              {/* Title & Meta */}
                               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-                                <span style={{ fontWeight: 600, fontSize: '0.94rem', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                <span style={{ fontWeight: 600, fontSize: '0.92rem', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                                   {ex.title}
                                 </span>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.73rem', color: 'var(--text-secondary)' }}>
                                   <span>{ex.completedChapters}/{ex.totalChapters} Chaps</span>
                                   <span>•</span>
                                   <span>{ex.testCount} {ex.testCount === 1 ? 'Test' : 'Tests'}</span>
@@ -1412,7 +1808,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                                 </div>
                               </div>
 
-                              {/* Bottom: Progress Mini Bar & Action */}
+                              {/* Mini progress bar */}
                               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.6rem', marginTop: '0.15rem' }}>
                                 <div style={{ flex: 1, height: '4px', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '2px', overflow: 'hidden' }}>
                                   <div style={{
@@ -1422,214 +1818,189 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                                     borderRadius: '2px'
                                   }} />
                                 </div>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', color: isNextUp ? '#fbbf24' : 'var(--text-secondary)', fontSize: '0.74rem', fontWeight: 600 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', color: isNextUp ? '#fbbf24' : 'var(--text-secondary)', fontSize: '0.73rem', fontWeight: 600 }}>
                                   <span>Workspace</span>
-                                  <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
                                 </div>
                               </div>
                             </Link>
                           );
                         })}
                       </div>
-                    </div>
-                  )}
 
-                  {/* Model Tests Mastery & Performance Overview (for exams with model tests) */}
-                  {examsWithModelTests.length > 0 && (
-                    <div style={{
-                      marginTop: '0.2rem',
-                      padding: '1.1rem 1.25rem',
-                      background: 'rgba(15, 23, 42, 0.45)',
-                      border: '1px solid rgba(139, 92, 246, 0.2)',
-                      borderRadius: '12px',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '0.85rem'
-                    }}>
-                      {/* Section Header */}
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
-                          <div style={{
-                            width: '28px',
-                            height: '28px',
-                            borderRadius: '8px',
-                            background: 'rgba(139, 92, 246, 0.18)',
-                            color: 'var(--accent-primary)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            fontSize: '0.95rem'
-                          }}>
-                            📊
-                          </div>
-                          <div>
-                            <h4 style={{ margin: 0, fontSize: '0.9rem', color: '#fff', fontWeight: 600 }}>
-                              Model Test Performance & Mastery
-                            </h4>
-                            <p style={{ margin: 0, fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                              Recent test results and evaluation feedback for quick parental overview
-                            </p>
-                          </div>
-                        </div>
-
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                          <span style={{ fontSize: '0.73rem', color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.05)', padding: '0.2rem 0.55rem', borderRadius: '10px' }}>
-                            {examsWithModelTests.reduce((acc, e) => acc + e.testCount, 0)} Model Tests Recorded
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Exams with Tests */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                        {examsWithModelTests.map(ex => (
-                          <div 
-                            key={ex.id}
-                            style={{
-                              background: 'rgba(255, 255, 255, 0.02)',
-                              border: '1px solid rgba(255, 255, 255, 0.06)',
-                              borderRadius: '10px',
-                              padding: '0.85rem 1rem',
-                              display: 'flex',
-                              flexDirection: 'column',
-                              gap: '0.65rem'
-                            }}
-                          >
-                            {/* Exam Sub-heading */}
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem' }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                <span style={{ fontSize: '0.86rem', fontWeight: 600, color: '#e2e8f0' }}>
-                                  {ex.title}
-                                </span>
-                                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.06)', padding: '0.12rem 0.45rem', borderRadius: '6px' }}>
-                                  {ex.testCount} {ex.testCount === 1 ? 'Test' : 'Tests'}
-                                </span>
-                              </div>
-
-                              {ex.avgTestScore !== null ? (
-                                <span style={{
-                                  fontSize: '0.74rem',
-                                  fontWeight: 600,
-                                  padding: '0.18rem 0.55rem',
-                                  borderRadius: '10px',
-                                  background: ex.avgTestScore >= 80 ? 'rgba(16, 185, 129, 0.15)' : ex.avgTestScore >= 60 ? 'rgba(59, 130, 246, 0.15)' : 'rgba(245, 158, 11, 0.15)',
-                                  color: ex.avgTestScore >= 80 ? '#34d399' : ex.avgTestScore >= 60 ? '#60a5fa' : '#fbbf24',
-                                  border: `1px solid ${ex.avgTestScore >= 80 ? 'rgba(16, 185, 129, 0.3)' : ex.avgTestScore >= 60 ? 'rgba(59, 130, 246, 0.3)' : 'rgba(245, 158, 11, 0.3)'}`
-                                }}>
-                                  Average Mastery: {ex.avgTestScore}%
-                                </span>
-                              ) : (
-                                <span style={{ fontSize: '0.72rem', color: '#94a3b8', fontStyle: 'italic' }}>
-                                  Evaluation in progress
-                                </span>
-                              )}
+                      {/* Model Tests Mastery & Performance Overview (if tests exist) */}
+                      {examsWithModelTests.length > 0 && (
+                        <div style={{
+                          marginTop: '0.4rem',
+                          padding: '1rem 1.15rem',
+                          background: 'rgba(15, 23, 42, 0.45)',
+                          border: '1px solid rgba(139, 92, 246, 0.2)',
+                          borderRadius: '12px',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.85rem'
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                              <span style={{ fontSize: '1rem' }}>📊</span>
+                              <span style={{ fontSize: '0.86rem', color: '#fff', fontWeight: 600 }}>
+                                Model Test Performance
+                              </span>
                             </div>
+                            <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.05)', padding: '0.18rem 0.5rem', borderRadius: '10px' }}>
+                              {examsWithModelTests.reduce((acc, e) => acc + e.testCount, 0)} Tests Recorded
+                            </span>
+                          </div>
 
-                            {/* Test Cards List */}
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '0.55rem' }}>
-                              {ex.tests.map(test => {
-                                const hasScore = test.isGraded && test.percent !== null;
-
-                                return (
-                                  <div
-                                    key={test.id}
-                                    style={{
-                                      display: 'flex',
-                                      alignItems: 'center',
-                                      justifyContent: 'space-between',
-                                      padding: '0.65rem 0.8rem',
-                                      background: 'rgba(255, 255, 255, 0.025)',
-                                      border: '1px solid rgba(255, 255, 255, 0.06)',
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                            {examsWithModelTests.map(ex => (
+                              <div 
+                                key={ex.id}
+                                style={{
+                                  background: 'rgba(255, 255, 255, 0.02)',
+                                  border: '1px solid rgba(255, 255, 255, 0.06)',
+                                  borderRadius: '10px',
+                                  padding: '0.8rem 0.95rem',
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: '0.6rem'
+                                }}
+                              >
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem' }}>
+                                  <span style={{ fontSize: '0.84rem', fontWeight: 600, color: '#e2e8f0' }}>
+                                    {ex.title}
+                                  </span>
+                                  {ex.avgTestScore !== null ? (
+                                    <span style={{
+                                      fontSize: '0.72rem',
+                                      fontWeight: 600,
+                                      padding: '0.16rem 0.5rem',
                                       borderRadius: '8px',
-                                      gap: '0.6rem',
-                                      transition: 'all 0.2s'
-                                    }}
-                                    onMouseOver={(e) => {
-                                      e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
-                                      e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.3)';
-                                    }}
-                                    onMouseOut={(e) => {
-                                      e.currentTarget.style.background = 'rgba(255, 255, 255, 0.025)';
-                                      e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.06)';
-                                    }}
-                                  >
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem', minWidth: 0 }}>
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                        <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                          {test.title || `Model Test - ${test.date || 'Practice'}`}
-                                        </span>
-                                        {test.difficulty && (
-                                          <span style={{ fontSize: '0.64rem', padding: '0.08rem 0.35rem', borderRadius: '4px', background: 'rgba(139, 92, 246, 0.18)', color: 'var(--accent-primary)', fontWeight: 600 }}>
-                                            {test.difficulty}
-                                          </span>
-                                        )}
-                                      </div>
-                                      <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
-                                        {test.date ? `📅 ${test.date}` : 'Practice Test'}
-                                        {test.chapters && test.chapters.length > 0 ? ` • ${test.chapters.length} chaps` : ''}
-                                      </span>
-                                    </div>
+                                      background: ex.avgTestScore >= 80 ? 'rgba(16, 185, 129, 0.15)' : ex.avgTestScore >= 60 ? 'rgba(59, 130, 246, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+                                      color: ex.avgTestScore >= 80 ? '#34d399' : ex.avgTestScore >= 60 ? '#60a5fa' : '#fbbf24',
+                                      border: `1px solid ${ex.avgTestScore >= 80 ? 'rgba(16, 185, 129, 0.3)' : ex.avgTestScore >= 60 ? 'rgba(59, 130, 246, 0.3)' : 'rgba(245, 158, 11, 0.3)'}`
+                                    }}>
+                                      Avg: {ex.avgTestScore}%
+                                    </span>
+                                  ) : (
+                                    <span style={{ fontSize: '0.7rem', color: '#94a3b8', fontStyle: 'italic' }}>
+                                      Pending Evaluation
+                                    </span>
+                                  )}
+                                </div>
 
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexShrink: 0 }}>
-                                      {/* Score / Status Badge */}
-                                      <span style={{
-                                        fontSize: '0.72rem',
-                                        fontWeight: 700,
-                                        padding: '0.2rem 0.5rem',
-                                        borderRadius: '8px',
-                                        background: hasScore 
-                                          ? (test.percent >= 80 ? 'rgba(16, 185, 129, 0.18)' : test.percent >= 60 ? 'rgba(59, 130, 246, 0.18)' : 'rgba(245, 158, 11, 0.18)')
-                                          : 'rgba(234, 179, 8, 0.12)',
-                                        border: `1px solid ${hasScore 
-                                          ? (test.percent >= 80 ? 'rgba(16, 185, 129, 0.35)' : test.percent >= 60 ? 'rgba(59, 130, 246, 0.35)' : 'rgba(245, 158, 11, 0.35)')
-                                          : 'rgba(234, 179, 8, 0.25)'}`,
-                                        color: hasScore 
-                                          ? (test.percent >= 80 ? '#34d399' : test.percent >= 60 ? '#60a5fa' : '#fbbf24')
-                                          : '#facc15'
-                                      }}>
-                                        {hasScore ? `${test.scoreDisplay} (${test.percent}%)` : (test.scoreDisplay || 'Pending')}
-                                      </span>
-
-                                      {/* Quick Open Test Viewer Button */}
-                                      <button
-                                        type="button"
-                                        onClick={() => openTestViewer({ subjectId: subject.id, examId: ex.id, testId: test.id, ...test })}
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '0.5rem' }}>
+                                  {ex.tests.map(test => {
+                                    const hasScore = test.isGraded && test.percent !== null;
+                                    return (
+                                      <div
+                                        key={test.id}
                                         style={{
-                                          background: 'rgba(139, 92, 246, 0.15)',
-                                          border: '1px solid rgba(139, 92, 246, 0.3)',
-                                          borderRadius: '6px',
-                                          color: 'var(--accent-primary)',
-                                          padding: '0.25rem 0.5rem',
-                                          fontSize: '0.72rem',
-                                          cursor: 'pointer',
                                           display: 'flex',
                                           alignItems: 'center',
-                                          gap: '0.25rem',
-                                          fontWeight: 600,
-                                          transition: 'all 0.2s'
+                                          justifyContent: 'space-between',
+                                          padding: '0.6rem 0.75rem',
+                                          background: 'rgba(255, 255, 255, 0.025)',
+                                          border: '1px solid rgba(255, 255, 255, 0.06)',
+                                          borderRadius: '8px',
+                                          gap: '0.5rem'
                                         }}
-                                        onMouseOver={(e) => {
-                                          e.currentTarget.style.background = 'rgba(139, 92, 246, 0.3)';
-                                          e.currentTarget.style.color = '#fff';
-                                        }}
-                                        onMouseOut={(e) => {
-                                          e.currentTarget.style.background = 'rgba(139, 92, 246, 0.15)';
-                                          e.currentTarget.style.color = 'var(--accent-primary)';
-                                        }}
-                                        title="View Test Answers & Grading"
                                       >
-                                        <span>View</span>
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
-                                      </button>
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem', minWidth: 0 }}>
+                                          <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                            {test.title || `Test - ${test.date || 'Practice'}`}
+                                          </span>
+                                          <span style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>
+                                            {test.date ? `📅 ${test.date}` : 'Practice'}
+                                          </span>
+                                        </div>
+
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexShrink: 0 }}>
+                                          <span style={{
+                                            fontSize: '0.7rem',
+                                            fontWeight: 700,
+                                            padding: '0.18rem 0.45rem',
+                                            borderRadius: '6px',
+                                            background: hasScore 
+                                              ? (test.percent >= 80 ? 'rgba(16, 185, 129, 0.18)' : test.percent >= 60 ? 'rgba(59, 130, 246, 0.18)' : 'rgba(245, 158, 11, 0.18)')
+                                              : 'rgba(234, 179, 8, 0.12)',
+                                            color: hasScore 
+                                              ? (test.percent >= 80 ? '#34d399' : test.percent >= 60 ? '#60a5fa' : '#fbbf24')
+                                              : '#facc15'
+                                          }}>
+                                            {hasScore ? `${test.scoreDisplay}` : 'Pending'}
+                                          </span>
+
+                                          <button
+                                            type="button"
+                                            onClick={() => openTestViewer({ subjectId: subject.id, examId: ex.id, testId: test.id, ...test })}
+                                            style={{
+                                              background: 'rgba(139, 92, 246, 0.15)',
+                                              border: '1px solid rgba(139, 92, 246, 0.3)',
+                                              borderRadius: '6px',
+                                              color: 'var(--accent-primary)',
+                                              padding: '0.22rem 0.45rem',
+                                              fontSize: '0.7rem',
+                                              cursor: 'pointer',
+                                              fontWeight: 600,
+                                              transition: 'all 0.2s'
+                                            }}
+                                            onMouseOver={(e) => {
+                                              e.currentTarget.style.background = 'rgba(139, 92, 246, 0.3)';
+                                              e.currentTarget.style.color = '#fff';
+                                            }}
+                                            onMouseOut={(e) => {
+                                              e.currentTarget.style.background = 'rgba(139, 92, 246, 0.15)';
+                                              e.currentTarget.style.color = 'var(--accent-primary)';
+                                            }}
+                                            title="View Test Answers & Grading"
+                                          >
+                                            View
+                                          </button>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            ))}
                           </div>
-                        ))}
-                      </div>
+                        </div>
+                      )}
                     </div>
                   )}
+
+                  {/* Primary Link Button: Open Subject Hub */}
+                  <Link
+                    href={subjectHubHref}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '0.45rem',
+                      padding: '0.68rem 1.1rem',
+                      fontSize: '0.85rem',
+                      fontWeight: 600,
+                      background: 'var(--accent-gradient, linear-gradient(135deg, #6366f1, #8b5cf6))',
+                      color: '#ffffff',
+                      borderRadius: '12px',
+                      textDecoration: 'none',
+                      boxShadow: '0 4px 14px rgba(99, 102, 241, 0.25)',
+                      transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                      marginTop: 'auto'
+                    }}
+                    onMouseOver={(e) => {
+                      e.currentTarget.style.transform = 'translateY(-1px)';
+                      e.currentTarget.style.boxShadow = '0 6px 20px rgba(99, 102, 241, 0.38)';
+                    }}
+                    onMouseOut={(e) => {
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = '0 4px 14px rgba(99, 102, 241, 0.25)';
+                    }}
+                  >
+                    <span>Open {subject.title} Hub</span>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+                  </Link>
                 </div>
               );
             })}
