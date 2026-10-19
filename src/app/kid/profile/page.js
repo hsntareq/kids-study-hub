@@ -33,6 +33,7 @@ function KidProfileContent() {
   const [editPdfPage, setEditPdfPage] = useState('');
   const [settingsSubject, setSettingsSubject] = useState(null);
   const [subjectBookUrl, setSubjectBookUrl] = useState('');
+  const [subjectExamRetentionDays, setSubjectExamRetentionDays] = useState('7');
   
   const [settingsExamInfo, setSettingsExamInfo] = useState(null);
   const [examMarkDistribution, setExamMarkDistribution] = useState('');
@@ -402,9 +403,11 @@ function KidProfileContent() {
 
   const handleSaveSubjectSettings = async () => {
     if (!settingsSubject || !user || !kid) return;
-    await set(ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${settingsSubject.id}/bookUrl`), subjectBookUrl);
+    await set(ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${settingsSubject.id}/bookUrl`), subjectBookUrl.trim());
+    await set(ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${settingsSubject.id}/examRetentionDays`), Number(subjectExamRetentionDays) || 0);
     setSettingsSubject(null);
     setSubjectBookUrl('');
+    setSubjectExamRetentionDays('7');
   };
 
   const handleSaveExamSettings = async () => {
@@ -1096,11 +1099,15 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                       </h3>
 
                       <button 
-                        onClick={() => { setSettingsSubject(subject); setSubjectBookUrl(subject.bookUrl || ''); }} 
+                        onClick={() => {
+                          setSettingsSubject(subject);
+                          setSubjectBookUrl(subject.bookUrl || '');
+                          setSubjectExamRetentionDays(subject.examRetentionDays !== undefined ? String(subject.examRetentionDays) : '7');
+                        }} 
                         style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: '0.2rem', display: 'flex', alignItems: 'center', transition: 'color 0.2s' }} 
                         onMouseOver={(e) => e.currentTarget.style.color = 'var(--accent-primary)'} 
                         onMouseOut={(e) => e.currentTarget.style.color = 'var(--text-secondary)'} 
-                        title="Subject Settings (Book URL)"
+                        title="Subject Settings & Auto-Archive Configuration"
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
                       </button>
@@ -2878,20 +2885,253 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
         </div>
       )}
 
-      {/* Subject Settings Modal */}
+      {/* Universal Subject Settings Modal */}
       {settingsSubject && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '1rem' }}>
-          <div className="card" style={{ maxWidth: '400px', width: '100%', position: 'relative', animation: 'fadeIn 0.2s ease-out', textAlign: 'left' }}>
-            <h2 style={{ marginTop: 0, marginBottom: '1rem' }}>{settingsSubject.title} Settings</h2>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        <div 
+          style={{ 
+            position: 'fixed', 
+            top: 0, 
+            left: 0, 
+            right: 0, 
+            bottom: 0, 
+            background: 'rgba(5, 8, 16, 0.75)', 
+            backdropFilter: 'blur(10px)', 
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'center', 
+            zIndex: 100, 
+            padding: '1.25rem' 
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSettingsSubject(null);
+          }}
+        >
+          <div 
+            className="card" 
+            style={{ 
+              maxWidth: '540px', 
+              width: '100%', 
+              position: 'relative', 
+              animation: 'fadeIn 0.2s ease-out', 
+              textAlign: 'left',
+              padding: '1.75rem',
+              borderRadius: '16px',
+              border: '1px solid rgba(255, 255, 255, 0.12)',
+              boxShadow: '0 24px 48px -12px rgba(0, 0, 0, 0.7)',
+              background: 'linear-gradient(145deg, rgba(23, 28, 44, 0.95), rgba(15, 18, 30, 0.98))'
+            }}
+          >
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '1.25rem', paddingBottom: '1rem', borderBottom: '1px solid rgba(255, 255, 255, 0.08)' }}>
               <div>
-                <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Book PDF URL</label>
-                <input type="url" value={subjectBookUrl} onChange={e => setSubjectBookUrl(e.target.value)} placeholder="https://drive.google.com/file/d/..." style={{ width: '100%', padding: '0.8rem', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--glass-border)', borderRadius: '8px', color: '#fff', fontSize: '1rem' }} />
-                <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.85rem', color: 'var(--text-secondary)', opacity: 0.8 }}>This book will be used for all chapters in this subject. You can set the starting page for each chapter individually in the syllabus manager.</p>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', padding: '0.2rem 0.6rem', borderRadius: '20px', background: 'rgba(99, 102, 241, 0.15)', color: '#a5b4fc', fontSize: '0.75rem', fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: '0.4rem' }}>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+                  Universal Subject Settings
+                </div>
+                <h2 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 700, color: '#fff', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  {settingsSubject.title}
+                </h2>
+                <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                  Applies to all exams, chapters, and resources for this subject
+                </p>
               </div>
-              <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem' }}>
-                <button onClick={handleSaveSubjectSettings} className="primary" style={{ padding: '0.6rem 1.2rem', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '500' }}>Save</button>
-                <button onClick={() => setSettingsSubject(null)} style={{ padding: '0.6rem 1.2rem', background: 'rgba(255,255,255,0.1)', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer' }}>Cancel</button>
+              <button 
+                onClick={() => setSettingsSubject(null)}
+                style={{ 
+                  background: 'rgba(255, 255, 255, 0.06)', 
+                  border: 'none', 
+                  color: 'var(--text-secondary)', 
+                  width: '32px', 
+                  height: '32px', 
+                  borderRadius: '50%', 
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '1.1rem',
+                  transition: 'all 0.15s ease'
+                }}
+                onMouseOver={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.12)'; e.currentTarget.style.color = '#fff'; }}
+                onMouseOut={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+                title="Close"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.35rem' }}>
+              {/* Setting 1: Online Textbook / PDF URL */}
+              <div style={{ background: 'rgba(255, 255, 255, 0.03)', borderRadius: '12px', padding: '1rem', border: '1px solid rgba(255, 255, 255, 0.05)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.4rem' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: '#fff', fontSize: '0.92rem', fontWeight: 600 }}>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: '#38bdf8' }}><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+                    Online Textbook / PDF Reader URL
+                  </label>
+                  {subjectBookUrl.trim() && (
+                    <a 
+                      href={subjectBookUrl.trim()} 
+                      target="_blank" 
+                      rel="noopener noreferrer" 
+                      style={{ fontSize: '0.78rem', color: '#38bdf8', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '0.2rem', padding: '0.15rem 0.5rem', borderRadius: '6px', background: 'rgba(56, 189, 248, 0.1)' }}
+                    >
+                      Test Link ↗
+                    </a>
+                  )}
+                </div>
+                <input 
+                  type="url" 
+                  value={subjectBookUrl} 
+                  onChange={e => setSubjectBookUrl(e.target.value)} 
+                  placeholder="https://drive.google.com/file/d/... or PDF link" 
+                  style={{ 
+                    width: '100%', 
+                    padding: '0.7rem 0.85rem', 
+                    background: 'rgba(0, 0, 0, 0.35)', 
+                    border: '1px solid rgba(255, 255, 255, 0.12)', 
+                    borderRadius: '8px', 
+                    color: '#fff', 
+                    fontSize: '0.92rem',
+                    outline: 'none',
+                    transition: 'border-color 0.2s'
+                  }}
+                  onFocus={(e) => e.target.style.borderColor = 'var(--accent-primary, #6366f1)'}
+                  onBlur={(e) => e.target.style.borderColor = 'rgba(255, 255, 255, 0.12)'}
+                />
+                <p style={{ margin: '0.45rem 0 0 0', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                  Universal textbook reference for all chapters. Chapter cards and study sessions link directly to their specific starting page numbers.
+                </p>
+              </div>
+
+              {/* Setting 2: Exam Post-Deadline Visibility / Retention Window */}
+              <div style={{ background: 'rgba(255, 255, 255, 0.03)', borderRadius: '12px', padding: '1rem', border: '1px solid rgba(255, 255, 255, 0.05)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: '#fff', fontSize: '0.92rem', fontWeight: 600 }}>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: '#f59e0b' }}><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                    Post-Deadline Exam Visibility
+                  </label>
+                  <span style={{ fontSize: '0.75rem', padding: '0.15rem 0.5rem', borderRadius: '6px', background: 'rgba(245, 158, 11, 0.12)', color: '#fbbf24', fontWeight: 500 }}>
+                    Parent & Teacher Policy
+                  </span>
+                </div>
+                <p style={{ margin: '0 0 0.75rem 0', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                  Duration an exam remains visible on the active dashboard after its deadline has passed before being automatically archived.
+                </p>
+
+                {/* Quick Presets */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '0.4rem', marginBottom: '0.85rem' }}>
+                  {[
+                    { label: '3 Days', value: '3' },
+                    { label: '7 Days', value: '7', badge: 'Default' },
+                    { label: '14 Days', value: '14' },
+                    { label: '30 Days', value: '30' },
+                    { label: 'Never', value: '0', badge: 'Keep' }
+                  ].map((preset) => {
+                    const isSelected = String(subjectExamRetentionDays) === preset.value;
+                    return (
+                      <button
+                        key={preset.value}
+                        type="button"
+                        onClick={() => setSubjectExamRetentionDays(preset.value)}
+                        style={{
+                          padding: '0.5rem 0.25rem',
+                          borderRadius: '8px',
+                          border: isSelected ? '1px solid #6366f1' : '1px solid rgba(255, 255, 255, 0.08)',
+                          background: isSelected ? 'rgba(99, 102, 241, 0.22)' : 'rgba(255, 255, 255, 0.04)',
+                          color: isSelected ? '#fff' : 'var(--text-secondary)',
+                          fontSize: '0.78rem',
+                          fontWeight: isSelected ? 600 : 500,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          gap: '0.15rem',
+                          transition: 'all 0.15s ease'
+                        }}
+                      >
+                        <span>{preset.label}</span>
+                        {preset.badge && (
+                          <span style={{ fontSize: '0.62rem', opacity: isSelected ? 1 : 0.6, color: isSelected ? '#a5b4fc' : 'inherit' }}>
+                            {preset.badge}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Custom input & feedback indicator */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', background: 'rgba(0, 0, 0, 0.25)', padding: '0.6rem 0.8rem', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>Custom Days:</span>
+                    <input 
+                      type="number" 
+                      min="0" 
+                      max="365"
+                      value={subjectExamRetentionDays} 
+                      onChange={(e) => setSubjectExamRetentionDays(e.target.value)} 
+                      style={{ 
+                        width: '72px', 
+                        padding: '0.35rem 0.5rem', 
+                        background: 'rgba(255, 255, 255, 0.06)', 
+                        border: '1px solid rgba(255, 255, 255, 0.15)', 
+                        borderRadius: '6px', 
+                        color: '#fff', 
+                        fontSize: '0.88rem', 
+                        fontWeight: 600, 
+                        textAlign: 'center' 
+                      }} 
+                    />
+                  </div>
+                  <div style={{ fontSize: '0.78rem', color: subjectExamRetentionDays === '0' || Number(subjectExamRetentionDays) === 0 ? '#34d399' : '#94a3b8', lineHeight: 1.3, flex: 1 }}>
+                    {subjectExamRetentionDays === '0' || Number(subjectExamRetentionDays) === 0 ? (
+                      <span>🛡️ <strong>Permanent</strong> — exams will never auto-archive and stay visible until manually removed.</span>
+                    ) : (
+                      <span>⏳ Retained for <strong>{subjectExamRetentionDays || 0} day{Number(subjectExamRetentionDays) === 1 ? '' : 's'}</strong> post-deadline for parent & kid review before auto-archival.</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '0.25rem' }}>
+                <button 
+                  type="button" 
+                  onClick={() => setSettingsSubject(null)} 
+                  style={{ 
+                    padding: '0.65rem 1.25rem', 
+                    background: 'rgba(255, 255, 255, 0.06)', 
+                    color: 'var(--text-secondary)', 
+                    border: '1px solid rgba(255, 255, 255, 0.1)', 
+                    borderRadius: '8px', 
+                    cursor: 'pointer',
+                    fontSize: '0.9rem',
+                    fontWeight: 500
+                  }}
+                  onMouseOver={(e) => e.currentTarget.style.color = '#fff'}
+                  onMouseOut={(e) => e.currentTarget.style.color = 'var(--text-secondary)'}
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="button" 
+                  onClick={handleSaveSubjectSettings} 
+                  className="primary" 
+                  style={{ 
+                    padding: '0.65rem 1.4rem', 
+                    border: 'none', 
+                    borderRadius: '8px', 
+                    cursor: 'pointer', 
+                    fontWeight: 600,
+                    fontSize: '0.9rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.4rem',
+                    boxShadow: '0 4px 14px rgba(99, 102, 241, 0.4)'
+                  }}
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                  Save Settings
+                </button>
               </div>
             </div>
           </div>
