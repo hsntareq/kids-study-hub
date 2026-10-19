@@ -1,7 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 
 export async function generateGeminiContent(prompt) {
-  const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+  const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error('NEXT_PUBLIC_GEMINI_API_KEY is missing in environment variables. Please add it to your .env.local file to use the AI generator.');
   }
