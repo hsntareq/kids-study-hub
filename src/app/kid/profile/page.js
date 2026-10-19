@@ -999,11 +999,49 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                 const examStatus = examSetting.status || (examProgress === 100 && examTotalChaps > 0 ? 'Completed' : (examProgress > 0 ? 'In Progress' : 'Not Started'));
 
                 const rawTests = (subject.modelTests && subject.modelTests[exam.id]) || {};
-                const testCount = Object.keys(rawTests).length;
+                const testList = Object.entries(rawTests).map(([tId, t]) => {
+                  let scoreDisplay = 'Pending';
+                  let percent = null;
+                  let isGraded = false;
 
+                  if (t.examinerGrading?.totalAwarded !== undefined) {
+                    const awarded = Number(t.examinerGrading.totalAwarded) || 0;
+                    const max = Number(t.examinerGrading.totalMax) || 100;
+                    percent = Math.round((awarded / max) * 100);
+                    scoreDisplay = `${awarded}/${max}`;
+                    isGraded = true;
+                  } else if (t.result && t.result !== 'Pending' && t.result !== '0') {
+                    scoreDisplay = t.result;
+                    if (t.result.includes('/')) {
+                      const [num, den] = t.result.split('/').map(Number);
+                      if (!isNaN(num) && !isNaN(den) && den > 0) {
+                        percent = Math.round((num / den) * 100);
+                        isGraded = true;
+                      }
+                    } else if (!isNaN(Number(t.result))) {
+                      percent = Number(t.result);
+                      isGraded = true;
+                    }
+                  }
+
+                  return {
+                    id: tId,
+                    ...t,
+                    scoreDisplay,
+                    percent,
+                    isGraded
+                  };
+                }).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+                const testCount = testList.length;
                 totalChapters += examTotalChaps;
                 completedChapters += examCompletedChaps;
                 totalTests += testCount;
+
+                const gradedTests = testList.filter(t => t.isGraded && t.percent !== null);
+                const avgTestScore = gradedTests.length > 0
+                  ? Math.round(gradedTests.reduce((sum, t) => sum + t.percent, 0) / gradedTests.length)
+                  : null;
 
                 return {
                   ...exam,
@@ -1011,11 +1049,25 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                   completedChapters: examCompletedChaps,
                   progress: examProgress,
                   status: examStatus,
-                  testCount
+                  testCount,
+                  tests: testList,
+                  avgTestScore,
+                  gradedTestsCount: gradedTests.length
                 };
               });
 
               const progressPercent = totalChapters > 0 ? Math.round((completedChapters / totalChapters) * 100) : 0;
+              const remainingChapters = Math.max(0, totalChapters - completedChapters);
+
+              // Determine immediate next exam:
+              // 1. Any exam with status 'In Progress'
+              // 2. Or first exam that is not 'Completed'
+              const nextUpExam = subjectExams.find(ex => ex.status === 'In Progress') 
+                || subjectExams.find(ex => ex.status !== 'Completed')
+                || subjectExams[0];
+
+              const examsWithModelTests = subjectExams.filter(ex => ex.tests && ex.tests.length > 0);
+
               const queryParentId = searchParams.get("parentId");
               const parentIdQuery = queryParentId ? `&parentId=${queryParentId}` : '';
               const subjectHubHref = `/kid/subject?id=${searchParams.get("id")}&subject=${subjectSlug}&subjectId=${subject.id}${parentIdQuery}`;
@@ -1030,7 +1082,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                     padding: '1.4rem 1.6rem',
                     display: 'flex',
                     flexDirection: 'column',
-                    gap: '1.1rem',
+                    gap: '1.2rem',
                     textAlign: 'left',
                     transition: 'all 0.2s',
                     boxShadow: '0 4px 20px rgba(0,0,0,0.15)'
@@ -1101,78 +1153,222 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                     </div>
                   </div>
 
-                  {/* Syllabus Progress Bar */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-                      <span>Syllabus Mastery</span>
-                      <span style={{ fontWeight: 600, color: progressPercent === 100 ? '#34d399' : '#c4b5fd' }}>
-                        {progressPercent}% Complete ({completedChapters}/{totalChapters} Chapters Mastered)
-                      </span>
+                  {/* Syllabus Completion Visual Indicator: Dedicated SVG Circular Progress Ring */}
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '1.4rem',
+                    padding: '1.1rem 1.35rem',
+                    background: 'rgba(255, 255, 255, 0.02)',
+                    border: '1px solid rgba(255, 255, 255, 0.06)',
+                    borderRadius: '14px',
+                    flexWrap: 'wrap'
+                  }}>
+                    {/* SVG Circular Progress Ring */}
+                    <div style={{ position: 'relative', width: '72px', height: '72px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                      <svg width="72" height="72" viewBox="0 0 72 72" style={{ transform: 'rotate(-90deg)' }}>
+                        <defs>
+                          <linearGradient id={`prog-grad-${subject.id}`} x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" stopColor="#8b5cf6" />
+                            <stop offset="50%" stopColor="#3b82f6" />
+                            <stop offset="100%" stopColor="#06b6d4" />
+                          </linearGradient>
+                        </defs>
+                        {/* Background Ring Track */}
+                        <circle
+                          cx="36"
+                          cy="36"
+                          r="28"
+                          stroke="rgba(255, 255, 255, 0.08)"
+                          strokeWidth="5"
+                          fill="transparent"
+                        />
+                        {/* Dynamic Progress Ring Fill */}
+                        <circle
+                          cx="36"
+                          cy="36"
+                          r="28"
+                          stroke={progressPercent === 100 ? '#10b981' : progressPercent > 0 ? `url(#prog-grad-${subject.id})` : 'rgba(255, 255, 255, 0.12)'}
+                          strokeWidth="5"
+                          strokeDasharray={175.93}
+                          strokeDashoffset={175.93 - (175.93 * progressPercent) / 100}
+                          strokeLinecap="round"
+                          fill="transparent"
+                          style={{ transition: 'stroke-dashoffset 0.6s cubic-bezier(0.4, 0, 0.2, 1)' }}
+                        />
+                      </svg>
+                      {/* Centered Percentage & Label */}
+                      <div style={{ position: 'absolute', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center' }}>
+                        <span style={{ fontSize: '1.05rem', fontWeight: 700, color: progressPercent === 100 ? '#34d399' : '#fff', lineHeight: 1 }}>
+                          {progressPercent}%
+                        </span>
+                        <span style={{ fontSize: '0.58rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.4px', marginTop: '2px' }}>
+                          Mastery
+                        </span>
+                      </div>
                     </div>
-                    <div style={{ height: '7px', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '4px', overflow: 'hidden' }}>
-                      <div style={{
-                        height: '100%',
-                        width: `${progressPercent}%`,
-                        background: progressPercent === 100
-                          ? 'linear-gradient(90deg, #10b981, #059669)'
-                          : 'linear-gradient(90deg, #6366f1, #a855f7)',
-                        borderRadius: '4px',
-                        transition: 'width 0.4s ease'
-                      }} />
+
+                    {/* Syllabus Metrics & Status Breakdown */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', flex: '1 1 240px', minWidth: '220px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
+                          <span style={{ fontSize: '0.92rem', fontWeight: 600, color: '#f1f5f9' }}>
+                            Syllabus Mastery
+                          </span>
+                          <span style={{
+                            fontSize: '0.68rem',
+                            padding: '0.14rem 0.52rem',
+                            borderRadius: '10px',
+                            fontWeight: 600,
+                            background: progressPercent === 100 ? 'rgba(16, 185, 129, 0.15)' : progressPercent > 0 ? 'rgba(139, 92, 246, 0.15)' : 'rgba(148, 163, 184, 0.1)',
+                            color: progressPercent === 100 ? '#34d399' : progressPercent > 0 ? '#c084fc' : '#94a3b8'
+                          }}>
+                            {progressPercent === 100 ? 'Mastered' : progressPercent > 0 ? 'In Progress' : totalChapters > 0 ? 'Not Started' : 'No Chapters'}
+                          </span>
+                        </div>
+                        <span style={{ fontSize: '0.8rem', fontWeight: 600, color: progressPercent === 100 ? '#34d399' : '#c4b5fd' }}>
+                          {progressPercent}% Complete ({completedChapters}/{totalChapters} Chapters Mastered)
+                        </span>
+                      </div>
+
+                      {/* Milestone Details Chips */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap', fontSize: '0.74rem', color: 'var(--text-secondary)', marginTop: '0.1rem' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: completedChapters > 0 ? '#34d399' : 'var(--text-secondary)' }}>
+                          <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: completedChapters > 0 ? '#10b981' : 'rgba(255,255,255,0.2)' }}></span>
+                          {completedChapters} Mastered
+                        </span>
+                        <span style={{ color: 'rgba(255,255,255,0.2)' }}>•</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                          <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: remainingChapters > 0 ? '#f59e0b' : 'rgba(255,255,255,0.2)' }}></span>
+                          {remainingChapters} Remaining
+                        </span>
+                        <span style={{ color: 'rgba(255,255,255,0.2)' }}>•</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                          <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: 'rgba(139, 92, 246, 0.7)' }}></span>
+                          {totalChapters} Total {totalChapters === 1 ? 'Chapter' : 'Chapters'}
+                        </span>
+                        {totalChapters === 0 && (
+                          <>
+                            <span style={{ color: 'rgba(255,255,255,0.2)' }}>•</span>
+                            <span style={{ color: '#94a3b8', fontStyle: 'italic' }}>
+                              Add chapters in Subject Hub to map curriculum
+                            </span>
+                          </>
+                        )}
+                      </div>
                     </div>
                   </div>
 
-                  {/* Quick Access to Exams (Progressive Disclosure) */}
+                  {/* Quick Access to Exams with 'Next Up' Highlight */}
                   {subjectExams.length > 0 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', marginTop: '0.2rem' }}>
-                      <span style={{ fontSize: '0.74rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                        Exams & Workspace
-                      </span>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '0.6rem' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem', marginTop: '0.1rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: '0.74rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.6px' }}>
+                          Exams & Workspaces
+                        </span>
+                        <span style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.4)' }}>
+                          Click exam to enter study workspace
+                        </span>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '0.75rem' }}>
                         {subjectExams.map(ex => {
                           const queryParentId = searchParams.get("parentId");
                           const parentIdQuery = queryParentId ? `&parentId=${queryParentId}` : '';
                           const examHref = `/kid/exam?id=${searchParams.get("id")}&subject=${subjectSlug}&examId=${ex.id}&subjectId=${subject.id}${parentIdQuery}`;
+                          
+                          const isNextUp = nextUpExam && ex.id === nextUpExam.id && ex.status !== 'Completed';
+                          const isMajorExam = /final|term|annual|board|midterm|semester/i.test(ex.title);
+
                           return (
                             <Link
                               key={ex.id}
                               href={examHref}
                               style={{
                                 display: 'flex',
-                                alignItems: 'center',
+                                flexDirection: 'column',
                                 justifyContent: 'space-between',
-                                padding: '0.65rem 0.85rem',
-                                background: 'rgba(255, 255, 255, 0.025)',
-                                border: '1px solid rgba(255, 255, 255, 0.06)',
-                                borderRadius: '10px',
+                                padding: '0.85rem 1rem',
+                                background: isNextUp
+                                  ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.08), rgba(139, 92, 246, 0.08))'
+                                  : 'rgba(255, 255, 255, 0.025)',
+                                border: isNextUp
+                                  ? '1px solid rgba(245, 158, 11, 0.5)'
+                                  : '1px solid rgba(255, 255, 255, 0.06)',
+                                borderRadius: '12px',
                                 textDecoration: 'none',
-                                transition: 'all 0.2s',
-                                gap: '0.6rem'
+                                transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                                gap: '0.65rem',
+                                position: 'relative',
+                                boxShadow: isNextUp ? '0 4px 18px rgba(245, 158, 11, 0.12)' : 'none'
                               }}
                               onMouseOver={(e) => {
-                                e.currentTarget.style.background = 'rgba(255, 255, 255, 0.06)';
-                                e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.35)';
+                                e.currentTarget.style.background = isNextUp
+                                  ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.13), rgba(139, 92, 246, 0.13))'
+                                  : 'rgba(255, 255, 255, 0.055)';
+                                e.currentTarget.style.borderColor = isNextUp
+                                  ? 'rgba(245, 158, 11, 0.75)'
+                                  : 'rgba(139, 92, 246, 0.4)';
+                                e.currentTarget.style.transform = 'translateY(-2px)';
                               }}
                               onMouseOut={(e) => {
-                                e.currentTarget.style.background = 'rgba(255, 255, 255, 0.025)';
-                                e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.06)';
+                                e.currentTarget.style.background = isNextUp
+                                  ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.08), rgba(139, 92, 246, 0.08))'
+                                  : 'rgba(255, 255, 255, 0.025)';
+                                e.currentTarget.style.borderColor = isNextUp
+                                  ? 'rgba(245, 158, 11, 0.5)'
+                                  : 'rgba(255, 255, 255, 0.06)';
+                                e.currentTarget.style.transform = 'translateY(0)';
                               }}
                               title={`Open ${ex.title} Exam Workspace`}
                             >
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem', minWidth: 0 }}>
-                                <span style={{ fontWeight: 600, fontSize: '0.88rem', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                  {ex.title}
-                                </span>
-                                <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                                  {ex.completedChapters}/{ex.totalChapters} Chaps • {ex.testCount} Tests
-                                </span>
-                              </div>
+                              {/* Top row: Badges */}
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                                  {isNextUp && (
+                                    <span style={{
+                                      fontSize: '0.68rem',
+                                      fontWeight: 700,
+                                      letterSpacing: '0.4px',
+                                      padding: '0.18rem 0.55rem',
+                                      borderRadius: '8px',
+                                      background: 'linear-gradient(135deg, #f59e0b, #ef4444)',
+                                      color: '#ffffff',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '0.25rem',
+                                      boxShadow: '0 2px 8px rgba(245, 158, 11, 0.35)',
+                                      textTransform: 'uppercase'
+                                    }}>
+                                      <span>⚡</span>
+                                      <span>Next Up</span>
+                                    </span>
+                                  )}
 
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexShrink: 0 }}>
+                                  {isMajorExam && (
+                                    <span style={{
+                                      fontSize: '0.67rem',
+                                      fontWeight: 600,
+                                      padding: '0.16rem 0.48rem',
+                                      borderRadius: '8px',
+                                      background: 'rgba(168, 85, 247, 0.15)',
+                                      border: '1px solid rgba(168, 85, 247, 0.3)',
+                                      color: '#d8b4fe',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '0.25rem'
+                                    }}>
+                                      <span>🏆</span>
+                                      <span>Major Exam</span>
+                                    </span>
+                                  )}
+                                </div>
+
+                                {/* Status Badge */}
                                 <span style={{
                                   fontSize: '0.68rem',
-                                  padding: '0.15rem 0.45rem',
-                                  borderRadius: '10px',
+                                  padding: '0.14rem 0.48rem',
+                                  borderRadius: '8px',
                                   fontWeight: 600,
                                   background:
                                     ex.status === 'Completed' ? 'rgba(16, 185, 129, 0.15)' :
@@ -1187,11 +1383,243 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                                 }}>
                                   {ex.status}
                                 </span>
-                                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--text-secondary)' }}><polyline points="9 18 15 12 9 6"></polyline></svg>
+                              </div>
+
+                              {/* Middle: Title & Meta */}
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                                <span style={{ fontWeight: 600, fontSize: '0.94rem', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                  {ex.title}
+                                </span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+                                  <span>{ex.completedChapters}/{ex.totalChapters} Chaps</span>
+                                  <span>•</span>
+                                  <span>{ex.testCount} {ex.testCount === 1 ? 'Test' : 'Tests'}</span>
+                                  {ex.avgTestScore !== null && (
+                                    <>
+                                      <span>•</span>
+                                      <span style={{ color: ex.avgTestScore >= 75 ? '#34d399' : '#fbbf24', fontWeight: 600 }}>
+                                        Avg: {ex.avgTestScore}%
+                                      </span>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Bottom: Progress Mini Bar & Action */}
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.6rem', marginTop: '0.15rem' }}>
+                                <div style={{ flex: 1, height: '4px', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '2px', overflow: 'hidden' }}>
+                                  <div style={{
+                                    height: '100%',
+                                    width: `${ex.progress}%`,
+                                    background: ex.progress === 100 ? '#10b981' : isNextUp ? '#f59e0b' : '#8b5cf6',
+                                    borderRadius: '2px'
+                                  }} />
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', color: isNextUp ? '#fbbf24' : 'var(--text-secondary)', fontSize: '0.74rem', fontWeight: 600 }}>
+                                  <span>Workspace</span>
+                                  <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                                </div>
                               </div>
                             </Link>
                           );
                         })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Model Tests Mastery & Performance Overview (for exams with model tests) */}
+                  {examsWithModelTests.length > 0 && (
+                    <div style={{
+                      marginTop: '0.2rem',
+                      padding: '1.1rem 1.25rem',
+                      background: 'rgba(15, 23, 42, 0.45)',
+                      border: '1px solid rgba(139, 92, 246, 0.2)',
+                      borderRadius: '12px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.85rem'
+                    }}>
+                      {/* Section Header */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
+                          <div style={{
+                            width: '28px',
+                            height: '28px',
+                            borderRadius: '8px',
+                            background: 'rgba(139, 92, 246, 0.18)',
+                            color: 'var(--accent-primary)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontSize: '0.95rem'
+                          }}>
+                            📊
+                          </div>
+                          <div>
+                            <h4 style={{ margin: 0, fontSize: '0.9rem', color: '#fff', fontWeight: 600 }}>
+                              Model Test Performance & Mastery
+                            </h4>
+                            <p style={{ margin: 0, fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                              Recent test results and evaluation feedback for quick parental overview
+                            </p>
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                          <span style={{ fontSize: '0.73rem', color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.05)', padding: '0.2rem 0.55rem', borderRadius: '10px' }}>
+                            {examsWithModelTests.reduce((acc, e) => acc + e.testCount, 0)} Model Tests Recorded
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Exams with Tests */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                        {examsWithModelTests.map(ex => (
+                          <div 
+                            key={ex.id}
+                            style={{
+                              background: 'rgba(255, 255, 255, 0.02)',
+                              border: '1px solid rgba(255, 255, 255, 0.06)',
+                              borderRadius: '10px',
+                              padding: '0.85rem 1rem',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '0.65rem'
+                            }}
+                          >
+                            {/* Exam Sub-heading */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <span style={{ fontSize: '0.86rem', fontWeight: 600, color: '#e2e8f0' }}>
+                                  {ex.title}
+                                </span>
+                                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.06)', padding: '0.12rem 0.45rem', borderRadius: '6px' }}>
+                                  {ex.testCount} {ex.testCount === 1 ? 'Test' : 'Tests'}
+                                </span>
+                              </div>
+
+                              {ex.avgTestScore !== null ? (
+                                <span style={{
+                                  fontSize: '0.74rem',
+                                  fontWeight: 600,
+                                  padding: '0.18rem 0.55rem',
+                                  borderRadius: '10px',
+                                  background: ex.avgTestScore >= 80 ? 'rgba(16, 185, 129, 0.15)' : ex.avgTestScore >= 60 ? 'rgba(59, 130, 246, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+                                  color: ex.avgTestScore >= 80 ? '#34d399' : ex.avgTestScore >= 60 ? '#60a5fa' : '#fbbf24',
+                                  border: `1px solid ${ex.avgTestScore >= 80 ? 'rgba(16, 185, 129, 0.3)' : ex.avgTestScore >= 60 ? 'rgba(59, 130, 246, 0.3)' : 'rgba(245, 158, 11, 0.3)'}`
+                                }}>
+                                  Average Mastery: {ex.avgTestScore}%
+                                </span>
+                              ) : (
+                                <span style={{ fontSize: '0.72rem', color: '#94a3b8', fontStyle: 'italic' }}>
+                                  Evaluation in progress
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Test Cards List */}
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '0.55rem' }}>
+                              {ex.tests.map(test => {
+                                const hasScore = test.isGraded && test.percent !== null;
+
+                                return (
+                                  <div
+                                    key={test.id}
+                                    style={{
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'space-between',
+                                      padding: '0.65rem 0.8rem',
+                                      background: 'rgba(255, 255, 255, 0.025)',
+                                      border: '1px solid rgba(255, 255, 255, 0.06)',
+                                      borderRadius: '8px',
+                                      gap: '0.6rem',
+                                      transition: 'all 0.2s'
+                                    }}
+                                    onMouseOver={(e) => {
+                                      e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
+                                      e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.3)';
+                                    }}
+                                    onMouseOut={(e) => {
+                                      e.currentTarget.style.background = 'rgba(255, 255, 255, 0.025)';
+                                      e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.06)';
+                                    }}
+                                  >
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem', minWidth: 0 }}>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                        <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                          {test.title || `Model Test - ${test.date || 'Practice'}`}
+                                        </span>
+                                        {test.difficulty && (
+                                          <span style={{ fontSize: '0.64rem', padding: '0.08rem 0.35rem', borderRadius: '4px', background: 'rgba(139, 92, 246, 0.18)', color: 'var(--accent-primary)', fontWeight: 600 }}>
+                                            {test.difficulty}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                                        {test.date ? `📅 ${test.date}` : 'Practice Test'}
+                                        {test.chapters && test.chapters.length > 0 ? ` • ${test.chapters.length} chaps` : ''}
+                                      </span>
+                                    </div>
+
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexShrink: 0 }}>
+                                      {/* Score / Status Badge */}
+                                      <span style={{
+                                        fontSize: '0.72rem',
+                                        fontWeight: 700,
+                                        padding: '0.2rem 0.5rem',
+                                        borderRadius: '8px',
+                                        background: hasScore 
+                                          ? (test.percent >= 80 ? 'rgba(16, 185, 129, 0.18)' : test.percent >= 60 ? 'rgba(59, 130, 246, 0.18)' : 'rgba(245, 158, 11, 0.18)')
+                                          : 'rgba(234, 179, 8, 0.12)',
+                                        border: `1px solid ${hasScore 
+                                          ? (test.percent >= 80 ? 'rgba(16, 185, 129, 0.35)' : test.percent >= 60 ? 'rgba(59, 130, 246, 0.35)' : 'rgba(245, 158, 11, 0.35)')
+                                          : 'rgba(234, 179, 8, 0.25)'}`,
+                                        color: hasScore 
+                                          ? (test.percent >= 80 ? '#34d399' : test.percent >= 60 ? '#60a5fa' : '#fbbf24')
+                                          : '#facc15'
+                                      }}>
+                                        {hasScore ? `${test.scoreDisplay} (${test.percent}%)` : (test.scoreDisplay || 'Pending')}
+                                      </span>
+
+                                      {/* Quick Open Test Viewer Button */}
+                                      <button
+                                        type="button"
+                                        onClick={() => openTestViewer({ subjectId: subject.id, examId: ex.id, testId: test.id, ...test })}
+                                        style={{
+                                          background: 'rgba(139, 92, 246, 0.15)',
+                                          border: '1px solid rgba(139, 92, 246, 0.3)',
+                                          borderRadius: '6px',
+                                          color: 'var(--accent-primary)',
+                                          padding: '0.25rem 0.5rem',
+                                          fontSize: '0.72rem',
+                                          cursor: 'pointer',
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          gap: '0.25rem',
+                                          fontWeight: 600,
+                                          transition: 'all 0.2s'
+                                        }}
+                                        onMouseOver={(e) => {
+                                          e.currentTarget.style.background = 'rgba(139, 92, 246, 0.3)';
+                                          e.currentTarget.style.color = '#fff';
+                                        }}
+                                        onMouseOut={(e) => {
+                                          e.currentTarget.style.background = 'rgba(139, 92, 246, 0.15)';
+                                          e.currentTarget.style.color = 'var(--accent-primary)';
+                                        }}
+                                        title="View Test Answers & Grading"
+                                      >
+                                        <span>View</span>
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   )}

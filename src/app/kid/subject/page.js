@@ -23,6 +23,9 @@ function SubjectPageContent() {
   // Accordion state for exams within this subject
   const [expandedExams, setExpandedExams] = useState({});
 
+  // Chapter filter tab state: 'all' | 'completed' | 'in_progress' | 'not_started'
+  const [chapterStatusFilter, setChapterStatusFilter] = useState('all');
+
   // Modals & settings state
   const [showSubjectSettings, setShowSubjectSettings] = useState(false);
   const [tempBookUrl, setTempBookUrl] = useState('');
@@ -288,17 +291,41 @@ function SubjectPageContent() {
     return () => unsubscribe();
   }, [searchParams, router]);
 
-  // Calculate overall subject progress
+  // Calculate overall subject progress & aggregated chapters across all exams
   let totalSubjectChapters = 0;
   let completedSubjectChapters = 0;
+  let inProgressSubjectChapters = 0;
+  let notStartedSubjectChapters = 0;
   let totalSubjectModelTests = 0;
+
+  const allSubjectChapters = [];
 
   if (subject && exams.length > 0) {
     exams.forEach(ex => {
       const chaps = (subject.chapters && subject.chapters[ex.id]) || {};
-      const chapsList = Object.values(chaps);
-      totalSubjectChapters += chapsList.length;
-      completedSubjectChapters += chapsList.filter(c => c.completed || c.status === 'completed').length;
+      const chapsEntries = Object.entries(chaps);
+      totalSubjectChapters += chapsEntries.length;
+
+      chapsEntries.forEach(([cId, c]) => {
+        const isCompleted = Boolean(c.completed || c.status === 'completed');
+        const status = isCompleted ? 'completed' : (c.status === 'in_progress' ? 'in_progress' : 'not_started');
+        if (isCompleted) {
+          completedSubjectChapters++;
+        } else if (status === 'in_progress') {
+          inProgressSubjectChapters++;
+        } else {
+          notStartedSubjectChapters++;
+        }
+
+        allSubjectChapters.push({
+          id: cId,
+          examId: ex.id,
+          examTitle: ex.title,
+          ...c,
+          isCompleted,
+          status
+        });
+      });
 
       const tests = (subject.modelTests && subject.modelTests[ex.id]) || {};
       totalSubjectModelTests += Object.keys(tests).length;
@@ -308,6 +335,23 @@ function SubjectPageContent() {
   const subjectProgressPercent = totalSubjectChapters > 0
     ? Math.round((completedSubjectChapters / totalSubjectChapters) * 100)
     : 0;
+
+  const filteredChapters = allSubjectChapters.filter(ch => {
+    if (chapterStatusFilter === 'all') return true;
+    if (chapterStatusFilter === 'completed') return ch.isCompleted;
+    if (chapterStatusFilter === 'in_progress') return ch.status === 'in_progress';
+    if (chapterStatusFilter === 'not_started') return ch.status === 'not_started';
+    return true;
+  });
+
+  // Identify next upcoming exam
+  const nextUpExam = exams.find(ex => {
+    const examSetting = (subject && subject.examSettings && subject.examSettings[ex.id]) || {};
+    return examSetting.status === 'In Progress';
+  }) || exams.find(ex => {
+    const examSetting = (subject && subject.examSettings && subject.examSettings[ex.id]) || {};
+    return examSetting.status !== 'Completed';
+  }) || exams[0];
 
   // Toggle exam accordion
   const toggleExam = (examId) => {
@@ -652,25 +696,31 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
       </nav>
 
       {/* 2. Hero Subject Header Card */}
-      <div style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--glass-border)', borderRadius: '20px', padding: '2rem', marginBottom: '2rem', textAlign: 'left' }}>
+      <div style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--glass-border)', borderRadius: '20px', padding: '1.8rem 2rem', marginBottom: '1.75rem', textAlign: 'left' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1.5rem' }}>
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-              <span style={{ fontSize: '0.8rem', padding: '0.2rem 0.65rem', borderRadius: '12px', background: 'rgba(99, 102, 241, 0.18)', color: '#818cf8', fontWeight: 600 }}>
-                {kid.grade || 'Grade Syllabus'}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '0.78rem', padding: '0.2rem 0.65rem', borderRadius: '12px', background: 'rgba(99, 102, 241, 0.18)', color: '#818cf8', fontWeight: 600 }}>
+                🎓 {kid.grade || 'Grade Syllabus'}
               </span>
-              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                Student: <strong>{kid.name}</strong>
+              <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                Student: <strong style={{ color: '#fff' }}>{kid.name}</strong>
+              </span>
+              <span style={{ fontSize: '0.75rem', padding: '0.15rem 0.55rem', borderRadius: '10px', background: 'rgba(255,255,255,0.06)', color: 'var(--text-secondary)' }}>
+                {exams.length} {exams.length === 1 ? 'Exam' : 'Exams'}
+              </span>
+              <span style={{ fontSize: '0.75rem', padding: '0.15rem 0.55rem', borderRadius: '10px', background: 'rgba(255,255,255,0.06)', color: 'var(--text-secondary)' }}>
+                {totalSubjectChapters} {totalSubjectChapters === 1 ? 'Chapter' : 'Chapters'}
               </span>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', marginTop: '0.6rem' }}>
-              <h1 style={{ margin: 0, fontSize: '2.4rem', fontWeight: 700, color: '#fff' }}>
-                {subject.title}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', marginTop: '0.65rem' }}>
+              <h1 style={{ margin: 0, fontSize: '2.3rem', fontWeight: 700, color: '#fff' }}>
+                {subject.title} Hub
               </h1>
               <button
                 onClick={() => setShowSubjectSettings(true)}
-                style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: '0.3rem', display: 'flex', alignItems: 'center' }}
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: '0.3rem', display: 'flex', alignItems: 'center', transition: 'color 0.2s' }}
                 title="Subject Settings (Textbook URL)"
                 onMouseOver={(e) => e.currentTarget.style.color = 'var(--accent-primary)'}
                 onMouseOut={(e) => e.currentTarget.style.color = 'var(--text-secondary)'}
@@ -679,13 +729,13 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
               </button>
             </div>
 
-            <p style={{ margin: '0.4rem 0 0 0', color: 'var(--text-secondary)', fontSize: '0.95rem' }}>
-              Complete curriculum, exams breakdown, syllabus chapters, and AI model tests.
+            <p style={{ margin: '0.4rem 0 0 0', color: 'var(--text-secondary)', fontSize: '0.92rem' }}>
+              Comprehensive syllabus workspace, chapter tracking, learning resources, and related examinations.
             </p>
           </div>
 
-          {/* Quick Actions */}
-          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+          {/* Quick Actions Bar */}
+          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
             {bookUrl && (
               <a
                 href={bookUrl}
@@ -700,30 +750,67 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                   border: '1px solid rgba(59, 130, 246, 0.35)',
                   borderRadius: '10px',
                   color: '#93c5fd',
-                  fontSize: '0.85rem',
+                  fontSize: '0.84rem',
                   fontWeight: 600,
-                  textDecoration: 'none'
+                  textDecoration: 'none',
+                  transition: 'all 0.2s'
                 }}
+                onMouseOver={(e) => e.currentTarget.style.background = 'rgba(59, 130, 246, 0.25)'}
+                onMouseOut={(e) => e.currentTarget.style.background = 'rgba(59, 130, 246, 0.15)'}
               >
                 <span>Read Textbook 📖</span>
               </a>
             )}
+
+            {exams.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setTargetExamForChapter(exams[0]);
+                  setNewChapterTitle('');
+                  setNewChapterPdfPage('');
+                  setShowAddChapterModal(true);
+                }}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                  padding: '0.55rem 1rem',
+                  background: 'rgba(255, 255, 255, 0.05)',
+                  border: '1px solid rgba(255, 255, 255, 0.12)',
+                  borderRadius: '10px',
+                  color: '#f8fafc',
+                  fontSize: '0.84rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+                onMouseOver={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.09)'}
+                onMouseOut={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'}
+              >
+                <span>+ Add Chapter</span>
+              </button>
+            )}
+
             <button
               onClick={() => { setNewExamTitle(''); setShowAddExamModal(true); }}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '0.45rem',
-                padding: '0.55rem 1.1rem',
+                padding: '0.55rem 1.15rem',
                 background: 'var(--accent-gradient)',
                 color: '#fff',
                 border: 'none',
                 borderRadius: '10px',
-                fontSize: '0.85rem',
+                fontSize: '0.84rem',
                 fontWeight: 600,
                 cursor: 'pointer',
-                boxShadow: '0 3px 12px rgba(139, 92, 246, 0.35)'
+                boxShadow: '0 3px 12px rgba(139, 92, 246, 0.35)',
+                transition: 'all 0.2s'
               }}
+              onMouseOver={(e) => e.currentTarget.style.transform = 'translateY(-1px)'}
+              onMouseOut={(e) => e.currentTarget.style.transform = 'translateY(0)'}
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
               <span>Add Exam</span>
@@ -731,62 +818,695 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
           </div>
         </div>
 
-        {/* Overall Subject Progress & Metrics */}
-        <div style={{ marginTop: '1.75rem', paddingTop: '1.25rem', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-            <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#f1f5f9' }}>
-              Overall Subject Syllabus Mastery
-            </span>
-            <span style={{ fontSize: '0.85rem', color: 'var(--accent-primary)', fontWeight: 700 }}>
-              {subjectProgressPercent}% ({completedSubjectChapters}/{totalSubjectChapters} Chapters Completed)
-            </span>
-          </div>
-
-          <div style={{ height: '8px', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '4px', overflow: 'hidden' }}>
-            <div style={{
-              height: '100%',
-              width: `${subjectProgressPercent}%`,
-              background: subjectProgressPercent === 100
-                ? 'linear-gradient(90deg, #10b981, #059669)'
-                : 'linear-gradient(90deg, #6366f1, #a855f7, #ec4899)',
-              borderRadius: '4px',
-              transition: 'width 0.4s ease'
-            }} />
+        {/* Overall Subject Progress with SVG Circular Progress Ring */}
+        <div style={{
+          marginTop: '1.75rem',
+          paddingTop: '1.4rem',
+          borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '2rem',
+          flexWrap: 'wrap'
+        }}>
+          {/* Circular SVG Ring */}
+          <div style={{ position: 'relative', width: '92px', height: '92px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <svg width="92" height="92" viewBox="0 0 92 92" style={{ transform: 'rotate(-90deg)' }}>
+              <defs>
+                <linearGradient id="subj-hub-ring-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stopColor="#8b5cf6" />
+                  <stop offset="50%" stopColor="#3b82f6" />
+                  <stop offset="100%" stopColor="#10b981" />
+                </linearGradient>
+              </defs>
+              {/* Background Ring Track */}
+              <circle
+                cx="46"
+                cy="46"
+                r="36"
+                stroke="rgba(255, 255, 255, 0.08)"
+                strokeWidth="6.5"
+                fill="transparent"
+              />
+              {/* Dynamic Progress Stroke */}
+              <circle
+                cx="46"
+                cy="46"
+                r="36"
+                stroke={subjectProgressPercent === 100 ? '#10b981' : subjectProgressPercent > 0 ? 'url(#subj-hub-ring-grad)' : 'rgba(255, 255, 255, 0.12)'}
+                strokeWidth="6.5"
+                strokeDasharray={226.19}
+                strokeDashoffset={226.19 - (226.19 * subjectProgressPercent) / 100}
+                strokeLinecap="round"
+                fill="transparent"
+                style={{ transition: 'stroke-dashoffset 0.6s cubic-bezier(0.4, 0, 0.2, 1)' }}
+              />
+            </svg>
+            <div style={{ position: 'absolute', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center' }}>
+              <span style={{ fontSize: '1.35rem', fontWeight: 700, color: subjectProgressPercent === 100 ? '#34d399' : '#fff', lineHeight: 1 }}>
+                {subjectProgressPercent}%
+              </span>
+              <span style={{ fontSize: '0.62rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.4px', marginTop: '3px' }}>
+                Mastery
+              </span>
+            </div>
           </div>
 
           {/* Quick Metrics Cards */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.75rem', marginTop: '1.25rem' }}>
-            <div style={{ padding: '0.75rem', background: 'rgba(0,0,0,0.2)', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.05)', textAlign: 'center' }}>
-              <div style={{ fontSize: '1.3rem', fontWeight: 700, color: '#fff' }}>{exams.length}</div>
-              <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Total Exams</div>
+          <div style={{ flex: '1 1 320px', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <span style={{ fontSize: '0.92rem', fontWeight: 600, color: '#f8fafc' }}>
+                Overall Subject Syllabus Mastery
+              </span>
+              <span style={{ fontSize: '0.84rem', color: subjectProgressPercent === 100 ? '#34d399' : 'var(--accent-primary)', fontWeight: 700 }}>
+                {completedSubjectChapters} of {totalSubjectChapters} Chapters Completed
+              </span>
             </div>
-            <div style={{ padding: '0.75rem', background: 'rgba(0,0,0,0.2)', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.05)', textAlign: 'center' }}>
-              <div style={{ fontSize: '1.3rem', fontWeight: 700, color: '#34d399' }}>{completedSubjectChapters}</div>
-              <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Mastered Chapters</div>
-            </div>
-            <div style={{ padding: '0.75rem', background: 'rgba(0,0,0,0.2)', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.05)', textAlign: 'center' }}>
-              <div style={{ fontSize: '1.3rem', fontWeight: 700, color: '#60a5fa' }}>{totalSubjectChapters}</div>
-              <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Total Chapters</div>
-            </div>
-            <div style={{ padding: '0.75rem', background: 'rgba(0,0,0,0.2)', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.05)', textAlign: 'center' }}>
-              <div style={{ fontSize: '1.3rem', fontWeight: 700, color: '#c084fc' }}>{totalSubjectModelTests}</div>
-              <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Model Tests</div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.75rem' }}>
+              <div style={{ padding: '0.85rem 1rem', background: 'rgba(0,0,0,0.25)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.06)', textAlign: 'left' }}>
+                <div style={{ fontSize: '1.4rem', fontWeight: 700, color: '#34d399' }}>{completedSubjectChapters}</div>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginTop: '2px' }}>
+                  ✓ Mastered
+                </div>
+              </div>
+
+              <div style={{ padding: '0.85rem 1rem', background: 'rgba(0,0,0,0.25)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.06)', textAlign: 'left' }}>
+                <div style={{ fontSize: '1.4rem', fontWeight: 700, color: '#fbbf24' }}>{inProgressSubjectChapters}</div>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginTop: '2px' }}>
+                  ⏳ In Progress
+                </div>
+              </div>
+
+              <div style={{ padding: '0.85rem 1rem', background: 'rgba(0,0,0,0.25)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.06)', textAlign: 'left' }}>
+                <div style={{ fontSize: '1.4rem', fontWeight: 700, color: '#94a3b8' }}>{notStartedSubjectChapters}</div>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginTop: '2px' }}>
+                  📖 Not Started
+                </div>
+              </div>
+
+              <div style={{ padding: '0.85rem 1rem', background: 'rgba(0,0,0,0.25)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.06)', textAlign: 'left' }}>
+                <div style={{ fontSize: '1.4rem', fontWeight: 700, color: '#c084fc' }}>{totalSubjectModelTests}</div>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginTop: '2px' }}>
+                  📝 Model Tests
+                </div>
+              </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* 3. Exams in Accordion View */}
-      <div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', textAlign: 'left' }}>
+      {/* 3. Subject Resources & Learning Materials Section */}
+      <div style={{ marginBottom: '2.5rem', textAlign: 'left' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
           <div>
-            <h2 style={{ fontSize: '1.4rem', fontWeight: 600, color: '#fff', margin: 0 }}>
-              Exams of {subject.title}
+            <h2 style={{ fontSize: '1.35rem', fontWeight: 600, color: '#fff', margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span>📚</span>
+              <span>Subject Resources & Materials</span>
             </h2>
-            <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-              Click any exam to toggle its syllabus chapters, mark distribution, and model tests.
+            <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.84rem', color: 'var(--text-secondary)' }}>
+              Curriculum reference materials, digital textbooks, and study tools for {subject.title}
             </p>
           </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1rem' }}>
+          {/* Resource 1: Digital Textbook */}
+          <div style={{
+            background: 'rgba(255, 255, 255, 0.025)',
+            border: '1px solid rgba(255, 255, 255, 0.07)',
+            borderRadius: '14px',
+            padding: '1.2rem',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'space-between',
+            gap: '1rem',
+            transition: 'border-color 0.2s'
+          }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: '1.3rem' }}>📖</span>
+                <span style={{ fontSize: '0.68rem', padding: '0.12rem 0.45rem', borderRadius: '8px', background: bookUrl ? 'rgba(16, 185, 129, 0.15)' : 'rgba(234, 179, 8, 0.15)', color: bookUrl ? '#34d399' : '#facc15', fontWeight: 600 }}>
+                  {bookUrl ? 'Linked' : 'Not Set'}
+                </span>
+              </div>
+              <h3 style={{ margin: '0.3rem 0 0 0', fontSize: '1.02rem', fontWeight: 600, color: '#fff' }}>
+                Digital Textbook
+              </h3>
+              <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                {bookUrl ? 'Official online reader and PDF study book' : 'Attach Google Drive or PDF textbook URL for 1-click access'}
+              </p>
+            </div>
+
+            <div>
+              {bookUrl ? (
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <a
+                    href={bookUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{
+                      flex: 1,
+                      textAlign: 'center',
+                      padding: '0.45rem 0.75rem',
+                      background: 'rgba(59, 130, 246, 0.2)',
+                      border: '1px solid rgba(59, 130, 246, 0.35)',
+                      borderRadius: '8px',
+                      color: '#93c5fd',
+                      fontSize: '0.8rem',
+                      fontWeight: 600,
+                      textDecoration: 'none'
+                    }}
+                  >
+                    Open Book ↗
+                  </a>
+                  <button
+                    onClick={() => setShowSubjectSettings(true)}
+                    style={{ padding: '0.45rem 0.65rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: '#fff', fontSize: '0.8rem', cursor: 'pointer' }}
+                    title="Change Book URL"
+                  >
+                    ⚙️
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setShowSubjectSettings(true)}
+                  style={{
+                    width: '100%',
+                    padding: '0.45rem 0.75rem',
+                    background: 'rgba(139, 92, 246, 0.18)',
+                    border: '1px solid rgba(139, 92, 246, 0.35)',
+                    borderRadius: '8px',
+                    color: 'var(--accent-primary)',
+                    fontSize: '0.8rem',
+                    fontWeight: 600,
+                    cursor: 'pointer'
+                  }}
+                >
+                  + Add Book Link
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Resource 2: Examination Mark Distribution */}
+          <div style={{
+            background: 'rgba(255, 255, 255, 0.025)',
+            border: '1px solid rgba(255, 255, 255, 0.07)',
+            borderRadius: '14px',
+            padding: '1.2rem',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'space-between',
+            gap: '1rem'
+          }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: '1.3rem' }}>📐</span>
+                <span style={{ fontSize: '0.68rem', padding: '0.12rem 0.45rem', borderRadius: '8px', background: 'rgba(168, 85, 247, 0.15)', color: '#d8b4fe', fontWeight: 600 }}>
+                  Curriculum
+                </span>
+              </div>
+              <h3 style={{ margin: '0.3rem 0 0 0', fontSize: '1.02rem', fontWeight: 600, color: '#fff' }}>
+                Mark Distribution Guide
+              </h3>
+              <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                Review syllabus weightage, question distribution (MCQs, Short, Creative) across exams.
+              </p>
+            </div>
+
+            <button
+              onClick={() => {
+                if (exams.length > 0) {
+                  setEditingMarkDistExamId(exams[0].id);
+                  setInlineMarkDistValue((subject.examSettings && subject.examSettings[exams[0].id]?.markDistribution) || '');
+                }
+              }}
+              style={{
+                width: '100%',
+                padding: '0.45rem 0.75rem',
+                background: 'rgba(255, 255, 255, 0.05)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                borderRadius: '8px',
+                color: '#fff',
+                fontSize: '0.8rem',
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+            >
+              Configure Mark Schemes
+            </button>
+          </div>
+
+          {/* Resource 3: AI Model Test Bank */}
+          <div style={{
+            background: 'rgba(255, 255, 255, 0.025)',
+            border: '1px solid rgba(255, 255, 255, 0.07)',
+            borderRadius: '14px',
+            padding: '1.2rem',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'space-between',
+            gap: '1rem'
+          }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: '1.3rem' }}>⚡</span>
+                <span style={{ fontSize: '0.68rem', padding: '0.12rem 0.45rem', borderRadius: '8px', background: 'rgba(99, 102, 241, 0.15)', color: '#a5b4fc', fontWeight: 600 }}>
+                  AI Powered
+                </span>
+              </div>
+              <h3 style={{ margin: '0.3rem 0 0 0', fontSize: '1.02rem', fontWeight: 600, color: '#fff' }}>
+                Practice Test Generator
+              </h3>
+              <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                Generate customized model test papers based on selected syllabus chapters and mark rules.
+              </p>
+            </div>
+
+            <button
+              onClick={() => {
+                if (exams.length > 0) {
+                  openModelTestGenerator(exams[0]);
+                } else {
+                  setShowAddExamModal(true);
+                }
+              }}
+              style={{
+                width: '100%',
+                padding: '0.45rem 0.75rem',
+                background: 'rgba(139, 92, 246, 0.18)',
+                border: '1px solid rgba(139, 92, 246, 0.35)',
+                borderRadius: '8px',
+                color: 'var(--accent-primary)',
+                fontSize: '0.8rem',
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+            >
+              + Generate Practice Test
+            </button>
+          </div>
+
+          {/* Resource 4: Revision & Chapter Workspaces */}
+          <div style={{
+            background: 'rgba(255, 255, 255, 0.025)',
+            border: '1px solid rgba(255, 255, 255, 0.07)',
+            borderRadius: '14px',
+            padding: '1.2rem',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'space-between',
+            gap: '1rem'
+          }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: '1.3rem' }}>🎯</span>
+                <span style={{ fontSize: '0.68rem', padding: '0.12rem 0.45rem', borderRadius: '8px', background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', fontWeight: 600 }}>
+                  Focused Study
+                </span>
+              </div>
+              <h3 style={{ margin: '0.3rem 0 0 0', fontSize: '1.02rem', fontWeight: 600, color: '#fff' }}>
+                Chapter Study Workspaces
+              </h3>
+              <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                Dive into single chapter workspaces with formula sheets, question generation, and revision trackers.
+              </p>
+            </div>
+
+            <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <span>Tip: Select any chapter below to launch its workspace</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 4. Chapters Categorized by Status & Chapter-Level Progress */}
+      <div style={{
+        background: 'rgba(255, 255, 255, 0.03)',
+        border: '1px solid var(--glass-border)',
+        borderRadius: '18px',
+        padding: '1.6rem',
+        marginBottom: '2.5rem',
+        textAlign: 'left'
+      }}>
+        {/* Section Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.2rem' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span style={{ fontSize: '1.25rem' }}>📑</span>
+              <h2 style={{ fontSize: '1.3rem', fontWeight: 600, color: '#fff', margin: 0 }}>
+                Chapters & Syllabus Curriculum
+              </h2>
+            </div>
+            <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              Filtered by mastery status with instant chapter completion toggles
+            </p>
+          </div>
+
+          {/* Status Filter Tabs */}
+          <div style={{
+            display: 'flex',
+            background: 'rgba(0,0,0,0.3)',
+            padding: '0.25rem',
+            borderRadius: '10px',
+            border: '1px solid rgba(255,255,255,0.06)',
+            gap: '0.25rem',
+            flexWrap: 'wrap'
+          }}>
+            {[
+              { id: 'all', label: 'All', count: allSubjectChapters.length },
+              { id: 'completed', label: 'Mastered', count: completedSubjectChapters, color: '#34d399' },
+              { id: 'in_progress', label: 'In Progress', count: inProgressSubjectChapters, color: '#fbbf24' },
+              { id: 'not_started', label: 'Not Started', count: notStartedSubjectChapters, color: '#94a3b8' }
+            ].map(tab => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setChapterStatusFilter(tab.id)}
+                style={{
+                  background: chapterStatusFilter === tab.id ? 'var(--accent-gradient)' : 'transparent',
+                  color: chapterStatusFilter === tab.id ? '#fff' : 'var(--text-secondary)',
+                  border: 'none',
+                  borderRadius: '7px',
+                  padding: '0.35rem 0.75rem',
+                  fontSize: '0.78rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.35rem',
+                  transition: 'all 0.15s'
+                }}
+              >
+                <span>{tab.label}</span>
+                <span style={{
+                  fontSize: '0.68rem',
+                  background: chapterStatusFilter === tab.id ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.08)',
+                  padding: '0.05rem 0.35rem',
+                  borderRadius: '6px',
+                  color: tab.color || '#fff'
+                }}>
+                  {tab.count}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Chapter-Level Progress Metric Bar */}
+        <div style={{ marginBottom: '1.4rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.76rem', color: 'var(--text-secondary)', marginBottom: '0.4rem' }}>
+            <span>Curriculum Completion Breakdown</span>
+            <span style={{ fontWeight: 600, color: subjectProgressPercent === 100 ? '#34d399' : '#c4b5fd' }}>
+              {completedSubjectChapters} of {totalSubjectChapters} Chapters Mastered ({subjectProgressPercent}%)
+            </span>
+          </div>
+          {/* Segmented Progress Bar */}
+          <div style={{ height: '7px', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '4px', overflow: 'hidden', display: 'flex' }}>
+            {totalSubjectChapters > 0 ? (
+              <>
+                <div style={{ width: `${(completedSubjectChapters / totalSubjectChapters) * 100}%`, background: '#10b981', transition: 'width 0.4s' }} title={`Mastered: ${completedSubjectChapters}`} />
+                <div style={{ width: `${(inProgressSubjectChapters / totalSubjectChapters) * 100}%`, background: '#f59e0b', transition: 'width 0.4s' }} title={`In Progress: ${inProgressSubjectChapters}`} />
+              </>
+            ) : null}
+          </div>
+        </div>
+
+        {/* Chapters Cards Grid */}
+        {filteredChapters.length === 0 ? (
+          <div style={{ padding: '2rem', background: 'rgba(0,0,0,0.15)', borderRadius: '12px', textAlign: 'center', border: '1px dashed rgba(255,255,255,0.08)' }}>
+            <p style={{ margin: '0 0 0.75rem 0', color: 'var(--text-secondary)', fontSize: '0.88rem' }}>
+              {chapterStatusFilter === 'all' 
+                ? 'No syllabus chapters created yet for this subject.' 
+                : `No chapters found with status "${chapterStatusFilter.replace('_', ' ')}".`}
+            </p>
+            {exams.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setTargetExamForChapter(exams[0]);
+                  setNewChapterTitle('');
+                  setNewChapterPdfPage('');
+                  setShowAddChapterModal(true);
+                }}
+                className="primary"
+                style={{ padding: '0.45rem 1.1rem', borderRadius: '8px', fontSize: '0.82rem' }}
+              >
+                + Add Chapter to {exams[0].title}
+              </button>
+            )}
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))', gap: '0.75rem' }}>
+            {filteredChapters.map(chap => {
+              const queryParentId = searchParams.get("parentId");
+              const parentIdQuery = queryParentId ? `&parentId=${queryParentId}` : '';
+              const chapterHref = `/kid/chapter?id=${searchParams.get("id")}&subject=${subjectSlug}&examId=${chap.examId}&chapterId=${chap.id}${parentIdQuery}`;
+
+              return (
+                <div
+                  key={`${chap.examId}-${chap.id}`}
+                  style={{
+                    background: chap.isCompleted ? 'rgba(16, 185, 129, 0.04)' : 'rgba(255, 255, 255, 0.025)',
+                    border: chap.isCompleted ? '1px solid rgba(16, 185, 129, 0.25)' : '1px solid rgba(255, 255, 255, 0.06)',
+                    borderRadius: '12px',
+                    padding: '0.9rem 1rem',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between',
+                    gap: '0.65rem',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => {
+                    e.currentTarget.style.background = chap.isCompleted ? 'rgba(16, 185, 129, 0.07)' : 'rgba(255, 255, 255, 0.05)';
+                    e.currentTarget.style.borderColor = chap.isCompleted ? 'rgba(16, 185, 129, 0.4)' : 'rgba(139, 92, 246, 0.35)';
+                  }}
+                  onMouseOut={(e) => {
+                    e.currentTarget.style.background = chap.isCompleted ? 'rgba(16, 185, 129, 0.04)' : 'rgba(255, 255, 255, 0.025)';
+                    e.currentTarget.style.borderColor = chap.isCompleted ? 'rgba(16, 185, 129, 0.25)' : 'rgba(255, 255, 255, 0.06)';
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
+                    {/* Chapter Completion Toggle Checkbox */}
+                    <button
+                      type="button"
+                      onClick={() => handleToggleChapterComplete(chap.examId, chap.id, chap.isCompleted)}
+                      style={{
+                        background: chap.isCompleted ? '#10b981' : 'rgba(255,255,255,0.06)',
+                        border: `2px solid ${chap.isCompleted ? '#10b981' : 'rgba(255,255,255,0.25)'}`,
+                        borderRadius: '6px',
+                        width: '22px',
+                        height: '22px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        cursor: 'pointer',
+                        padding: 0,
+                        marginTop: '2px',
+                        flexShrink: 0,
+                        transition: 'all 0.2s'
+                      }}
+                      title={chap.isCompleted ? "Mark incomplete" : "Mark as mastered"}
+                    >
+                      {chap.isCompleted && (
+                        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                      )}
+                    </button>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', minWidth: 0, flex: 1 }}>
+                      <span style={{
+                        fontSize: '0.9rem',
+                        fontWeight: 600,
+                        color: chap.isCompleted ? '#e2e8f0' : '#fff',
+                        textDecoration: chap.isCompleted ? 'line-through' : 'none',
+                        opacity: chap.isCompleted ? 0.85 : 1
+                      }}>
+                        {chap.title}
+                      </span>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                        <span style={{ background: 'rgba(255,255,255,0.05)', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>
+                          🎯 {chap.examTitle}
+                        </span>
+                        {chap.pdfPage && (
+                          <span style={{ background: 'rgba(59, 130, 246, 0.12)', color: '#93c5fd', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>
+                            📄 Page {chap.pdfPage}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.04)', paddingTop: '0.5rem', marginTop: '0.2rem' }}>
+                    <span style={{
+                      fontSize: '0.67rem',
+                      fontWeight: 600,
+                      padding: '0.12rem 0.45rem',
+                      borderRadius: '8px',
+                      background: chap.isCompleted ? 'rgba(16, 185, 129, 0.15)' : chap.status === 'in_progress' ? 'rgba(245, 158, 11, 0.15)' : 'rgba(148, 163, 184, 0.1)',
+                      color: chap.isCompleted ? '#34d399' : chap.status === 'in_progress' ? '#fbbf24' : '#94a3b8'
+                    }}>
+                      {chap.isCompleted ? 'Mastered' : chap.status === 'in_progress' ? 'In Progress' : 'Not Started'}
+                    </span>
+
+                    <Link
+                      href={chapterHref}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.25rem',
+                        fontSize: '0.74rem',
+                        color: 'var(--accent-primary)',
+                        textDecoration: 'none',
+                        fontWeight: 600
+                      }}
+                    >
+                      <span>Study Chapter</span>
+                      <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                    </Link>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* 5. Related Exams & Workspaces */}
+      <div style={{ textAlign: 'left', marginBottom: '2rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+          <div>
+            <h2 style={{ fontSize: '1.35rem', fontWeight: 600, color: '#fff', margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span>📝</span>
+              <span>Related Exams & Workspaces</span>
+            </h2>
+            <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.84rem', color: 'var(--text-secondary)' }}>
+              Click any exam card to enter its workspace or toggle accordion for mark distribution and chapter management.
+            </p>
+          </div>
+
+          <button
+            onClick={() => { setNewExamTitle(''); setShowAddExamModal(true); }}
+            style={{
+              padding: '0.45rem 0.9rem',
+              background: 'rgba(139, 92, 246, 0.18)',
+              border: '1px solid rgba(139, 92, 246, 0.35)',
+              borderRadius: '8px',
+              color: 'var(--accent-primary)',
+              fontSize: '0.8rem',
+              fontWeight: 600,
+              cursor: 'pointer'
+            }}
+          >
+            + Add Exam
+          </button>
+        </div>
+
+        {/* Quick Related Exam Cards Grid */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '0.85rem', marginBottom: '1.5rem' }}>
+          {exams.map(ex => {
+            const queryParentId = searchParams.get("parentId");
+            const parentIdQuery = queryParentId ? `&parentId=${queryParentId}` : '';
+            const examHref = `/kid/exam?id=${searchParams.get("id")}&subject=${subjectSlug}&examId=${ex.id}&subjectId=${subject.id}${parentIdQuery}`;
+            
+            const isNextUp = nextUpExam && ex.id === nextUpExam.id;
+            const isMajor = /final|term|annual|board|midterm|semester/i.test(ex.title);
+            
+            const chapsObj = (subject.chapters && subject.chapters[ex.id]) || {};
+            const chapsList = Object.values(chapsObj);
+            const exTotal = chapsList.length;
+            const exDone = chapsList.filter(c => c.completed || c.status === 'completed').length;
+            const exProgress = exTotal > 0 ? Math.round((exDone / exTotal) * 100) : 0;
+            const tests = (subject.modelTests && subject.modelTests[ex.id]) || {};
+            const testCount = Object.keys(tests).length;
+
+            return (
+              <div
+                key={ex.id}
+                style={{
+                  background: isNextUp ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.07), rgba(139, 92, 246, 0.07))' : 'rgba(255, 255, 255, 0.025)',
+                  border: isNextUp ? '1px solid rgba(245, 158, 11, 0.45)' : '1px solid rgba(255, 255, 255, 0.07)',
+                  borderRadius: '12px',
+                  padding: '1rem',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'space-between',
+                  gap: '0.8rem',
+                  transition: 'all 0.2s'
+                }}
+              >
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                      {isNextUp && (
+                        <span style={{ fontSize: '0.64rem', padding: '0.15rem 0.45rem', borderRadius: '6px', background: 'linear-gradient(135deg, #f59e0b, #ef4444)', color: '#fff', fontWeight: 700, textTransform: 'uppercase' }}>
+                          ⚡ Next Up
+                        </span>
+                      )}
+                      {isMajor && (
+                        <span style={{ fontSize: '0.64rem', padding: '0.15rem 0.45rem', borderRadius: '6px', background: 'rgba(168, 85, 247, 0.2)', color: '#d8b4fe', fontWeight: 600 }}>
+                          🏆 Major
+                        </span>
+                      )}
+                    </div>
+
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                      {exDone}/{exTotal} Chaps • {testCount} Tests
+                    </span>
+                  </div>
+
+                  <h3 style={{ margin: '0 0 0.35rem 0', fontSize: '1.05rem', fontWeight: 600, color: '#fff' }}>
+                    {ex.title}
+                  </h3>
+
+                  <div style={{ height: '4px', background: 'rgba(255,255,255,0.08)', borderRadius: '2px', overflow: 'hidden' }}>
+                    <div style={{ width: `${exProgress}%`, height: '100%', background: exProgress === 100 ? '#10b981' : isNextUp ? '#f59e0b' : '#8b5cf6', borderRadius: '2px' }} />
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  <Link
+                    href={examHref}
+                    style={{
+                      flex: 1,
+                      textAlign: 'center',
+                      padding: '0.45rem 0.75rem',
+                      background: 'var(--accent-gradient)',
+                      color: '#fff',
+                      borderRadius: '8px',
+                      fontSize: '0.78rem',
+                      fontWeight: 600,
+                      textDecoration: 'none',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '0.3rem'
+                    }}
+                  >
+                    <span>Enter Workspace</span>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                  </Link>
+
+                  <button
+                    type="button"
+                    onClick={() => toggleExam(ex.id)}
+                    style={{
+                      padding: '0.45rem 0.65rem',
+                      background: 'rgba(255,255,255,0.05)',
+                      border: '1px solid rgba(255,255,255,0.1)',
+                      borderRadius: '8px',
+                      color: 'var(--text-secondary)',
+                      fontSize: '0.74rem',
+                      cursor: 'pointer'
+                    }}
+                    title="Toggle Exam Accordion Details"
+                  >
+                    {expandedExams[ex.id] ? 'Hide Details' : 'Details ▾'}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
         </div>
 
         {exams.length === 0 ? (
