@@ -1063,42 +1063,114 @@ Include balanced questions from the selected types. Ensure math expressions are 
       {/* 3. GEMINI AI QUESTION GENERATOR WITH QUESTION TYPE SELECTION */}
       {!isStudentView && (
         <div style={{
-          background: 'linear-gradient(145deg, rgba(30, 27, 75, 0.4), rgba(15, 23, 42, 0.75))',
-          border: '1px solid rgba(129, 140, 248, 0.3)',
-          borderRadius: '18px',
-          padding: '1.75rem',
-          marginBottom: '2rem',
+          background: 'linear-gradient(145deg, rgba(23, 28, 48, 0.95), rgba(15, 18, 34, 0.98))',
+          border: '1px solid rgba(129, 140, 248, 0.32)',
+          borderRadius: '20px',
+          padding: '1.85rem 2rem',
+          marginBottom: '2.5rem',
           textAlign: 'left',
-          boxShadow: '0 12px 30px -8px rgba(0,0,0,0.5)'
+          boxShadow: '0 16px 40px -10px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.08)',
+          position: 'relative',
+          overflow: 'hidden'
         }}>
+          {/* Subtle Ambient Glow */}
+          <div style={{
+            position: 'absolute',
+            top: '-50px',
+            right: '-50px',
+            width: '240px',
+            height: '240px',
+            background: 'radial-gradient(circle, rgba(129, 140, 248, 0.22) 0%, transparent 70%)',
+            pointerEvents: 'none'
+          }} />
+
           {/* Section Header */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.25rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.5rem', position: 'relative' }}>
             <div>
-              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', padding: '0.2rem 0.6rem', borderRadius: '20px', background: 'rgba(99, 102, 241, 0.15)', color: '#a5b4fc', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', marginBottom: '0.4rem' }}>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-                AI Assessment Studio
+              <div style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.45rem',
+                padding: '0.22rem 0.75rem',
+                borderRadius: '9999px',
+                background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.25), rgba(168, 85, 247, 0.25))',
+                border: '1px solid rgba(129, 140, 248, 0.45)',
+                color: '#c7d2fe',
+                fontSize: '0.74rem',
+                fontWeight: 700,
+                textTransform: 'uppercase',
+                letterSpacing: '0.04em',
+                marginBottom: '0.5rem',
+                boxShadow: '0 0 14px rgba(99, 102, 241, 0.25)'
+              }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                <span>AI Assessment Studio</span>
               </div>
-              <h2 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 700, color: '#fff' }}>
+              <h2 style={{ margin: 0, fontSize: '1.45rem', fontWeight: 800, color: '#fff', letterSpacing: '-0.01em' }}>
                 Gemini AI Question Generator
               </h2>
-              <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.84rem', color: 'var(--text-secondary)' }}>
-                Select required question formats, configure difficulty, and generate staged questions for your approval.
+              <p style={{ margin: '0.3rem 0 0 0', fontSize: '0.86rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                Select desired question formats, tailor difficulty and curriculum focus, and stage customized practice problems for student publication.
               </p>
+            </div>
+
+            {/* Stage Counter Badge */}
+            <div style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+              padding: '0.35rem 0.8rem',
+              borderRadius: '10px',
+              background: 'rgba(255, 255, 255, 0.04)',
+              border: '1px solid rgba(255, 255, 255, 0.08)',
+              fontSize: '0.76rem',
+              color: '#cbd5e1'
+            }}>
+              <span>⚡ Ready for Generation</span>
             </div>
           </div>
 
-          {/* Interactive Question Type Selector Grid */}
-          <div style={{ marginBottom: '1.25rem' }}>
-            <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: '#fff', marginBottom: '0.5rem' }}>
-              Select Question Types to Generate:
-            </label>
+          {/* 1. Redesigned Interactive Question Type Cards */}
+          <div style={{ marginBottom: '1.5rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.7rem' }}>
+              <label style={{ display: 'block', fontSize: '0.86rem', fontWeight: 700, color: '#f1f5f9', letterSpacing: '-0.01em' }}>
+                Select Question Types to Include:
+              </label>
+              <span style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+                {Object.values(selectedQuestionTypes).filter(Boolean).length} of 4 types active
+              </span>
+            </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.65rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: '0.85rem' }}>
               {[
-                { key: 'mcq', label: 'MCQs', desc: '4-choice multiple choice with instant feedback', icon: '🔘' },
-                { key: 'short', label: 'Short Questions', desc: 'Conceptual explanations & step-by-step math', icon: '📝' },
-                { key: 'matching', label: 'Matching Pairs', desc: 'Column A to Column B relation pairing', icon: '🔗' },
-                { key: 'fill_in_the_blanks', label: 'Fill-in-the-Blanks', desc: 'Sentence with missing keywords or values', icon: '✏️' }
+                { 
+                  key: 'mcq', 
+                  label: 'MCQs', 
+                  desc: '4-choice multiple choice with instant answer explanations', 
+                  icon: '🔘',
+                  color: '#38bdf8' 
+                },
+                { 
+                  key: 'short', 
+                  label: 'Short Questions', 
+                  desc: 'Step-by-step mathematical reasoning & conceptual answers', 
+                  icon: '📝',
+                  color: '#818cf8' 
+                },
+                { 
+                  key: 'matching', 
+                  label: 'Matching Pairs', 
+                  desc: 'Interactive Column A to Column B concept association', 
+                  icon: '🔗',
+                  color: '#ec4899' 
+                },
+                { 
+                  key: 'fill_in_the_blanks', 
+                  label: 'Fill-in-the-Blanks', 
+                  desc: 'Sentences with missing critical terms, values, or formula symbols', 
+                  icon: '✏️',
+                  color: '#34d399' 
+                }
               ].map((item) => {
                 const isChecked = selectedQuestionTypes[item.key];
                 return (
@@ -1106,31 +1178,98 @@ Include balanced questions from the selected types. Ensure math expressions are 
                     key={item.key}
                     onClick={() => setSelectedQuestionTypes(prev => ({ ...prev, [item.key]: !prev[item.key] }))}
                     style={{
-                      padding: '0.85rem 1rem',
-                      borderRadius: '12px',
-                      background: isChecked ? 'rgba(99, 102, 241, 0.18)' : 'rgba(255, 255, 255, 0.03)',
-                      border: isChecked ? '1px solid rgba(129, 140, 248, 0.5)' : '1px solid rgba(255, 255, 255, 0.08)',
+                      padding: '1.1rem 1.15rem',
+                      borderRadius: '16px',
+                      background: isChecked 
+                        ? 'linear-gradient(145deg, rgba(99, 102, 241, 0.22), rgba(168, 85, 247, 0.14))' 
+                        : 'rgba(255, 255, 255, 0.025)',
+                      border: isChecked 
+                        ? '1.5px solid rgba(129, 140, 248, 0.65)' 
+                        : '1.5px solid rgba(255, 255, 255, 0.08)',
                       cursor: 'pointer',
                       display: 'flex',
-                      alignItems: 'flex-start',
-                      gap: '0.65rem',
-                      transition: 'all 0.15s ease'
+                      flexDirection: 'column',
+                      justifyContent: 'space-between',
+                      gap: '0.75rem',
+                      transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+                      boxShadow: isChecked 
+                        ? '0 8px 24px -4px rgba(99, 102, 241, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.12)' 
+                        : 'none',
+                      position: 'relative'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.transform = 'translateY(-2px)';
+                      e.currentTarget.style.borderColor = isChecked 
+                        ? 'rgba(165, 180, 252, 0.85)' 
+                        : 'rgba(255, 255, 255, 0.2)';
+                      if (!isChecked) {
+                        e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
+                        e.currentTarget.style.boxShadow = '0 6px 20px rgba(0, 0, 0, 0.25)';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.borderColor = isChecked 
+                        ? 'rgba(129, 140, 248, 0.65)' 
+                        : 'rgba(255, 255, 255, 0.08)';
+                      if (!isChecked) {
+                        e.currentTarget.style.background = 'rgba(255, 255, 255, 0.025)';
+                        e.currentTarget.style.boxShadow = 'none';
+                      }
                     }}
                   >
-                    <input
-                      type="checkbox"
-                      checked={isChecked}
-                      onChange={() => {}}
-                      style={{ marginTop: '2px', cursor: 'pointer', accentColor: '#6366f1' }}
-                    />
+                    {/* Top Row: Icon + Selection Pill */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <div style={{
+                        width: '40px',
+                        height: '40px',
+                        borderRadius: '12px',
+                        background: isChecked ? `${item.color}25` : 'rgba(255, 255, 255, 0.05)',
+                        border: isChecked ? `1px solid ${item.color}50` : '1px solid rgba(255, 255, 255, 0.08)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '1.25rem',
+                        transition: 'all 0.2s'
+                      }}>
+                        {item.icon}
+                      </div>
+
+                      {/* Pill Badge */}
+                      <span style={{
+                        fontSize: '0.68rem',
+                        fontWeight: 700,
+                        padding: '0.15rem 0.55rem',
+                        borderRadius: '9999px',
+                        background: isChecked ? 'rgba(99, 102, 241, 0.35)' : 'rgba(255, 255, 255, 0.06)',
+                        border: isChecked ? '1px solid rgba(129, 140, 248, 0.5)' : '1px solid rgba(255, 255, 255, 0.1)',
+                        color: isChecked ? '#e0e7ff' : 'var(--text-secondary)',
+                        transition: 'all 0.2s'
+                      }}>
+                        {isChecked ? 'Active ✓' : '+ Add'}
+                      </span>
+                    </div>
+
+                    {/* Middle & Bottom: Label & Description */}
                     <div>
-                      <div style={{ fontSize: '0.9rem', fontWeight: 700, color: isChecked ? '#fff' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                        <span>{item.icon}</span>
-                        <span>{item.label}</span>
-                      </div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.15rem', lineHeight: 1.3 }}>
+                      <h4 style={{
+                        margin: '0 0 0.3rem 0',
+                        fontSize: '0.96rem',
+                        fontWeight: 700,
+                        color: isChecked ? '#ffffff' : '#e2e8f0',
+                        transition: 'color 0.2s'
+                      }}>
+                        {item.label}
+                      </h4>
+                      <p style={{
+                        margin: 0,
+                        fontSize: '0.78rem',
+                        color: isChecked ? '#c7d2fe' : 'var(--text-secondary)',
+                        lineHeight: 1.4,
+                        transition: 'color 0.2s'
+                      }}>
                         {item.desc}
-                      </div>
+                      </p>
                     </div>
                   </div>
                 );
@@ -1138,97 +1277,233 @@ Include balanced questions from the selected types. Ensure math expressions are 
             </div>
           </div>
 
-          {/* Generation Controls: Count • Difficulty • Custom Focus */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.85rem', marginBottom: '1.25rem' }}>
+          {/* 2. Enhanced Dropdown Menus & Specific Instructions Textarea (Perfect Alignment) */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.1rem', marginBottom: '1.5rem' }}>
             
-            {/* Number of Questions */}
-            <div>
-              <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
-                Question Count
-              </label>
-              <select
-                value={targetQuestionCount}
-                onChange={(e) => setTargetQuestionCount(Number(e.target.value))}
-                style={{ width: '100%', padding: '0.55rem 0.75rem', background: 'rgba(0,0,0,0.35)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff', fontSize: '0.85rem', outline: 'none' }}
-              >
-                <option value={4} style={{ background: '#1e1b4b' }}>4 Questions (Quick Check)</option>
-                <option value={6} style={{ background: '#1e1b4b' }}>6 Questions (Standard)</option>
-                <option value={8} style={{ background: '#1e1b4b' }}>8 Questions (Comprehensive)</option>
-                <option value={10} style={{ background: '#1e1b4b' }}>10 Questions (Full Test)</option>
-              </select>
+            {/* Top Row: Question Count & Difficulty Level (2-Column Grid) */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '1rem' }}>
+              
+              {/* Question Count Dropdown */}
+              <div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.82rem', fontWeight: 600, color: '#f1f5f9', marginBottom: '0.45rem' }}>
+                  <span>🔢</span>
+                  <span>Target Question Count</span>
+                </label>
+                <div style={{ position: 'relative' }}>
+                  <select
+                    value={targetQuestionCount}
+                    onChange={(e) => setTargetQuestionCount(Number(e.target.value))}
+                    style={{
+                      width: '100%',
+                      padding: '0.78rem 2.5rem 0.78rem 1rem',
+                      background: 'rgba(15, 23, 42, 0.75)',
+                      border: '1px solid rgba(255, 255, 255, 0.12)',
+                      borderRadius: '12px',
+                      color: '#fff',
+                      fontSize: '0.88rem',
+                      fontWeight: 600,
+                      outline: 'none',
+                      appearance: 'none',
+                      WebkitAppearance: 'none',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s',
+                      boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)'
+                    }}
+                    onFocus={(e) => {
+                      e.currentTarget.style.borderColor = 'rgba(129, 140, 248, 0.65)';
+                      e.currentTarget.style.boxShadow = '0 0 16px rgba(99, 102, 241, 0.25)';
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.12)';
+                      e.currentTarget.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.2)';
+                    }}
+                  >
+                    <option value={4} style={{ background: '#131826', color: '#fff' }}>4 Questions (Quick Review • ~10 mins)</option>
+                    <option value={6} style={{ background: '#131826', color: '#fff' }}>6 Questions (Standard Exercise • ~15 mins)</option>
+                    <option value={8} style={{ background: '#131826', color: '#fff' }}>8 Questions (Comprehensive Practice • ~20 mins)</option>
+                    <option value={10} style={{ background: '#131826', color: '#fff' }}>10 Questions (Complete Test • ~30 mins)</option>
+                  </select>
+                  {/* Custom Arrow */}
+                  <div style={{ position: 'absolute', right: '1rem', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: '#94a3b8' }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                  </div>
+                </div>
+              </div>
+
+              {/* Difficulty Level Dropdown */}
+              <div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.82rem', fontWeight: 600, color: '#f1f5f9', marginBottom: '0.45rem' }}>
+                  <span>⚡</span>
+                  <span>Assessment Difficulty Level</span>
+                </label>
+                <div style={{ position: 'relative' }}>
+                  <select
+                    value={selectedDifficulty}
+                    onChange={(e) => setSelectedDifficulty(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '0.78rem 2.5rem 0.78rem 1rem',
+                      background: 'rgba(15, 23, 42, 0.75)',
+                      border: '1px solid rgba(255, 255, 255, 0.12)',
+                      borderRadius: '12px',
+                      color: '#fff',
+                      fontSize: '0.88rem',
+                      fontWeight: 600,
+                      outline: 'none',
+                      appearance: 'none',
+                      WebkitAppearance: 'none',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s',
+                      boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)'
+                    }}
+                    onFocus={(e) => {
+                      e.currentTarget.style.borderColor = 'rgba(129, 140, 248, 0.65)';
+                      e.currentTarget.style.boxShadow = '0 0 16px rgba(99, 102, 241, 0.25)';
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.12)';
+                      e.currentTarget.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.2)';
+                    }}
+                  >
+                    <option value="Foundational" style={{ background: '#131826', color: '#fff' }}>Foundational (Core Definitions &amp; Direct Rules)</option>
+                    <option value="Standard" style={{ background: '#131826', color: '#fff' }}>Standard (Balanced Curriculum &amp; Problem Solving)</option>
+                    <option value="Challenging" style={{ background: '#131826', color: '#fff' }}>Challenging (Advanced Applications &amp; Word Problems)</option>
+                  </select>
+                  {/* Custom Arrow */}
+                  <div style={{ position: 'absolute', right: '1rem', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: '#94a3b8' }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                  </div>
+                </div>
+              </div>
+
             </div>
 
-            {/* Difficulty Level */}
+            {/* Bottom Row: Specific Focus Instructions (Enhanced Textarea) */}
             <div>
-              <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
-                Difficulty Level
-              </label>
-              <select
-                value={selectedDifficulty}
-                onChange={(e) => setSelectedDifficulty(e.target.value)}
-                style={{ width: '100%', padding: '0.55rem 0.75rem', background: 'rgba(0,0,0,0.35)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff', fontSize: '0.85rem', outline: 'none' }}
-              >
-                <option value="Foundational" style={{ background: '#1e1b4b' }}>Foundational (Basics & Definitions)</option>
-                <option value="Standard" style={{ background: '#1e1b4b' }}>Standard (Balanced Curriculum)</option>
-                <option value="Challenging" style={{ background: '#1e1b4b' }}>Challenging (Advanced Word Problems)</option>
-              </select>
-            </div>
-
-            {/* Custom Guidelines / Focus */}
-            <div style={{ gridColumn: 'span 2' }}>
-              <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
-                Specific Focus Instructions (Optional)
-              </label>
-              <input
-                type="text"
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.45rem' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.82rem', fontWeight: 600, color: '#f1f5f9' }}>
+                  <span>✍️</span>
+                  <span>Specific Focus Instructions (Optional)</span>
+                </label>
+                <span style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+                  Tailor question topics, textbook pages, or real-world problem scenarios
+                </span>
+              </div>
+              <textarea
                 value={customInstructions}
                 onChange={(e) => setCustomInstructions(e.target.value)}
-                placeholder="e.g. Focus on word problems involving percentage discounts and real life examples"
-                style={{ width: '100%', padding: '0.55rem 0.75rem', background: 'rgba(0,0,0,0.35)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff', fontSize: '0.85rem', outline: 'none' }}
+                placeholder="e.g. Focus on word problems involving percentage discounts and real life examples. Include step-by-step reasoning in answer keys..."
+                rows={3}
+                style={{
+                  width: '100%',
+                  padding: '0.85rem 1rem',
+                  background: 'rgba(15, 23, 42, 0.75)',
+                  border: '1px solid rgba(255, 255, 255, 0.12)',
+                  borderRadius: '12px',
+                  color: '#fff',
+                  fontSize: '0.88rem',
+                  lineHeight: 1.5,
+                  outline: 'none',
+                  resize: 'vertical',
+                  minHeight: '80px',
+                  maxHeight: '180px',
+                  boxSizing: 'border-box',
+                  fontFamily: 'inherit',
+                  transition: 'all 0.2s',
+                  boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)'
+                }}
+                onFocus={(e) => {
+                  e.currentTarget.style.borderColor = 'rgba(129, 140, 248, 0.65)';
+                  e.currentTarget.style.boxShadow = '0 0 16px rgba(99, 102, 241, 0.25)';
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.12)';
+                  e.currentTarget.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.2)';
+                }}
               />
             </div>
+
           </div>
 
-          {/* AI Error display */}
+          {/* AI Error Display */}
           {aiError && (
-            <div style={{ padding: '0.75rem 1rem', background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.35)', borderRadius: '8px', color: '#f87171', fontSize: '0.85rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <span>⚠️</span>
+            <div style={{ padding: '0.85rem 1.15rem', background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.35)', borderRadius: '12px', color: '#f87171', fontSize: '0.86rem', marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+              <span style={{ fontSize: '1.1rem' }}>⚠️</span>
               <span>{aiError}</span>
             </div>
           )}
 
-          {/* Generate Button */}
+          {/* 3. 'Generate Question Draft' Button Styled as Clear Focal Point */}
           <button
             type="button"
             onClick={handleGenerateQuestions}
             disabled={isGenerating}
             style={{
               width: '100%',
-              padding: '0.85rem 1.5rem',
-              background: isGenerating ? 'rgba(99, 102, 241, 0.5)' : 'var(--accent-gradient, linear-gradient(135deg, #6366f1, #8b5cf6))',
-              border: 'none',
-              borderRadius: '10px',
-              color: '#fff',
-              fontSize: '0.95rem',
-              fontWeight: 700,
+              padding: '1rem 2rem',
+              background: isGenerating 
+                ? 'rgba(99, 102, 241, 0.45)' 
+                : 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 48%, #db2777 100%)',
+              border: '1px solid rgba(255, 255, 255, 0.18)',
+              borderRadius: '14px',
+              color: '#ffffff',
+              fontSize: '1.02rem',
+              fontWeight: 800,
+              letterSpacing: '0.01em',
               cursor: isGenerating ? 'not-allowed' : 'pointer',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              gap: '0.6rem',
-              boxShadow: '0 4px 14px rgba(99, 102, 241, 0.35)',
-              transition: 'all 0.15s ease'
+              gap: '0.75rem',
+              boxShadow: '0 8px 30px -4px rgba(99, 102, 241, 0.55), 0 0 20px rgba(219, 39, 119, 0.35)',
+              transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+              position: 'relative',
+              overflow: 'hidden'
+            }}
+            onMouseEnter={(e) => {
+              if (!isGenerating) {
+                e.currentTarget.style.transform = 'translateY(-2px) scale(1.008)';
+                e.currentTarget.style.boxShadow = '0 12px 38px -4px rgba(99, 102, 241, 0.75), 0 0 28px rgba(219, 39, 119, 0.5)';
+                e.currentTarget.style.filter = 'brightness(1.08)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (!isGenerating) {
+                e.currentTarget.style.transform = 'translateY(0) scale(1)';
+                e.currentTarget.style.boxShadow = '0 8px 30px -4px rgba(99, 102, 241, 0.55), 0 0 20px rgba(219, 39, 119, 0.35)';
+                e.currentTarget.style.filter = 'brightness(1)';
+              }
+            }}
+            onMouseDown={(e) => {
+              if (!isGenerating) {
+                e.currentTarget.style.transform = 'scale(0.99)';
+              }
             }}
           >
             {isGenerating ? (
               <>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ animation: 'spin 1s linear infinite' }}><line x1="12" y1="2" x2="12" y2="6"></line><line x1="12" y1="18" x2="12" y2="22"></line><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line><line x1="2" y1="12" x2="6" y2="12"></line><line x1="18" y1="12" x2="22" y2="12"></line><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line></svg>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ animation: 'spin 1s linear infinite' }}><line x1="12" y1="2" x2="12" y2="6"></line><line x1="12" y1="18" x2="12" y2="22"></line><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line><line x1="2" y1="12" x2="6" y2="12"></line><line x1="18" y1="12" x2="22" y2="12"></line><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line></svg>
                 <style>{`@keyframes spin { 100% { transform: rotate(360deg); } }`}</style>
-                Generating Questions with Gemini AI...
+                <span>Generating Question Draft with Gemini AI...</span>
               </>
             ) : (
               <>
-                <span>✨ Generate Question Draft</span>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+                </svg>
+                <span>Generate Question Draft ({targetQuestionCount} Questions)</span>
+                <span style={{
+                  fontSize: '0.72rem',
+                  padding: '0.18rem 0.55rem',
+                  borderRadius: '9999px',
+                  background: 'rgba(255, 255, 255, 0.22)',
+                  color: '#ffffff',
+                  fontWeight: 700,
+                  letterSpacing: '0.02em',
+                  marginLeft: '0.25rem'
+                }}>
+                  AI Studio ✨
+                </span>
               </>
             )}
           </button>
