@@ -43,6 +43,16 @@ function SubjectPageContent() {
   const [newChapterTitle, setNewChapterTitle] = useState('');
   const [newChapterPdfPage, setNewChapterPdfPage] = useState('');
 
+  // Syllabus & Mark Distribution Section states
+  const [selectedExamForDistribution, setSelectedExamForDistribution] = useState('all'); // 'all' or exam.id
+  const [hoveredChapterId, setHoveredChapterId] = useState(null);
+  const [showMarksModal, setShowMarksModal] = useState(false);
+  const [editingChapterForMarks, setEditingChapterForMarks] = useState(null);
+  const [tempChapterMarks, setTempChapterMarks] = useState('');
+  const [tempChapterTopics, setTempChapterTopics] = useState([]);
+  const [newTopicName, setNewTopicName] = useState('');
+  const [newTopicMarks, setNewTopicMarks] = useState('');
+
   // Auth and data listener
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
@@ -276,6 +286,176 @@ function SubjectPageContent() {
     });
     setNewExamTitle('');
     setShowAddExamModal(false);
+  };
+
+  // Curated vibrant visual weightage color palette for chapters and topic segments
+  const WEIGHTAGE_COLORS = [
+    '#38bdf8', // sky cyan
+    '#818cf8', // indigo
+    '#34d399', // emerald
+    '#fbbf24', // amber
+    '#f43f5e', // rose
+    '#a855f7', // purple
+    '#06b6d4', // cyan
+    '#10b981', // green
+    '#6366f1', // violet
+    '#f97316'  // orange
+  ];
+
+  // Helper to extract or generate structured topics for a chapter
+  const getChapterTopics = (chap) => {
+    if (Array.isArray(chap.topics) && chap.topics.length > 0) {
+      return chap.topics;
+    }
+    if (chap.topics && typeof chap.topics === 'object') {
+      const entries = Object.entries(chap.topics);
+      if (entries.length > 0) {
+        return entries.map(([k, v]) => {
+          if (typeof v === 'string') {
+            return { id: k, name: v, marks: Math.max(1, Math.round((Number(chap.marks) || 20) / entries.length)) };
+          }
+          return { id: k, ...v };
+        });
+      }
+    }
+    // Sensible defaults based on chapter marks
+    const chapMarks = Number(chap.marks) || 20;
+    const m1 = Math.max(1, Math.round(chapMarks * 0.35));
+    const m2 = Math.max(1, Math.round(chapMarks * 0.40));
+    const m3 = Math.max(1, chapMarks - m1 - m2);
+    return [
+      { id: 't1', name: 'Core Foundations & Definitions', marks: m1 },
+      { id: 't2', name: 'Formula Applications & Problem Solving', marks: m2 },
+      { id: 't3', name: 'Analytical Thinking & Model Exercises', marks: m3 }
+    ];
+  };
+
+  // Helper to get chapter marks
+  const getChapterMarks = (chap, defaultPerChap) => {
+    if (chap.marks !== undefined && !isNaN(Number(chap.marks)) && Number(chap.marks) > 0) {
+      return Number(chap.marks);
+    }
+    return defaultPerChap;
+  };
+
+  // Compute detailed syllabus and mark distribution
+  const distributionData = useMemo(() => {
+    const relevantChapters = allSubjectChapters.filter(ch => {
+      if (selectedExamForDistribution === 'all') return true;
+      return ch.examId === selectedExamForDistribution;
+    });
+
+    const totalCount = relevantChapters.length;
+    // Default evenly distributed marks (targeting standard 100 marks or 20 per chapter)
+    const defaultPerChap = totalCount > 0 ? Math.max(5, Math.round(100 / totalCount)) : 20;
+
+    let totalMarks = 0;
+    let masteredMarks = 0;
+    let inProgressMarks = 0;
+    let notStartedMarks = 0;
+
+    const mappedChapters = relevantChapters.map((chap, idx) => {
+      const marks = getChapterMarks(chap, defaultPerChap);
+      const topics = getChapterTopics({ ...chap, marks });
+      totalMarks += marks;
+
+      if (chap.isCompleted) {
+        masteredMarks += marks;
+      } else if (chap.status === 'in_progress') {
+        inProgressMarks += marks;
+      } else {
+        notStartedMarks += marks;
+      }
+
+      return {
+        ...chap,
+        marks,
+        topics,
+        colorIndex: idx % WEIGHTAGE_COLORS.length,
+        color: WEIGHTAGE_COLORS[idx % WEIGHTAGE_COLORS.length]
+      };
+    });
+
+    // Calculate percentage weightages
+    const finalChapters = mappedChapters.map(chap => {
+      const weightagePct = totalMarks > 0 ? Math.round((chap.marks / totalMarks) * 100) : 0;
+      return {
+        ...chap,
+        weightagePct
+      };
+    });
+
+    const masteredPct = totalMarks > 0 ? Math.round((masteredMarks / totalMarks) * 100) : 0;
+    const inProgressPct = totalMarks > 0 ? Math.round((inProgressMarks / totalMarks) * 100) : 0;
+    const notStartedPct = totalMarks > 0 ? Math.round((notStartedMarks / totalMarks) * 100) : 0;
+
+    return {
+      chapters: finalChapters,
+      totalMarks,
+      masteredMarks,
+      masteredPct,
+      inProgressMarks,
+      inProgressPct,
+      notStartedMarks,
+      notStartedPct,
+      highYieldChapter: [...finalChapters].sort((a, b) => b.marks - a.marks)[0] || null
+    };
+  }, [allSubjectChapters, selectedExamForDistribution]);
+
+  // Open modal to configure marks & topics for a chapter
+  const handleOpenMarksModal = (chap) => {
+    setEditingChapterForMarks(chap);
+    setTempChapterMarks(String(chap.marks || 20));
+    setTempChapterTopics(chap.topics ? JSON.parse(JSON.stringify(chap.topics)) : []);
+    setNewTopicName('');
+    setNewTopicMarks('');
+    setShowMarksModal(true);
+  };
+
+  // Add a new topic inside the modal
+  const handleAddTopicToModal = () => {
+    if (!newTopicName.trim()) return;
+    const m = Number(newTopicMarks) || 5;
+    const newTopic = {
+      id: `top_${Date.now()}`,
+      name: newTopicName.trim(),
+      marks: m
+    };
+    setTempChapterTopics(prev => [...prev, newTopic]);
+    setNewTopicName('');
+    setNewTopicMarks('');
+  };
+
+  // Delete a topic inside the modal
+  const handleDeleteTopicFromModal = (topicId) => {
+    setTempChapterTopics(prev => prev.filter(t => t.id !== topicId));
+  };
+
+  // Evenly balance topic marks to match total chapter marks
+  const handleDistributeTopicsEvenly = () => {
+    if (tempChapterTopics.length === 0) return;
+    const totalChapM = Number(tempChapterMarks) || 20;
+    const perTopic = Math.max(1, Math.floor(totalChapM / tempChapterTopics.length));
+    const remainder = totalChapM - (perTopic * tempChapterTopics.length);
+    setTempChapterTopics(prev => prev.map((t, idx) => ({
+      ...t,
+      marks: idx === 0 ? perTopic + remainder : perTopic
+    })));
+  };
+
+  // Save customized chapter marks & topics to Firebase
+  const handleSaveChapterMarksAndTopics = async (e) => {
+    e.preventDefault();
+    if (!user || !kid || !subject || !editingChapterForMarks) return;
+    const { examId, id: chapId } = editingChapterForMarks;
+    const marksNum = Number(tempChapterMarks) || 0;
+    const chapPath = `users/${user.uid}/kids/${kid.id}/subjects/${subject.id}/chapters/${examId}/${chapId}`;
+
+    await set(ref(database, `${chapPath}/marks`), marksNum);
+    await set(ref(database, `${chapPath}/topics`), tempChapterTopics);
+
+    setShowMarksModal(false);
+    setEditingChapterForMarks(null);
   };
 
   if (loading) {
@@ -927,7 +1107,635 @@ function SubjectPageContent() {
         </div>
       </div>
 
-      {/* 4. COMPACT GRID: Subject Resources & Materials */}
+      {/* 4. DETAILED SYLLABUS & MARK DISTRIBUTION SECTION (WITH VISUAL WEIGHTAGE BAR) */}
+      <div 
+        id="syllabus-mark-distribution-section"
+        style={{
+          background: 'linear-gradient(135deg, rgba(23, 28, 44, 0.95), rgba(15, 18, 32, 0.98))',
+          border: '1px solid rgba(129, 140, 248, 0.28)',
+          borderRadius: '20px',
+          padding: '1.75rem 2rem',
+          marginBottom: '2.5rem',
+          boxShadow: '0 16px 40px -10px rgba(0, 0, 0, 0.55)',
+          textAlign: 'left',
+          position: 'relative',
+          overflow: 'hidden'
+        }}
+      >
+        {/* Ambient background glow */}
+        <div style={{
+          position: 'absolute',
+          top: '-60px',
+          left: '30%',
+          width: '260px',
+          height: '260px',
+          background: 'radial-gradient(circle, rgba(99, 102, 241, 0.18) 0%, transparent 70%)',
+          pointerEvents: 'none'
+        }} />
+
+        {/* Section Header Row */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1.25rem', marginBottom: '1.5rem' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.3rem' }}>
+              <span style={{ fontSize: '1.35rem' }}>📊</span>
+              <h2 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 700, color: '#fff', letterSpacing: '-0.01em' }}>
+                Detailed Syllabus & Mark Distribution
+              </h2>
+              <span style={{
+                fontSize: '0.72rem',
+                padding: '0.15rem 0.55rem',
+                borderRadius: '8px',
+                background: 'rgba(56, 189, 248, 0.15)',
+                border: '1px solid rgba(56, 189, 248, 0.35)',
+                color: '#38bdf8',
+                fontWeight: 700
+              }}>
+                Weighted Curriculum
+              </span>
+            </div>
+            <p style={{ margin: 0, fontSize: '0.86rem', color: 'var(--text-secondary)' }}>
+              Marks allocation and topic weightage breakdown across all active syllabus chapters for students and parents.
+            </p>
+          </div>
+
+          {/* Exam Track Filter Tabs */}
+          {exams.length > 0 && (
+            <div style={{
+              display: 'flex',
+              background: 'rgba(0, 0, 0, 0.35)',
+              padding: '0.25rem',
+              borderRadius: '12px',
+              border: '1px solid rgba(255, 255, 255, 0.08)',
+              gap: '0.25rem',
+              flexWrap: 'wrap'
+            }}>
+              <button
+                type="button"
+                onClick={() => setSelectedExamForDistribution('all')}
+                style={{
+                  padding: '0.38rem 0.85rem',
+                  borderRadius: '8px',
+                  border: 'none',
+                  background: selectedExamForDistribution === 'all' ? 'var(--accent-gradient, linear-gradient(135deg, #6366f1, #8b5cf6))' : 'transparent',
+                  color: selectedExamForDistribution === 'all' ? '#fff' : 'var(--text-secondary)',
+                  fontSize: '0.78rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  transition: 'all 0.15s'
+                }}
+              >
+                All Examination Tracks ({allSubjectChapters.length})
+              </button>
+
+              {exams.map(ex => {
+                const count = allSubjectChapters.filter(c => c.examId === ex.id).length;
+                const isSelected = selectedExamForDistribution === ex.id;
+                return (
+                  <button
+                    key={ex.id}
+                    type="button"
+                    onClick={() => setSelectedExamForDistribution(ex.id)}
+                    style={{
+                      padding: '0.38rem 0.85rem',
+                      borderRadius: '8px',
+                      border: 'none',
+                      background: isSelected ? 'var(--accent-gradient, linear-gradient(135deg, #6366f1, #8b5cf6))' : 'transparent',
+                      color: isSelected ? '#fff' : 'var(--text-secondary)',
+                      fontSize: '0.78rem',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      transition: 'all 0.15s',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.35rem'
+                    }}
+                  >
+                    <span>{ex.title}</span>
+                    <span style={{
+                      fontSize: '0.66rem',
+                      background: isSelected ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.08)',
+                      padding: '0.05rem 0.35rem',
+                      borderRadius: '5px'
+                    }}>
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* VISUAL WEIGHTAGE BAR CARD */}
+        <div style={{
+          background: 'rgba(0, 0, 0, 0.3)',
+          border: '1px solid rgba(255, 255, 255, 0.08)',
+          borderRadius: '16px',
+          padding: '1.25rem 1.45rem',
+          marginBottom: '1.5rem',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '1rem'
+        }}>
+          {/* Bar Header Meta */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.65rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#f1f5f9', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Curriculum Marks Weightage Bar
+              </span>
+              <span style={{ fontSize: '0.74rem', color: '#94a3b8' }}>
+                ({distributionData.totalMarks} Total Marks • 100% Allocation)
+              </span>
+            </div>
+
+            {/* Live Hover/Selection Inspector Pill */}
+            <div style={{
+              fontSize: '0.74rem',
+              color: hoveredChapterId ? '#fff' : '#94a3b8',
+              background: hoveredChapterId ? 'rgba(99, 102, 241, 0.25)' : 'rgba(255, 255, 255, 0.04)',
+              border: hoveredChapterId ? '1px solid rgba(129, 140, 248, 0.4)' : '1px solid rgba(255, 255, 255, 0.06)',
+              padding: '0.2rem 0.65rem',
+              borderRadius: '9999px',
+              transition: 'all 0.2s',
+              fontWeight: 500
+            }}>
+              {hoveredChapterId ? (() => {
+                const hoveredChap = distributionData.chapters.find(c => c.id === hoveredChapterId);
+                return hoveredChap 
+                  ? `🔍 Inspecting: ${hoveredChap.title} — ${hoveredChap.marks} Marks (${hoveredChap.weightagePct}% Weightage) • ${hoveredChap.topics.length} Topics` 
+                  : 'Hover over any segment to inspect topic weightage';
+              })() : '💡 Hover or tap any bar segment to spotlight chapter & topic allocation'}
+            </div>
+          </div>
+
+          {/* Multi-Segment Proportional Weightage Bar */}
+          <div style={{
+            height: '30px',
+            background: 'rgba(255, 255, 255, 0.04)',
+            borderRadius: '10px',
+            overflow: 'hidden',
+            display: 'flex',
+            boxShadow: 'inset 0 2px 6px rgba(0, 0, 0, 0.4)',
+            border: '1px solid rgba(255, 255, 255, 0.08)',
+            position: 'relative'
+          }}>
+            {distributionData.chapters.length === 0 ? (
+              <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.76rem', color: 'var(--text-secondary)' }}>
+                No chapters mapped yet in this track. Add chapters to generate weightage bar.
+              </div>
+            ) : (
+              distributionData.chapters.map((chap, idx) => {
+                const widthPercent = distributionData.totalMarks > 0 
+                  ? (chap.marks / distributionData.totalMarks) * 100 
+                  : 100 / distributionData.chapters.length;
+
+                const isHovered = hoveredChapterId === chap.id;
+
+                return (
+                  <div
+                    key={`${chap.examId}_${chap.id}`}
+                    onMouseEnter={() => setHoveredChapterId(chap.id)}
+                    onMouseLeave={() => setHoveredChapterId(null)}
+                    onClick={() => {
+                      const el = document.getElementById(`chap-weightage-${chap.id}`);
+                      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }}
+                    style={{
+                      width: `${widthPercent}%`,
+                      height: '100%',
+                      background: chap.color,
+                      borderRight: idx < distributionData.chapters.length - 1 ? '1.5px solid rgba(15, 18, 30, 0.9)' : 'none',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                      filter: isHovered ? 'brightness(1.25)' : 'brightness(1)',
+                      transform: isHovered ? 'scaleY(1.1)' : 'scaleY(1)',
+                      zIndex: isHovered ? 2 : 1,
+                      overflow: 'hidden',
+                      position: 'relative'
+                    }}
+                    title={`${chap.title}: ${chap.marks} Marks (${chap.weightagePct}% Weightage)`}
+                  >
+                    {widthPercent >= 8 && (
+                      <span style={{
+                        fontSize: '0.72rem',
+                        fontWeight: 800,
+                        color: '#ffffff',
+                        textShadow: '0 1px 3px rgba(0, 0, 0, 0.8)',
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        padding: '0 0.35rem'
+                      }}>
+                        Ch.{idx + 1} ({chap.marks}M)
+                      </span>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {/* Interactive Legend Strip */}
+          {distributionData.chapters.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.65rem', alignItems: 'center' }}>
+              {distributionData.chapters.map((chap, idx) => {
+                const isHovered = hoveredChapterId === chap.id;
+                return (
+                  <div
+                    key={`${chap.examId}_${chap.id}`}
+                    onMouseEnter={() => setHoveredChapterId(chap.id)}
+                    onMouseLeave={() => setHoveredChapterId(null)}
+                    onClick={() => {
+                      const el = document.getElementById(`chap-weightage-${chap.id}`);
+                      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.45rem',
+                      padding: '0.22rem 0.6rem',
+                      borderRadius: '8px',
+                      background: isHovered ? 'rgba(255, 255, 255, 0.12)' : 'rgba(255, 255, 255, 0.04)',
+                      border: isHovered ? `1px solid ${chap.color}` : '1px solid rgba(255, 255, 255, 0.06)',
+                      fontSize: '0.74rem',
+                      color: isHovered ? '#fff' : '#cbd5e1',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s'
+                    }}
+                  >
+                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: chap.color, flexShrink: 0 }} />
+                    <span style={{ fontWeight: 600, maxWidth: '140px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {chap.title}
+                    </span>
+                    <span style={{ color: 'var(--text-secondary)', fontWeight: 500 }}>
+                      {chap.marks}M ({chap.weightagePct}%)
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* SCANNABLE SUMMARY KPI CARDS */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '0.85rem', marginBottom: '1.75rem' }}>
+          
+          {/* Card 1: Total Syllabus Marks */}
+          <div style={{
+            background: 'rgba(255, 255, 255, 0.03)',
+            border: '1px solid rgba(255, 255, 255, 0.08)',
+            borderRadius: '14px',
+            padding: '1rem 1.15rem',
+            textAlign: 'left'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+              <span style={{ fontSize: '0.72rem', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Total Examination Marks
+              </span>
+              <span style={{ fontSize: '1rem' }}>🎯</span>
+            </div>
+            <div style={{ fontSize: '1.8rem', fontWeight: 800, color: '#fff', lineHeight: 1.1 }}>
+              {distributionData.totalMarks} <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Marks</span>
+            </div>
+            <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+              Across {distributionData.chapters.length} active syllabus chapters
+            </div>
+          </div>
+
+          {/* Card 2: Mastered Marks (Secured) */}
+          <div style={{
+            background: 'rgba(16, 185, 129, 0.08)',
+            border: '1px solid rgba(52, 211, 153, 0.3)',
+            borderRadius: '14px',
+            padding: '1rem 1.15rem',
+            textAlign: 'left'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+              <span style={{ fontSize: '0.72rem', color: '#34d399', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                ✓ Marks Secured (Mastered)
+              </span>
+              <span style={{ fontSize: '0.72rem', padding: '0.1rem 0.45rem', borderRadius: '6px', background: 'rgba(52, 211, 153, 0.2)', color: '#34d399', fontWeight: 700 }}>
+                {distributionData.masteredPct}%
+              </span>
+            </div>
+            <div style={{ fontSize: '1.8rem', fontWeight: 800, color: '#34d399', lineHeight: 1.1 }}>
+              {distributionData.masteredMarks} <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#a7f3d0' }}>/ {distributionData.totalMarks}</span>
+            </div>
+            <div style={{ fontSize: '0.74rem', color: '#cbd5e1', marginTop: '0.25rem' }}>
+              Curriculum marks fully ready for exams
+            </div>
+          </div>
+
+          {/* Card 3: In Progress Marks */}
+          <div style={{
+            background: 'rgba(245, 158, 11, 0.08)',
+            border: '1px solid rgba(251, 191, 36, 0.3)',
+            borderRadius: '14px',
+            padding: '1rem 1.15rem',
+            textAlign: 'left'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+              <span style={{ fontSize: '0.72rem', color: '#fbbf24', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                ⏳ In Progress Marks
+              </span>
+              <span style={{ fontSize: '0.72rem', padding: '0.1rem 0.45rem', borderRadius: '6px', background: 'rgba(251, 191, 36, 0.2)', color: '#fbbf24', fontWeight: 700 }}>
+                {distributionData.inProgressPct}%
+              </span>
+            </div>
+            <div style={{ fontSize: '1.8rem', fontWeight: 800, color: '#fbbf24', lineHeight: 1.1 }}>
+              {distributionData.inProgressMarks} <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#fde68a' }}>Marks</span>
+            </div>
+            <div style={{ fontSize: '0.74rem', color: '#cbd5e1', marginTop: '0.25rem' }}>
+              Currently in active revision & study
+            </div>
+          </div>
+
+          {/* Card 4: Remaining Marks Target */}
+          <div style={{
+            background: 'rgba(99, 102, 241, 0.08)',
+            border: '1px solid rgba(165, 180, 252, 0.25)',
+            borderRadius: '14px',
+            padding: '1rem 1.15rem',
+            textAlign: 'left'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+              <span style={{ fontSize: '0.72rem', color: '#a5b4fc', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                📖 Unstarted Marks Target
+              </span>
+              <span style={{ fontSize: '0.72rem', padding: '0.1rem 0.45rem', borderRadius: '6px', background: 'rgba(165, 180, 252, 0.2)', color: '#a5b4fc', fontWeight: 700 }}>
+                {distributionData.notStartedPct}%
+              </span>
+            </div>
+            <div style={{ fontSize: '1.8rem', fontWeight: 800, color: '#f1f5f9', lineHeight: 1.1 }}>
+              {distributionData.notStartedMarks} <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#cbd5e1' }}>Marks</span>
+            </div>
+            <div style={{ fontSize: '0.74rem', color: '#cbd5e1', marginTop: '0.25rem' }}>
+              Pending curriculum to master
+            </div>
+          </div>
+
+        </div>
+
+        {/* DETAILED CHAPTER & TOPIC ALLOCATION CARDS */}
+        <div style={{ marginBottom: '0.5rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: '#fff', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span>📑</span>
+              <span>Chapter & Topic Marks Breakdown</span>
+            </h3>
+            <span style={{ fontSize: '0.76rem', color: 'var(--text-secondary)' }}>
+              Click &quot;Configure Marks &amp; Topics&quot; on any chapter to customize allocations
+            </span>
+          </div>
+
+          {distributionData.chapters.length === 0 ? (
+            <div style={{ padding: '2.5rem 1rem', background: 'rgba(0,0,0,0.15)', borderRadius: '12px', textAlign: 'center', border: '1px dashed rgba(255,255,255,0.08)' }}>
+              <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                No chapters found in this exam track. Add chapters above to map syllabus marks.
+              </p>
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: '1.1rem' }}>
+              {distributionData.chapters.map((chap, idx) => {
+                const isHovered = hoveredChapterId === chap.id;
+                const chapterHref = `/kid/chapter?id=${searchParams.get("id")}&subject=${subjectSlug}&examId=${chap.examId}&chapterId=${chap.id}${parentIdQuery}`;
+                const totalTopicMarks = chap.topics.reduce((acc, t) => acc + (Number(t.marks) || 0), 0);
+
+                return (
+                  <div
+                    key={`${chap.examId}_${chap.id}`}
+                    id={`chap-weightage-${chap.id}`}
+                    style={{
+                      background: isHovered 
+                        ? 'linear-gradient(145deg, rgba(30, 37, 56, 0.98), rgba(20, 24, 40, 0.98))' 
+                        : 'rgba(255, 255, 255, 0.025)',
+                      border: isHovered 
+                        ? `1px solid ${chap.color}` 
+                        : '1px solid rgba(255, 255, 255, 0.08)',
+                      borderRadius: '16px',
+                      padding: '1.2rem 1.35rem',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.9rem',
+                      transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+                      boxShadow: isHovered ? `0 8px 24px -4px ${chap.color}35` : '0 4px 16px rgba(0,0,0,0.2)',
+                      position: 'relative'
+                    }}
+                    onMouseEnter={() => setHoveredChapterId(chap.id)}
+                    onMouseLeave={() => setHoveredChapterId(null)}
+                  >
+                    {/* Chapter Header: Index badge, Title, Status */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.75rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', minWidth: 0, flex: 1 }}>
+                        {/* Colored Chapter Index Badge */}
+                        <div style={{
+                          width: '38px',
+                          height: '38px',
+                          borderRadius: '10px',
+                          background: `${chap.color}22`,
+                          border: `1px solid ${chap.color}55`,
+                          color: chap.color,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: '0.85rem',
+                          fontWeight: 800,
+                          flexShrink: 0
+                        }}>
+                          {idx + 1}
+                        </div>
+
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <h4 style={{ margin: 0, fontSize: '1.02rem', fontWeight: 700, color: '#fff', lineHeight: 1.3 }}>
+                            {chap.title}
+                          </h4>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginTop: '0.25rem', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                            <span>🎯 {chap.examTitle}</span>
+                            {chap.pdfPage && (
+                              <>
+                                <span>•</span>
+                                <span style={{ color: '#38bdf8' }}>Page {chap.pdfPage}</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Status Badge */}
+                      <span style={{
+                        fontSize: '0.68rem',
+                        fontWeight: 700,
+                        padding: '0.14rem 0.5rem',
+                        borderRadius: '8px',
+                        background: chap.isCompleted ? 'rgba(16, 185, 129, 0.15)' : chap.status === 'in_progress' ? 'rgba(245, 158, 11, 0.15)' : 'rgba(148, 163, 184, 0.1)',
+                        color: chap.isCompleted ? '#34d399' : chap.status === 'in_progress' ? '#fbbf24' : '#94a3b8',
+                        border: `1px solid ${chap.isCompleted ? 'rgba(16, 185, 129, 0.3)' : chap.status === 'in_progress' ? 'rgba(245, 158, 11, 0.3)' : 'rgba(148, 163, 184, 0.2)'}`,
+                        flexShrink: 0
+                      }}>
+                        {chap.isCompleted ? '✓ Mastered' : chap.status === 'in_progress' ? '⏳ In Progress' : '○ Not Started'}
+                      </span>
+                    </div>
+
+                    {/* Weightage & Marks Banner */}
+                    <div style={{
+                      padding: '0.65rem 0.85rem',
+                      background: 'rgba(0, 0, 0, 0.25)',
+                      border: '1px solid rgba(255, 255, 255, 0.05)',
+                      borderRadius: '10px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '0.6rem'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span style={{ fontSize: '1.25rem', fontWeight: 800, color: chap.color, lineHeight: 1 }}>
+                          {chap.marks}
+                        </span>
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                          <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#f1f5f9' }}>
+                            Marks Allocated
+                          </span>
+                          <span style={{ fontSize: '0.66rem', color: 'var(--text-secondary)' }}>
+                            {chap.weightagePct}% of Total Examination
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Weightage Category Pill */}
+                      <span style={{
+                        fontSize: '0.68rem',
+                        fontWeight: 700,
+                        padding: '0.18rem 0.55rem',
+                        borderRadius: '6px',
+                        background: `${chap.color}20`,
+                        color: chap.color,
+                        border: `1px solid ${chap.color}45`
+                      }}>
+                        {chap.marks >= 25 ? '⭐ High Yield' : chap.marks >= 15 ? 'Core Chapter' : 'Foundational'}
+                      </span>
+                    </div>
+
+                    {/* Topic Weightage Mini Bar */}
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: '#94a3b8', marginBottom: '0.35rem' }}>
+                        <span>Topic Weightage Distribution ({chap.topics.length} Topics):</span>
+                        <span style={{ color: '#cbd5e1', fontWeight: 600 }}>{totalTopicMarks} Marks Mapped</span>
+                      </div>
+                      <div style={{ height: '6px', background: 'rgba(255, 255, 255, 0.06)', borderRadius: '4px', overflow: 'hidden', display: 'flex', gap: '1px' }}>
+                        {chap.topics.map((top, tIdx) => {
+                          const topW = totalTopicMarks > 0 ? (top.marks / totalTopicMarks) * 100 : 100 / chap.topics.length;
+                          return (
+                            <div
+                              key={top.id || tIdx}
+                              style={{
+                                width: `${topW}%`,
+                                height: '100%',
+                                background: chap.color,
+                                opacity: 0.5 + (0.5 * ((tIdx + 1) / chap.topics.length))
+                              }}
+                              title={`${top.name}: ${top.marks} Marks`}
+                            />
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Topics Breakdown List */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.1rem' }}>
+                      {chap.topics.map((top, tIdx) => {
+                        const topPct = chap.marks > 0 ? Math.round((top.marks / chap.marks) * 100) : 0;
+                        return (
+                          <div
+                            key={top.id || tIdx}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              padding: '0.45rem 0.65rem',
+                              background: 'rgba(255, 255, 255, 0.025)',
+                              border: '1px solid rgba(255, 255, 255, 0.04)',
+                              borderRadius: '8px',
+                              gap: '0.5rem',
+                              fontSize: '0.76rem'
+                            }}
+                          >
+                            <span style={{ color: '#cbd5e1', fontWeight: 500, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {top.name}
+                            </span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexShrink: 0 }}>
+                              <span style={{ fontWeight: 700, color: chap.color }}>
+                                {top.marks} M
+                              </span>
+                              <span style={{ fontSize: '0.66rem', color: 'var(--text-secondary)' }}>
+                                ({topPct}%)
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Card Actions Footer */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', borderTop: '1px solid rgba(255, 255, 255, 0.06)', paddingTop: '0.75rem', marginTop: 'auto' }}>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenMarksModal(chap)}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.35rem',
+                          padding: '0.35rem 0.75rem',
+                          borderRadius: '8px',
+                          background: 'rgba(255, 255, 255, 0.05)',
+                          border: '1px solid rgba(255, 255, 255, 0.1)',
+                          color: '#e2e8f0',
+                          fontSize: '0.74rem',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          transition: 'all 0.15s'
+                        }}
+                        onMouseOver={(e) => {
+                          e.currentTarget.style.background = 'rgba(255, 255, 255, 0.12)';
+                          e.currentTarget.style.color = '#fff';
+                        }}
+                        onMouseOut={(e) => {
+                          e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
+                          e.currentTarget.style.color = '#e2e8f0';
+                        }}
+                      >
+                        <span>✏️ Configure Marks &amp; Topics</span>
+                      </button>
+
+                      <Link
+                        href={chapterHref}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.3rem',
+                          fontSize: '0.76rem',
+                          color: 'var(--accent-primary)',
+                          fontWeight: 600,
+                          textDecoration: 'none'
+                        }}
+                      >
+                        <span>Study Desk</span>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                      </Link>
+                    </div>
+
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+      </div>
+
+      {/* 5. COMPACT GRID: Subject Resources & Materials */}
       <div style={{ marginBottom: '2.5rem', textAlign: 'left' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
           <div>
@@ -1056,25 +1864,31 @@ function SubjectPageContent() {
 
             <button
               onClick={() => {
-                setIsChaptersExpanded(true);
-                setTimeout(() => {
-                  const chapterSection = document.getElementById('chapters-curriculum-section');
-                  if (chapterSection) chapterSection.scrollIntoView({ behavior: 'smooth' });
-                }, 100);
+                const distSection = document.getElementById('syllabus-mark-distribution-section');
+                if (distSection) distSection.scrollIntoView({ behavior: 'smooth' });
               }}
               style={{
                 width: '100%',
                 padding: '0.45rem 0.75rem',
-                background: 'rgba(255, 255, 255, 0.05)',
-                border: '1px solid rgba(255, 255, 255, 0.1)',
+                background: 'rgba(168, 85, 247, 0.16)',
+                border: '1px solid rgba(168, 85, 247, 0.35)',
                 borderRadius: '8px',
-                color: '#fff',
+                color: '#d8b4fe',
                 fontSize: '0.8rem',
                 fontWeight: 600,
-                cursor: 'pointer'
+                cursor: 'pointer',
+                transition: 'all 0.2s'
+              }}
+              onMouseOver={(e) => {
+                e.currentTarget.style.background = 'rgba(168, 85, 247, 0.28)';
+                e.currentTarget.style.color = '#fff';
+              }}
+              onMouseOut={(e) => {
+                e.currentTarget.style.background = 'rgba(168, 85, 247, 0.16)';
+                e.currentTarget.style.color = '#d8b4fe';
               }}
             >
-              Browse Chapters Below ↓
+              View Marks Weightage Bar ↑
             </button>
           </div>
 
@@ -2539,6 +3353,317 @@ function SubjectPageContent() {
         </div>
       )}
 
+      {/* 10. MODAL: Configure Chapter Marks & Topics */}
+      {showMarksModal && editingChapterForMarks && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 120, padding: '1rem' }}>
+          <div className="card" style={{ maxWidth: '580px', width: '100%', maxHeight: '90vh', overflowY: 'auto', textAlign: 'left', padding: '1.75rem', borderRadius: '18px', background: 'linear-gradient(145deg, #181d2c, #101422)', border: '1px solid rgba(129, 140, 248, 0.3)', boxShadow: '0 20px 50px rgba(0,0,0,0.6)' }}>
+            
+            {/* Modal Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem', borderBottom: '1px solid rgba(255, 255, 255, 0.08)', paddingBottom: '0.85rem' }}>
+              <div>
+                <h3 style={{ margin: '0 0 0.25rem 0', fontSize: '1.25rem', color: '#fff', fontWeight: 700 }}>
+                  Configure Chapter Marks &amp; Topics
+                </h3>
+                <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--accent-primary)', fontWeight: 600 }}>
+                  {editingChapterForMarks.title} • {editingChapterForMarks.examTitle}
+                </p>
+              </div>
+              <button 
+                type="button"
+                onClick={() => { setShowMarksModal(false); setEditingChapterForMarks(null); }}
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1.2rem', padding: '0.2rem 0.5rem', transition: 'color 0.15s' }}
+                onMouseOver={(e) => e.currentTarget.style.color = '#fff'}
+                onMouseOut={(e) => e.currentTarget.style.color = 'var(--text-secondary)'}
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveChapterMarksAndTopics} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+              
+              {/* Total Chapter Marks Field */}
+              <div style={{ background: 'rgba(0,0,0,0.25)', padding: '1rem', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.06)' }}>
+                <label style={{ fontSize: '0.84rem', color: '#f1f5f9', fontWeight: 600, display: 'block', marginBottom: '0.35rem' }}>
+                  Total Chapter Marks (Syllabus Weightage)
+                </label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <input
+                    type="number"
+                    min="1"
+                    max="100"
+                    value={tempChapterMarks}
+                    onChange={(e) => setTempChapterMarks(e.target.value)}
+                    required
+                    style={{
+                      width: '100px',
+                      padding: '0.55rem 0.75rem',
+                      background: 'rgba(255,255,255,0.06)',
+                      border: '1px solid rgba(129, 140, 248, 0.4)',
+                      borderRadius: '8px',
+                      color: '#fff',
+                      fontSize: '1rem',
+                      fontWeight: 700,
+                      textAlign: 'center',
+                      outline: 'none'
+                    }}
+                  />
+                  <div style={{ fontSize: '0.76rem', color: 'var(--text-secondary)', lineHeight: 1.35, flex: 1 }}>
+                    Specifies the total score allocated to this chapter in the visual weightage bar and syllabus evaluations.
+                  </div>
+                </div>
+              </div>
+
+              {/* Topics Breakdown Editor */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                  <label style={{ fontSize: '0.84rem', color: '#f1f5f9', fontWeight: 600 }}>
+                    Topic Breakdown ({tempChapterTopics.length} Topics)
+                  </label>
+                  {tempChapterTopics.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleDistributeTopicsEvenly}
+                      style={{
+                        fontSize: '0.74rem',
+                        padding: '0.25rem 0.65rem',
+                        borderRadius: '6px',
+                        background: 'rgba(99, 102, 241, 0.18)',
+                        border: '1px solid rgba(129, 140, 248, 0.35)',
+                        color: '#c7d2fe',
+                        cursor: 'pointer',
+                        fontWeight: 600
+                      }}
+                    >
+                      ⚡ Auto-Balance Evenly
+                    </button>
+                  )}
+                </div>
+
+                {/* Topics List Rows */}
+                {tempChapterTopics.length === 0 ? (
+                  <div style={{ padding: '1rem', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', textAlign: 'center', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                    No custom topics added yet. Add topics below to detail marks allocation.
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', maxHeight: '200px', overflowY: 'auto', paddingRight: '0.25rem' }}>
+                    {tempChapterTopics.map((top, idx) => (
+                      <div
+                        key={top.id || idx}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.5rem',
+                          background: 'rgba(255,255,255,0.03)',
+                          border: '1px solid rgba(255,255,255,0.06)',
+                          borderRadius: '8px',
+                          padding: '0.45rem 0.65rem'
+                        }}
+                      >
+                        <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', width: '20px', textAlign: 'center' }}>
+                          {idx + 1}.
+                        </span>
+                        <input
+                          type="text"
+                          value={top.name}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setTempChapterTopics(prev => prev.map((t, i) => i === idx ? { ...t, name: val } : t));
+                          }}
+                          style={{
+                            flex: 1,
+                            padding: '0.35rem 0.55rem',
+                            background: 'transparent',
+                            border: 'none',
+                            color: '#fff',
+                            fontSize: '0.82rem',
+                            outline: 'none'
+                          }}
+                          placeholder="Topic Name..."
+                        />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                          <input
+                            type="number"
+                            min="1"
+                            max="100"
+                            value={top.marks}
+                            onChange={(e) => {
+                              const val = Number(e.target.value) || 0;
+                              setTempChapterTopics(prev => prev.map((t, i) => i === idx ? { ...t, marks: val } : t));
+                            }}
+                            style={{
+                              width: '54px',
+                              padding: '0.3rem 0.4rem',
+                              background: 'rgba(0,0,0,0.3)',
+                              border: '1px solid rgba(255,255,255,0.12)',
+                              borderRadius: '6px',
+                              color: '#38bdf8',
+                              fontWeight: 700,
+                              fontSize: '0.82rem',
+                              textAlign: 'center',
+                              outline: 'none'
+                            }}
+                          />
+                          <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>M</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteTopicFromModal(top.id)}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: '#f87171',
+                            cursor: 'pointer',
+                            padding: '0.2rem 0.4rem',
+                            fontSize: '0.85rem'
+                          }}
+                          title="Remove Topic"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Add Topic Input Row */}
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.25rem' }}>
+                  <input
+                    type="text"
+                    value={newTopicName}
+                    onChange={(e) => setNewTopicName(e.target.value)}
+                    placeholder="New topic name (e.g. Formulae & Identities)..."
+                    style={{
+                      flex: 1,
+                      padding: '0.5rem 0.75rem',
+                      background: 'rgba(0,0,0,0.3)',
+                      border: '1px solid rgba(255,255,255,0.1)',
+                      borderRadius: '8px',
+                      color: '#fff',
+                      fontSize: '0.8rem',
+                      outline: 'none'
+                    }}
+                  />
+                  <input
+                    type="number"
+                    min="1"
+                    max="100"
+                    value={newTopicMarks}
+                    onChange={(e) => setNewTopicMarks(e.target.value)}
+                    placeholder="Marks"
+                    style={{
+                      width: '64px',
+                      padding: '0.5rem 0.5rem',
+                      background: 'rgba(0,0,0,0.3)',
+                      border: '1px solid rgba(255,255,255,0.1)',
+                      borderRadius: '8px',
+                      color: '#fff',
+                      fontSize: '0.8rem',
+                      textAlign: 'center',
+                      outline: 'none'
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddTopicToModal}
+                    style={{
+                      padding: '0.5rem 0.85rem',
+                      background: 'rgba(99, 102, 241, 0.25)',
+                      border: '1px solid rgba(129, 140, 248, 0.4)',
+                      borderRadius: '8px',
+                      color: '#e0e7ff',
+                      fontSize: '0.78rem',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    + Add Topic
+                  </button>
+                </div>
+              </div>
+
+              {/* Marks Balance Status Indicator */}
+              {(() => {
+                const totalM = Number(tempChapterMarks) || 0;
+                const topicsSum = tempChapterTopics.reduce((acc, t) => acc + (Number(t.marks) || 0), 0);
+                const isBalanced = totalM === topicsSum;
+                return (
+                  <div style={{
+                    padding: '0.65rem 0.85rem',
+                    borderRadius: '8px',
+                    background: isBalanced ? 'rgba(16, 185, 129, 0.12)' : 'rgba(245, 158, 11, 0.12)',
+                    border: `1px solid ${isBalanced ? 'rgba(52, 211, 153, 0.35)' : 'rgba(251, 191, 36, 0.35)'}`,
+                    fontSize: '0.78rem',
+                    color: isBalanced ? '#34d399' : '#fbbf24',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '0.5rem'
+                  }}>
+                    <span>
+                      {isBalanced 
+                        ? `✓ Topic marks match chapter total: ${topicsSum} / ${totalM} Marks`
+                        : `⚠️ Topic sum (${topicsSum}M) does not equal chapter total (${totalM}M)`}
+                    </span>
+                    {!isBalanced && tempChapterTopics.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleDistributeTopicsEvenly}
+                        style={{
+                          background: 'rgba(245, 158, 11, 0.2)',
+                          border: '1px solid rgba(251, 191, 36, 0.4)',
+                          color: '#fef3c7',
+                          borderRadius: '6px',
+                          padding: '0.15rem 0.5rem',
+                          fontSize: '0.72rem',
+                          cursor: 'pointer',
+                          fontWeight: 600
+                        }}
+                      >
+                        Auto-Fix Balance
+                      </button>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Modal Actions */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.65rem', marginTop: '0.5rem' }}>
+                <button
+                  type="button"
+                  onClick={() => { setShowMarksModal(false); setEditingChapterForMarks(null); }}
+                  style={{
+                    padding: '0.6rem 1.15rem',
+                    background: 'rgba(255, 255, 255, 0.06)',
+                    border: '1px solid rgba(255, 255, 255, 0.12)',
+                    borderRadius: '8px',
+                    color: 'var(--text-secondary)',
+                    fontSize: '0.85rem',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="primary"
+                  style={{
+                    padding: '0.6rem 1.35rem',
+                    borderRadius: '8px',
+                    fontSize: '0.85rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    boxShadow: '0 4px 14px rgba(99, 102, 241, 0.4)'
+                  }}
+                >
+                  Save Marks Allocation
+                </button>
+              </div>
+
+            </form>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
