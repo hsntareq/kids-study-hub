@@ -312,14 +312,16 @@ function SubjectPageContent() {
           display: 'flex',
           alignItems: 'center',
           gap: '0.65rem',
-          padding: '0.65rem 1rem',
-          background: 'rgba(255, 255, 255, 0.03)',
-          border: '1px solid rgba(255, 255, 255, 0.08)',
-          borderRadius: '12px',
-          marginBottom: '1.5rem',
+          padding: '0.75rem 1.25rem',
+          background: 'rgba(15, 23, 42, 0.65)',
+          backdropFilter: 'blur(16px)',
+          WebkitBackdropFilter: 'blur(16px)',
+          border: '1px solid rgba(255, 255, 255, 0.09)',
+          borderRadius: '16px',
+          marginBottom: '1.75rem',
           fontSize: '0.86rem',
           flexWrap: 'wrap',
-          boxShadow: '0 2px 10px rgba(0, 0, 0, 0.2)'
+          boxShadow: '0 8px 24px -6px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06)'
         }}
       >
         {/* Step 1: Dashboard */}
@@ -332,12 +334,22 @@ function SubjectPageContent() {
             color: '#94a3b8',
             textDecoration: 'none',
             fontWeight: 500,
-            padding: '0.2rem 0.5rem',
-            borderRadius: '6px',
-            transition: 'all 0.15s ease'
+            padding: '0.3rem 0.65rem',
+            borderRadius: '8px',
+            transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
           }}
-          onMouseOver={(e) => { e.currentTarget.style.color = '#fff'; e.currentTarget.style.background = 'rgba(255, 255, 255, 0.06)'; }}
-          onMouseOut={(e) => { e.currentTarget.style.color = '#94a3b8'; e.currentTarget.style.background = 'transparent'; }}
+          onMouseOver={(e) => {
+            e.currentTarget.style.color = '#fff';
+            e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)';
+            e.currentTarget.style.transform = 'translateY(-1px)';
+          }}
+          onMouseOut={(e) => {
+            e.currentTarget.style.color = '#94a3b8';
+            e.currentTarget.style.background = 'transparent';
+            e.currentTarget.style.transform = 'translateY(0)';
+          }}
+          onMouseDown={(e) => e.currentTarget.style.transform = 'scale(0.97)'}
+          onMouseUp={(e) => e.currentTarget.style.transform = 'translateY(-1px)'}
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
@@ -347,7 +359,7 @@ function SubjectPageContent() {
         </Link>
 
         {/* Separator Chevron */}
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
           <polyline points="9 18 15 12 9 6" />
         </svg>
 
@@ -361,12 +373,22 @@ function SubjectPageContent() {
             color: '#94a3b8',
             textDecoration: 'none',
             fontWeight: 500,
-            padding: '0.2rem 0.5rem',
-            borderRadius: '6px',
-            transition: 'all 0.15s ease'
+            padding: '0.3rem 0.65rem',
+            borderRadius: '8px',
+            transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
           }}
-          onMouseOver={(e) => { e.currentTarget.style.color = '#fff'; e.currentTarget.style.background = 'rgba(255, 255, 255, 0.06)'; }}
-          onMouseOut={(e) => { e.currentTarget.style.color = '#94a3b8'; e.currentTarget.style.background = 'transparent'; }}
+          onMouseOver={(e) => {
+            e.currentTarget.style.color = '#fff';
+            e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)';
+            e.currentTarget.style.transform = 'translateY(-1px)';
+          }}
+          onMouseOut={(e) => {
+            e.currentTarget.style.color = '#94a3b8';
+            e.currentTarget.style.background = 'transparent';
+            e.currentTarget.style.transform = 'translateY(0)';
+          }}
+          onMouseDown={(e) => e.currentTarget.style.transform = 'scale(0.97)'}
+          onMouseUp={(e) => e.currentTarget.style.transform = 'translateY(-1px)'}
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
@@ -377,10 +399,11 @@ function SubjectPageContent() {
             <span style={{
               fontSize: '0.72rem',
               color: '#cbd5e1',
-              background: 'rgba(255, 255, 255, 0.08)',
-              padding: '0.1rem 0.45rem',
+              background: 'rgba(255, 255, 255, 0.1)',
+              padding: '0.12rem 0.5rem',
               borderRadius: '6px',
-              fontWeight: 600
+              fontWeight: 600,
+              border: '1px solid rgba(255, 255, 255, 0.1)'
             }}>
               {kid.name}
             </span>
@@ -388,7 +411,7 @@ function SubjectPageContent() {
         </Link>
 
         {/* Separator Chevron */}
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
           <polyline points="9 18 15 12 9 6" />
         </svg>
 
@@ -398,27 +421,30 @@ function SubjectPageContent() {
           style={{
             display: 'inline-flex',
             alignItems: 'center',
-            gap: '0.45rem',
-            padding: '0.25rem 0.75rem',
-            background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(168, 85, 247, 0.2))',
-            border: '1px solid rgba(129, 140, 248, 0.45)',
-            borderRadius: '8px',
+            gap: '0.55rem',
+            padding: '0.35rem 0.85rem',
+            background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.25), rgba(168, 85, 247, 0.25))',
+            border: '1px solid rgba(129, 140, 248, 0.5)',
+            borderRadius: '10px',
             color: '#fff',
             fontWeight: 700,
-            boxShadow: '0 0 12px rgba(99, 102, 241, 0.25)'
+            boxShadow: '0 0 16px rgba(99, 102, 241, 0.3)',
+            letterSpacing: '-0.01em'
           }}
         >
-          <span style={{ fontSize: '0.9rem' }}>📐</span>
+          <span style={{ fontSize: '0.95rem' }}>📐</span>
           <span>{subject?.title ? `${subject.title} Hub` : 'Mathematics Hub'}</span>
           <span style={{
             fontSize: '0.68rem',
-            padding: '0.1rem 0.4rem',
-            borderRadius: '4px',
-            background: 'rgba(52, 211, 153, 0.2)',
+            padding: '0.12rem 0.45rem',
+            borderRadius: '6px',
+            background: 'rgba(52, 211, 153, 0.25)',
+            border: '1px solid rgba(52, 211, 153, 0.4)',
             color: '#34d399',
-            fontWeight: 700
+            fontWeight: 800,
+            letterSpacing: '0.04em'
           }}>
-            ACTIVE
+            CURRENT HUB
           </span>
         </div>
       </nav>
@@ -460,10 +486,30 @@ function SubjectPageContent() {
                   setTempRetentionDays(String(examRetentionDays !== undefined ? examRetentionDays : 7));
                   setShowSubjectSettings(true);
                 }}
-                style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: 'var(--text-secondary)', cursor: 'pointer', padding: '0.45rem', borderRadius: '10px', display: 'flex', alignItems: 'center', transition: 'all 0.2s' }}
+                style={{
+                  background: 'rgba(255,255,255,0.06)',
+                  border: '1px solid rgba(255,255,255,0.1)',
+                  color: 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  padding: '0.5rem',
+                  borderRadius: '10px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)'
+                }}
                 title="Universal Subject Settings & Auto-Archive Policy"
-                onMouseOver={(e) => { e.currentTarget.style.color = 'var(--accent-primary)'; e.currentTarget.style.borderColor = 'var(--accent-primary)'; }}
-                onMouseOut={(e) => { e.currentTarget.style.color = 'var(--text-secondary)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)'; }}
+                onMouseOver={(e) => {
+                  e.currentTarget.style.color = '#818cf8';
+                  e.currentTarget.style.borderColor = 'rgba(129, 140, 248, 0.5)';
+                  e.currentTarget.style.transform = 'rotate(45deg)';
+                  e.currentTarget.style.background = 'rgba(99, 102, 241, 0.15)';
+                }}
+                onMouseOut={(e) => {
+                  e.currentTarget.style.color = 'var(--text-secondary)';
+                  e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)';
+                  e.currentTarget.style.transform = 'rotate(0deg)';
+                  e.currentTarget.style.background = 'rgba(255,255,255,0.06)';
+                }}
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
               </button>
@@ -493,10 +539,19 @@ function SubjectPageContent() {
                   fontSize: '0.85rem',
                   fontWeight: 600,
                   textDecoration: 'none',
-                  transition: 'all 0.2s'
+                  transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                  boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)'
                 }}
-                onMouseOver={(e) => e.currentTarget.style.background = 'rgba(56, 189, 248, 0.25)'}
-                onMouseOut={(e) => e.currentTarget.style.background = 'rgba(56, 189, 248, 0.15)'}
+                onMouseOver={(e) => {
+                  e.currentTarget.style.background = 'rgba(56, 189, 248, 0.25)';
+                  e.currentTarget.style.transform = 'translateY(-2px)';
+                  e.currentTarget.style.boxShadow = '0 6px 16px rgba(56, 189, 248, 0.35)';
+                }}
+                onMouseOut={(e) => {
+                  e.currentTarget.style.background = 'rgba(56, 189, 248, 0.15)';
+                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.2)';
+                }}
               >
                 <span>Read Textbook 📖</span>
               </a>
@@ -517,16 +572,25 @@ function SubjectPageContent() {
                   gap: '0.4rem',
                   padding: '0.6rem 1.1rem',
                   background: 'rgba(255, 255, 255, 0.05)',
-                  border: '1px solid rgba(255, 255, 255, 0.12)',
+                  border: '1px solid rgba(255, 255, 255, 0.14)',
                   borderRadius: '10px',
                   color: '#f8fafc',
                   fontSize: '0.85rem',
                   fontWeight: 600,
                   cursor: 'pointer',
-                  transition: 'all 0.2s'
+                  transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                  boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)'
                 }}
-                onMouseOver={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'}
-                onMouseOut={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'}
+                onMouseOver={(e) => {
+                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.12)';
+                  e.currentTarget.style.transform = 'translateY(-2px)';
+                  e.currentTarget.style.boxShadow = '0 4px 14px rgba(0, 0, 0, 0.3)';
+                }}
+                onMouseOut={(e) => {
+                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
+                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.2)';
+                }}
               >
                 <span>+ Add Chapter</span>
               </button>
@@ -547,10 +611,17 @@ function SubjectPageContent() {
                 fontWeight: 600,
                 cursor: 'pointer',
                 boxShadow: '0 4px 14px rgba(99, 102, 241, 0.35)',
-                transition: 'all 0.2s'
+                transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
               }}
-              onMouseOver={(e) => e.currentTarget.style.transform = 'translateY(-1px)'}
-              onMouseOut={(e) => e.currentTarget.style.transform = 'translateY(0)'}
+              onMouseOver={(e) => {
+                e.currentTarget.style.transform = 'translateY(-2px)';
+                e.currentTarget.style.boxShadow = '0 8px 24px rgba(99, 102, 241, 0.5)';
+              }}
+              onMouseOut={(e) => {
+                e.currentTarget.style.transform = 'translateY(0)';
+                e.currentTarget.style.boxShadow = '0 4px 14px rgba(99, 102, 241, 0.35)';
+              }}
+              onMouseDown={(e) => e.currentTarget.style.transform = 'scale(0.98)'}
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
               <span>Add Exam</span>
@@ -561,8 +632,8 @@ function SubjectPageContent() {
 
       {/* 3. HIGH-CONTRAST SCANNABLE VISUAL: Overall Subject Syllabus Mastery */}
       <div style={{
-        background: 'linear-gradient(135deg, rgba(17, 24, 39, 0.95), rgba(30, 27, 75, 0.8))',
-        border: '1px solid rgba(129, 140, 248, 0.25)',
+        background: 'linear-gradient(135deg, rgba(17, 24, 39, 0.95), rgba(30, 27, 75, 0.85))',
+        border: '1px solid rgba(129, 140, 248, 0.3)',
         borderRadius: '20px',
         padding: '1.75rem 2rem',
         marginBottom: '2rem',
@@ -576,17 +647,17 @@ function SubjectPageContent() {
           position: 'absolute',
           top: '-40px',
           right: '-40px',
-          width: '200px',
-          height: '200px',
-          background: 'radial-gradient(circle, rgba(99, 102, 241, 0.25) 0%, transparent 70%)',
+          width: '220px',
+          height: '220px',
+          background: 'radial-gradient(circle, rgba(99, 102, 241, 0.3) 0%, transparent 70%)',
           pointerEvents: 'none'
         }} />
 
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <span style={{ fontSize: '1.25rem' }}>🎯</span>
-              <h2 style={{ margin: 0, fontSize: '1.3rem', fontWeight: 700, color: '#fff', letterSpacing: '-0.01em' }}>
+              <span style={{ fontSize: '1.3rem' }}>🎯</span>
+              <h2 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 700, color: '#fff', letterSpacing: '-0.01em' }}>
                 Overall Subject Syllabus Mastery
               </h2>
             </div>
@@ -598,75 +669,141 @@ function SubjectPageContent() {
           <div style={{
             display: 'inline-flex',
             alignItems: 'center',
-            gap: '0.45rem',
-            padding: '0.35rem 0.85rem',
-            borderRadius: '20px',
+            gap: '0.5rem',
+            padding: '0.45rem 1rem',
+            borderRadius: '9999px',
             background: subjectProgressPercent === 100 
               ? 'rgba(16, 185, 129, 0.2)' 
               : subjectProgressPercent > 0 
                 ? 'rgba(99, 102, 241, 0.2)' 
-                : 'rgba(148, 163, 184, 0.15)',
+                : 'linear-gradient(135deg, rgba(56, 189, 248, 0.18), rgba(99, 102, 241, 0.18))',
             border: `1px solid ${
               subjectProgressPercent === 100 
-                ? 'rgba(52, 211, 153, 0.4)' 
+                ? 'rgba(52, 211, 153, 0.5)' 
                 : subjectProgressPercent > 0 
-                  ? 'rgba(165, 180, 252, 0.4)' 
-                  : 'rgba(148, 163, 184, 0.3)'
+                  ? 'rgba(165, 180, 252, 0.5)' 
+                  : 'rgba(56, 189, 248, 0.5)'
             }`,
-            color: subjectProgressPercent === 100 ? '#34d399' : subjectProgressPercent > 0 ? '#a5b4fc' : '#94a3b8',
+            color: subjectProgressPercent === 100 ? '#34d399' : subjectProgressPercent > 0 ? '#a5b4fc' : '#38bdf8',
             fontSize: '0.84rem',
-            fontWeight: 700
+            fontWeight: 700,
+            boxShadow: subjectProgressPercent === 0 ? '0 0 16px rgba(56, 189, 248, 0.25)' : 'none'
           }}>
-            <span>{subjectProgressPercent === 100 ? '🎉 Fully Mastered' : subjectProgressPercent > 0 ? '🚀 In Active Study' : '🌱 Ready to Begin'}</span>
+            <span>{subjectProgressPercent === 100 ? '🎉 Fully Mastered' : subjectProgressPercent > 0 ? '🚀 In Active Study' : '🌱 Ready to Begin (0% Complete)'}</span>
           </div>
         </div>
 
         {/* High-Contrast Core Display: Radial Progress + Metric Cards */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '2.5rem', flexWrap: 'wrap' }}>
           
-          {/* Radial SVG Gauge with Glowing High-Contrast Stroke */}
-          <div style={{ position: 'relative', width: '110px', height: '110px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <svg width="110" height="110" viewBox="0 0 110 110" style={{ transform: 'rotate(-90deg)' }}>
+          {/* Radial SVG Gauge with Glowing High-Contrast Stroke & Precision Pip for 0% */}
+          <div style={{ position: 'relative', width: '124px', height: '124px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <svg width="124" height="124" viewBox="0 0 120 120" style={{ transform: 'rotate(-90deg)' }}>
               <defs>
                 <linearGradient id="mastery-radial-grad" x1="0%" y1="0%" x2="100%" y2="100%">
                   <stop offset="0%" stopColor="#38bdf8" />
                   <stop offset="50%" stopColor="#818cf8" />
                   <stop offset="100%" stopColor="#34d399" />
                 </linearGradient>
-                <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
-                  <feDropShadow dx="0" dy="0" stdDeviation="3" floodColor="#38bdf8" floodOpacity="0.4" />
+                <filter id="glow-pip" x="-40%" y="-40%" width="180%" height="180%">
+                  <feDropShadow dx="0" dy="0" stdDeviation="4" floodColor="#38bdf8" floodOpacity="0.8" />
+                </filter>
+                <filter id="glow-progress" x="-20%" y="-20%" width="140%" height="140%">
+                  <feDropShadow dx="0" dy="0" stdDeviation="4" floodColor="#818cf8" floodOpacity="0.6" />
                 </filter>
               </defs>
-              {/* Background Track */}
+
+              {/* Precision outer calibration guide ring */}
               <circle
-                cx="55"
-                cy="55"
-                r="44"
-                stroke="rgba(255, 255, 255, 0.08)"
-                strokeWidth="8"
+                cx="60"
+                cy="60"
+                r="54"
+                stroke={subjectProgressPercent === 0 ? "rgba(56, 189, 248, 0.4)" : "rgba(148, 163, 184, 0.25)"}
+                strokeWidth="1.5"
+                strokeDasharray="3 4"
                 fill="transparent"
               />
-              {/* Active Progress Ring */}
+
+              {/* High-Contrast Baseline Track */}
               <circle
-                cx="55"
-                cy="55"
-                r="44"
-                stroke={subjectProgressPercent === 100 ? '#34d399' : subjectProgressPercent > 0 ? 'url(#mastery-radial-grad)' : 'rgba(255, 255, 255, 0.12)'}
-                strokeWidth="8"
-                strokeDasharray={276.46}
-                strokeDashoffset={276.46 - (276.46 * subjectProgressPercent) / 100}
-                strokeLinecap="round"
-                fill="transparent"
-                filter={subjectProgressPercent > 0 ? "url(#glow)" : "none"}
-                style={{ transition: 'stroke-dashoffset 0.6s cubic-bezier(0.4, 0, 0.2, 1)' }}
+                cx="60"
+                cy="60"
+                r="46"
+                stroke="rgba(255, 255, 255, 0.16)"
+                strokeWidth="9"
+                fill="rgba(15, 23, 42, 0.6)"
               />
+
+              {/* For 0% Syllabus: High-Contrast Primed Calibration Track */}
+              {subjectProgressPercent === 0 && (
+                <circle
+                  cx="60"
+                  cy="60"
+                  r="46"
+                  stroke="rgba(56, 189, 248, 0.35)"
+                  strokeWidth="9"
+                  strokeDasharray="2 5"
+                  fill="transparent"
+                />
+              )}
+
+              {/* Active Progress Ring (when > 0%) */}
+              {subjectProgressPercent > 0 && (
+                <circle
+                  cx="60"
+                  cy="60"
+                  r="46"
+                  stroke={subjectProgressPercent === 100 ? '#34d399' : 'url(#mastery-radial-grad)'}
+                  strokeWidth="9"
+                  strokeDasharray={289.02}
+                  strokeDashoffset={289.02 - (289.02 * subjectProgressPercent) / 100}
+                  strokeLinecap="round"
+                  fill="transparent"
+                  filter="url(#glow-progress)"
+                  style={{ transition: 'stroke-dashoffset 0.6s cubic-bezier(0.4, 0, 0.2, 1)' }}
+                />
+              )}
+
+              {/* High-Contrast Starter Pip at 12 o'clock for 0% standing */}
+              {subjectProgressPercent === 0 && (
+                <circle
+                  cx="106"
+                  cy="60"
+                  r="5"
+                  fill="#38bdf8"
+                  stroke="#ffffff"
+                  strokeWidth="1.5"
+                  filter="url(#glow-pip)"
+                />
+              )}
             </svg>
-            <div style={{ position: 'absolute', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center' }}>
-              <span style={{ fontSize: '1.65rem', fontWeight: 800, color: subjectProgressPercent === 100 ? '#34d399' : '#fff', lineHeight: 1, letterSpacing: '-0.03em' }}>
+
+            {/* Dial Center Information */}
+            <div style={{ position: 'absolute', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', userSelect: 'none' }}>
+              <span style={{
+                fontSize: '1.85rem',
+                fontWeight: 800,
+                color: subjectProgressPercent === 100 ? '#34d399' : '#fff',
+                lineHeight: 1,
+                letterSpacing: '-0.03em',
+                textShadow: subjectProgressPercent === 0 ? '0 0 16px rgba(56, 189, 248, 0.6)' : 'none'
+              }}>
                 {subjectProgressPercent}%
               </span>
-              <span style={{ fontSize: '0.62rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: '3px', fontWeight: 700 }}>
-                SYLLABUS
+              <span style={{
+                fontSize: '0.62rem',
+                color: subjectProgressPercent === 0 ? '#38bdf8' : '#94a3b8',
+                background: subjectProgressPercent === 0 ? 'rgba(56, 189, 248, 0.18)' : 'rgba(255, 255, 255, 0.08)',
+                border: subjectProgressPercent === 0 ? '1px solid rgba(56, 189, 248, 0.5)' : '1px solid rgba(255, 255, 255, 0.12)',
+                padding: '0.15rem 0.5rem',
+                borderRadius: '6px',
+                textTransform: 'uppercase',
+                letterSpacing: '0.08em',
+                marginTop: '4px',
+                fontWeight: 800,
+                boxShadow: subjectProgressPercent === 0 ? '0 0 12px rgba(56, 189, 248, 0.3)' : 'none'
+              }}>
+                {subjectProgressPercent === 0 ? '0% SYLLABUS' : 'SYLLABUS'}
               </span>
             </div>
           </div>
@@ -1127,40 +1264,73 @@ function SubjectPageContent() {
               </button>
             )}
 
-            {/* Accordion Expand / Collapse Pill */}
-            <div
+            {/* Accordion Expand / Collapse Interactive Component */}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsChaptersExpanded(prev => !prev);
+              }}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: '0.45rem',
-                padding: '0.4rem 0.85rem',
-                borderRadius: '8px',
-                background: isChaptersExpanded ? 'rgba(99, 102, 241, 0.22)' : 'rgba(255, 255, 255, 0.06)',
-                border: isChaptersExpanded ? '1px solid rgba(129, 140, 248, 0.45)' : '1px solid rgba(255, 255, 255, 0.12)',
-                color: isChaptersExpanded ? '#c7d2fe' : '#e2e8f0',
-                fontSize: '0.8rem',
-                fontWeight: 600,
-                transition: 'all 0.15s ease'
+                gap: '0.6rem',
+                padding: '0.45rem 1rem',
+                borderRadius: '9999px',
+                background: isChaptersExpanded 
+                  ? 'linear-gradient(135deg, rgba(99, 102, 241, 0.28), rgba(168, 85, 247, 0.22))' 
+                  : 'rgba(255, 255, 255, 0.06)',
+                border: isChaptersExpanded 
+                  ? '1px solid rgba(129, 140, 248, 0.55)' 
+                  : '1px solid rgba(255, 255, 255, 0.14)',
+                color: isChaptersExpanded ? '#e0e7ff' : '#cbd5e1',
+                fontSize: '0.82rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+                boxShadow: isChaptersExpanded ? '0 0 16px rgba(99, 102, 241, 0.3)' : '0 2px 8px rgba(0, 0, 0, 0.2)'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.transform = 'translateY(-1px)';
+                e.currentTarget.style.borderColor = 'rgba(129, 140, 248, 0.7)';
+                if (!isChaptersExpanded) e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.transform = 'translateY(0)';
+                e.currentTarget.style.borderColor = isChaptersExpanded ? 'rgba(129, 140, 248, 0.55)' : 'rgba(255, 255, 255, 0.14)';
+                if (!isChaptersExpanded) e.currentTarget.style.background = 'rgba(255, 255, 255, 0.06)';
               }}
             >
               <span>{isChaptersExpanded ? 'Collapse Curriculum' : `View All Chapters (${totalSubjectChapters})`}</span>
-              <svg
-                width="13"
-                height="13"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                style={{
-                  transform: isChaptersExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
-                  transition: 'transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)'
-                }}
-              >
-                <polyline points="6 9 12 15 18 9" />
-              </svg>
-            </div>
+              <span style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: '22px',
+                height: '22px',
+                borderRadius: '50%',
+                background: isChaptersExpanded ? 'rgba(99, 102, 241, 0.35)' : 'rgba(255, 255, 255, 0.1)',
+                transition: 'all 0.25s ease'
+              }}>
+                <svg
+                  width="13"
+                  height="13"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  style={{
+                    transform: isChaptersExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                    transition: 'transform 0.35s cubic-bezier(0.4, 0, 0.2, 1)',
+                    color: isChaptersExpanded ? '#a5b4fc' : '#94a3b8'
+                  }}
+                >
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </span>
+            </button>
           </div>
         </div>
 
@@ -1205,9 +1375,49 @@ function SubjectPageContent() {
               </span>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#818cf8', fontSize: '0.78rem', fontWeight: 600 }}>
-              <span>Expand Chapter List</span>
-              <span>▾</span>
+            {/* Interactive Expand Trigger Pill Component */}
+            <div style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              padding: '0.4rem 0.85rem',
+              borderRadius: '9999px',
+              background: 'rgba(99, 102, 241, 0.15)',
+              border: '1px solid rgba(129, 140, 248, 0.35)',
+              color: '#c7d2fe',
+              fontSize: '0.78rem',
+              fontWeight: 700,
+              transition: 'all 0.2s ease',
+              boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)'
+            }}>
+              <span>Expand Chapter List ({totalSubjectChapters})</span>
+              <span style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: '20px',
+                height: '20px',
+                borderRadius: '50%',
+                background: 'rgba(99, 102, 241, 0.25)'
+              }}>
+                <svg
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  style={{
+                    transform: isChaptersExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                    transition: 'transform 0.35s cubic-bezier(0.4, 0, 0.2, 1)',
+                    color: '#a5b4fc'
+                  }}
+                >
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </span>
             </div>
           </div>
         )}
@@ -1462,21 +1672,60 @@ function SubjectPageContent() {
             type="button"
             onClick={() => setIsChaptersExpanded(false)}
             style={{
-              background: 'transparent',
-              border: 'none',
-              color: '#a5b4fc',
-              fontSize: '0.78rem',
-              fontWeight: 600,
-              cursor: 'pointer',
-              display: 'flex',
+              display: 'inline-flex',
               alignItems: 'center',
-              gap: '0.35rem'
+              gap: '0.5rem',
+              padding: '0.45rem 1rem',
+              borderRadius: '9999px',
+              background: 'rgba(255, 255, 255, 0.05)',
+              border: '1px solid rgba(255, 255, 255, 0.14)',
+              color: '#cbd5e1',
+              fontSize: '0.78rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = 'rgba(99, 102, 241, 0.18)';
+              e.currentTarget.style.borderColor = 'rgba(129, 140, 248, 0.5)';
+              e.currentTarget.style.color = '#fff';
+              e.currentTarget.style.transform = 'translateY(-1px)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
+              e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.14)';
+              e.currentTarget.style.color = '#cbd5e1';
+              e.currentTarget.style.transform = 'translateY(0)';
             }}
           >
             <span>Collapse Curriculum</span>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="18 15 12 9 6 15" />
-            </svg>
+            <span style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: '20px',
+              height: '20px',
+              borderRadius: '50%',
+              background: 'rgba(99, 102, 241, 0.25)'
+            }}>
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                style={{
+                  transform: 'rotate(180deg)',
+                  transition: 'transform 0.35s cubic-bezier(0.4, 0, 0.2, 1)',
+                  color: '#a5b4fc'
+                }}
+              >
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </span>
           </button>
         </div>
       </div>
@@ -1590,40 +1839,73 @@ function SubjectPageContent() {
               + Add Exam
             </button>
 
-            {/* Accordion Expand / Collapse Pill */}
-            <div
+            {/* Accordion Expand / Collapse Interactive Component */}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsExamsExpanded(prev => !prev);
+              }}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: '0.45rem',
-                padding: '0.4rem 0.85rem',
-                borderRadius: '8px',
-                background: isExamsExpanded ? 'rgba(99, 102, 241, 0.22)' : 'rgba(255, 255, 255, 0.06)',
-                border: isExamsExpanded ? '1px solid rgba(129, 140, 248, 0.45)' : '1px solid rgba(255, 255, 255, 0.12)',
-                color: isExamsExpanded ? '#c7d2fe' : '#e2e8f0',
-                fontSize: '0.8rem',
-                fontWeight: 600,
-                transition: 'all 0.15s ease'
+                gap: '0.6rem',
+                padding: '0.45rem 1rem',
+                borderRadius: '9999px',
+                background: isExamsExpanded 
+                  ? 'linear-gradient(135deg, rgba(99, 102, 241, 0.28), rgba(168, 85, 247, 0.22))' 
+                  : 'rgba(255, 255, 255, 0.06)',
+                border: isExamsExpanded 
+                  ? '1px solid rgba(129, 140, 248, 0.55)' 
+                  : '1px solid rgba(255, 255, 255, 0.14)',
+                color: isExamsExpanded ? '#e0e7ff' : '#cbd5e1',
+                fontSize: '0.82rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+                boxShadow: isExamsExpanded ? '0 0 16px rgba(99, 102, 241, 0.3)' : '0 2px 8px rgba(0, 0, 0, 0.2)'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.transform = 'translateY(-1px)';
+                e.currentTarget.style.borderColor = 'rgba(129, 140, 248, 0.7)';
+                if (!isExamsExpanded) e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.transform = 'translateY(0)';
+                e.currentTarget.style.borderColor = isExamsExpanded ? 'rgba(129, 140, 248, 0.55)' : 'rgba(255, 255, 255, 0.14)';
+                if (!isExamsExpanded) e.currentTarget.style.background = 'rgba(255, 255, 255, 0.06)';
               }}
             >
               <span>{isExamsExpanded ? 'Collapse Exams' : `View All Exam Tracks (${exams.length})`}</span>
-              <svg
-                width="13"
-                height="13"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                style={{
-                  transform: isExamsExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
-                  transition: 'transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)'
-                }}
-              >
-                <polyline points="6 9 12 15 18 9" />
-              </svg>
-            </div>
+              <span style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: '22px',
+                height: '22px',
+                borderRadius: '50%',
+                background: isExamsExpanded ? 'rgba(99, 102, 241, 0.35)' : 'rgba(255, 255, 255, 0.1)',
+                transition: 'all 0.25s ease'
+              }}>
+                <svg
+                  width="13"
+                  height="13"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  style={{
+                    transform: isExamsExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                    transition: 'transform 0.35s cubic-bezier(0.4, 0, 0.2, 1)',
+                    color: isExamsExpanded ? '#a5b4fc' : '#94a3b8'
+                  }}
+                >
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </span>
+            </button>
           </div>
         </div>
 
@@ -1670,9 +1952,49 @@ function SubjectPageContent() {
               </span>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#818cf8', fontSize: '0.78rem', fontWeight: 600 }}>
-              <span>Expand Exam Workspaces</span>
-              <span>▾</span>
+            {/* Interactive Expand Trigger Pill Component */}
+            <div style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              padding: '0.4rem 0.85rem',
+              borderRadius: '9999px',
+              background: 'rgba(99, 102, 241, 0.15)',
+              border: '1px solid rgba(129, 140, 248, 0.35)',
+              color: '#c7d2fe',
+              fontSize: '0.78rem',
+              fontWeight: 700,
+              transition: 'all 0.2s ease',
+              boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)'
+            }}>
+              <span>Expand Exam Workspaces ({exams.length})</span>
+              <span style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: '20px',
+                height: '20px',
+                borderRadius: '50%',
+                background: 'rgba(99, 102, 241, 0.25)'
+              }}>
+                <svg
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  style={{
+                    transform: isExamsExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                    transition: 'transform 0.35s cubic-bezier(0.4, 0, 0.2, 1)',
+                    color: '#a5b4fc'
+                  }}
+                >
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </span>
             </div>
           </div>
         )}
@@ -1849,21 +2171,60 @@ function SubjectPageContent() {
             type="button"
             onClick={() => setIsExamsExpanded(false)}
             style={{
-              background: 'transparent',
-              border: 'none',
-              color: '#a5b4fc',
-              fontSize: '0.78rem',
-              fontWeight: 600,
-              cursor: 'pointer',
-              display: 'flex',
+              display: 'inline-flex',
               alignItems: 'center',
-              gap: '0.35rem'
+              gap: '0.5rem',
+              padding: '0.45rem 1rem',
+              borderRadius: '9999px',
+              background: 'rgba(255, 255, 255, 0.05)',
+              border: '1px solid rgba(255, 255, 255, 0.14)',
+              color: '#cbd5e1',
+              fontSize: '0.78rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = 'rgba(99, 102, 241, 0.18)';
+              e.currentTarget.style.borderColor = 'rgba(129, 140, 248, 0.5)';
+              e.currentTarget.style.color = '#fff';
+              e.currentTarget.style.transform = 'translateY(-1px)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
+              e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.14)';
+              e.currentTarget.style.color = '#cbd5e1';
+              e.currentTarget.style.transform = 'translateY(0)';
             }}
           >
             <span>Collapse Exams</span>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="18 15 12 9 6 15" />
-            </svg>
+            <span style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: '20px',
+              height: '20px',
+              borderRadius: '50%',
+              background: 'rgba(99, 102, 241, 0.25)'
+            }}>
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                style={{
+                  transform: 'rotate(180deg)',
+                  transition: 'transform 0.35s cubic-bezier(0.4, 0, 0.2, 1)',
+                  color: '#a5b4fc'
+                }}
+              >
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </span>
           </button>
         </div>
       </div>
