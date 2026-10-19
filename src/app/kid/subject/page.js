@@ -23,6 +23,10 @@ function SubjectPageContent() {
   const [chapterStatusFilter, setChapterStatusFilter] = useState('all'); // 'all' | 'completed' | 'in_progress' | 'not_started'
   const [chapterSearchQuery, setChapterSearchQuery] = useState('');
 
+  // Decluttering: Collapsible accordion panels state (summaries visible by default)
+  const [isChaptersExpanded, setIsChaptersExpanded] = useState(false);
+  const [isExamsExpanded, setIsExamsExpanded] = useState(false);
+
   // Universal Subject Settings Modal state
   const [showSubjectSettings, setShowSubjectSettings] = useState(false);
   const [tempBookUrl, setTempBookUrl] = useState('');
@@ -301,13 +305,122 @@ function SubjectPageContent() {
   return (
     <main className="view-container" style={{ maxWidth: '1200px', margin: '0 auto', padding: '1.5rem', color: '#fff' }}>
       
-      {/* 1. Breadcrumb Navigation */}
-      <nav style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.86rem', color: 'var(--text-secondary)', marginBottom: '1.25rem' }}>
-        <Link href="/" style={{ color: 'var(--text-secondary)', textDecoration: 'none' }}>Dashboard</Link>
-        <span>›</span>
-        <Link href={`/kid/profile?id=${searchParams.get("id")}${parentIdQuery}`} style={{ color: 'var(--text-secondary)', textDecoration: 'none' }}>{kid.name}</Link>
-        <span>›</span>
-        <span style={{ color: '#fff', fontWeight: 600 }}>{subject.title} Hub</span>
+      {/* 1. Enhanced Navigation Breadcrumbs */}
+      <nav
+        aria-label="Breadcrumb navigation"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.65rem',
+          padding: '0.65rem 1rem',
+          background: 'rgba(255, 255, 255, 0.03)',
+          border: '1px solid rgba(255, 255, 255, 0.08)',
+          borderRadius: '12px',
+          marginBottom: '1.5rem',
+          fontSize: '0.86rem',
+          flexWrap: 'wrap',
+          boxShadow: '0 2px 10px rgba(0, 0, 0, 0.2)'
+        }}
+      >
+        {/* Step 1: Dashboard */}
+        <Link
+          href="/"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '0.45rem',
+            color: '#94a3b8',
+            textDecoration: 'none',
+            fontWeight: 500,
+            padding: '0.2rem 0.5rem',
+            borderRadius: '6px',
+            transition: 'all 0.15s ease'
+          }}
+          onMouseOver={(e) => { e.currentTarget.style.color = '#fff'; e.currentTarget.style.background = 'rgba(255, 255, 255, 0.06)'; }}
+          onMouseOut={(e) => { e.currentTarget.style.color = '#94a3b8'; e.currentTarget.style.background = 'transparent'; }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+            <polyline points="9 22 9 12 15 12 15 22" />
+          </svg>
+          <span>Dashboard</span>
+        </Link>
+
+        {/* Separator Chevron */}
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="9 18 15 12 9 6" />
+        </svg>
+
+        {/* Step 2: Student Profile */}
+        <Link
+          href={`/kid/profile?id=${searchParams.get("id")}${parentIdQuery}`}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '0.45rem',
+            color: '#94a3b8',
+            textDecoration: 'none',
+            fontWeight: 500,
+            padding: '0.2rem 0.5rem',
+            borderRadius: '6px',
+            transition: 'all 0.15s ease'
+          }}
+          onMouseOver={(e) => { e.currentTarget.style.color = '#fff'; e.currentTarget.style.background = 'rgba(255, 255, 255, 0.06)'; }}
+          onMouseOut={(e) => { e.currentTarget.style.color = '#94a3b8'; e.currentTarget.style.background = 'transparent'; }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+            <circle cx="12" cy="7" r="4" />
+          </svg>
+          <span>Student Profile</span>
+          {kid?.name && (
+            <span style={{
+              fontSize: '0.72rem',
+              color: '#cbd5e1',
+              background: 'rgba(255, 255, 255, 0.08)',
+              padding: '0.1rem 0.45rem',
+              borderRadius: '6px',
+              fontWeight: 600
+            }}>
+              {kid.name}
+            </span>
+          )}
+        </Link>
+
+        {/* Separator Chevron */}
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="9 18 15 12 9 6" />
+        </svg>
+
+        {/* Step 3: Current Page Location: Mathematics Hub */}
+        <div
+          aria-current="page"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '0.45rem',
+            padding: '0.25rem 0.75rem',
+            background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(168, 85, 247, 0.2))',
+            border: '1px solid rgba(129, 140, 248, 0.45)',
+            borderRadius: '8px',
+            color: '#fff',
+            fontWeight: 700,
+            boxShadow: '0 0 12px rgba(99, 102, 241, 0.25)'
+          }}
+        >
+          <span style={{ fontSize: '0.9rem' }}>📐</span>
+          <span>{subject?.title ? `${subject.title} Hub` : 'Mathematics Hub'}</span>
+          <span style={{
+            fontSize: '0.68rem',
+            padding: '0.1rem 0.4rem',
+            borderRadius: '4px',
+            background: 'rgba(52, 211, 153, 0.2)',
+            color: '#34d399',
+            fontWeight: 700
+          }}>
+            ACTIVE
+          </span>
+        </div>
       </nav>
 
       {/* 2. Hero Header Card */}
@@ -806,8 +919,11 @@ function SubjectPageContent() {
 
             <button
               onClick={() => {
-                const chapterSection = document.getElementById('chapters-curriculum-section');
-                if (chapterSection) chapterSection.scrollIntoView({ behavior: 'smooth' });
+                setIsChaptersExpanded(true);
+                setTimeout(() => {
+                  const chapterSection = document.getElementById('chapters-curriculum-section');
+                  if (chapterSection) chapterSection.scrollIntoView({ behavior: 'smooth' });
+                }, 100);
               }}
               style={{
                 width: '100%',
@@ -853,8 +969,11 @@ function SubjectPageContent() {
 
             <button
               onClick={() => {
-                const examsSection = document.getElementById('upcoming-exams-section');
-                if (examsSection) examsSection.scrollIntoView({ behavior: 'smooth' });
+                setIsExamsExpanded(true);
+                setTimeout(() => {
+                  const examsSection = document.getElementById('upcoming-exams-section');
+                  if (examsSection) examsSection.scrollIntoView({ behavior: 'smooth' });
+                }, 100);
               }}
               style={{
                 width: '100%',
@@ -906,59 +1025,198 @@ function SubjectPageContent() {
         </div>
       </div>
 
-      {/* 5. FILTERABLE CHAPTERS & SYLLABUS LIST WITH CLEAR PROGRESS INDICATORS */}
+      {/* 5. FILTERABLE CHAPTERS & SYLLABUS LIST (COLLAPSIBLE ACCORDION PANEL - SUMMARY BY DEFAULT) */}
       <div 
         id="chapters-curriculum-section"
         style={{
           background: 'rgba(255, 255, 255, 0.025)',
-          border: '1px solid rgba(255, 255, 255, 0.08)',
+          border: isChaptersExpanded ? '1px solid rgba(129, 140, 248, 0.35)' : '1px solid rgba(255, 255, 255, 0.08)',
           borderRadius: '18px',
-          padding: '1.6rem',
-          marginBottom: '2.5rem',
-          textAlign: 'left'
+          padding: '1.4rem 1.6rem',
+          marginBottom: '2rem',
+          textAlign: 'left',
+          transition: 'all 0.2s ease',
+          boxShadow: isChaptersExpanded ? '0 12px 30px -8px rgba(0, 0, 0, 0.5)' : 'none'
         }}
       >
-        {/* Section Header with Search & Filter Tabs */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.25rem' }}>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <span style={{ fontSize: '1.25rem' }}>📑</span>
-              <h2 style={{ fontSize: '1.3rem', fontWeight: 700, color: '#fff', margin: 0 }}>
-                Chapters & Syllabus Curriculum
-              </h2>
+        {/* Accordion Header Bar (Clickable) */}
+        <div
+          onClick={() => setIsChaptersExpanded(prev => !prev)}
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            cursor: 'pointer',
+            userSelect: 'none',
+            flexWrap: 'wrap',
+            gap: '1rem',
+            paddingBottom: isChaptersExpanded ? '1.25rem' : '0.2rem',
+            borderBottom: isChaptersExpanded ? '1px solid rgba(255, 255, 255, 0.08)' : 'none',
+            transition: 'padding-bottom 0.2s ease'
+          }}
+        >
+          {/* Left: Icon, Title & Summary Meta */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+            <div style={{
+              width: '42px',
+              height: '42px',
+              borderRadius: '12px',
+              background: isChaptersExpanded ? 'rgba(99, 102, 241, 0.2)' : 'rgba(255, 255, 255, 0.05)',
+              border: isChaptersExpanded ? '1px solid rgba(129, 140, 248, 0.4)' : '1px solid rgba(255, 255, 255, 0.1)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '1.25rem'
+            }}>
+              📑
             </div>
-            <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-              Filtered by mastery status with instant completion toggles and textbook page references
-            </p>
+
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#fff', margin: 0 }}>
+                  Chapters & Syllabus Curriculum
+                </h2>
+                <span style={{
+                  fontSize: '0.74rem',
+                  fontWeight: 700,
+                  padding: '0.15rem 0.55rem',
+                  borderRadius: '8px',
+                  background: completedSubjectChapters === totalSubjectChapters && totalSubjectChapters > 0
+                    ? 'rgba(16, 185, 129, 0.15)'
+                    : 'rgba(99, 102, 241, 0.15)',
+                  color: completedSubjectChapters === totalSubjectChapters && totalSubjectChapters > 0
+                    ? '#34d399'
+                    : '#a5b4fc'
+                }}>
+                  {completedSubjectChapters} of {totalSubjectChapters} Mastered
+                </span>
+              </div>
+              <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                {isChaptersExpanded
+                  ? 'Filtered by mastery status with instant completion toggles and textbook page references.'
+                  : 'Curriculum summary view. Expand to manage individual chapters, track topics, or launch study desks.'}
+              </p>
+            </div>
           </div>
 
-          {/* Action to add chapter */}
-          {exams.length > 0 && (
-            <button
-              onClick={() => {
-                setTargetExamForChapter(exams[0]);
-                setNewChapterTitle('');
-                setNewChapterPdfPage('');
-                setShowAddChapterModal(true);
-              }}
+          {/* Right: Add Chapter + Accordion Toggle Chevron */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+            {exams.length > 0 && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setTargetExamForChapter(exams[0]);
+                  setNewChapterTitle('');
+                  setNewChapterPdfPage('');
+                  setShowAddChapterModal(true);
+                }}
+                style={{
+                  padding: '0.4rem 0.85rem',
+                  background: 'rgba(99, 102, 241, 0.15)',
+                  border: '1px solid rgba(99, 102, 241, 0.35)',
+                  borderRadius: '8px',
+                  color: '#a5b4fc',
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                + Add Chapter
+              </button>
+            )}
+
+            {/* Accordion Expand / Collapse Pill */}
+            <div
               style={{
-                padding: '0.45rem 0.9rem',
-                background: 'rgba(99, 102, 241, 0.15)',
-                border: '1px solid rgba(99, 102, 241, 0.35)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.45rem',
+                padding: '0.4rem 0.85rem',
                 borderRadius: '8px',
-                color: '#a5b4fc',
-                fontSize: '0.82rem',
+                background: isChaptersExpanded ? 'rgba(99, 102, 241, 0.22)' : 'rgba(255, 255, 255, 0.06)',
+                border: isChaptersExpanded ? '1px solid rgba(129, 140, 248, 0.45)' : '1px solid rgba(255, 255, 255, 0.12)',
+                color: isChaptersExpanded ? '#c7d2fe' : '#e2e8f0',
+                fontSize: '0.8rem',
                 fontWeight: 600,
-                cursor: 'pointer'
+                transition: 'all 0.15s ease'
               }}
             >
-              + Add Chapter
-            </button>
-          )}
+              <span>{isChaptersExpanded ? 'Collapse Curriculum' : `View All Chapters (${totalSubjectChapters})`}</span>
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                style={{
+                  transform: isChaptersExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                  transition: 'transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)'
+                }}
+              >
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </div>
+          </div>
         </div>
 
-        {/* Filter Bar: Live Search + Status Tabs */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.85rem', marginBottom: '1.25rem' }}>
+        {/* DEFAULT SUMMARY PREVIEW BAR (Visible when Collapsed) */}
+        {!isChaptersExpanded && (
+          <div
+            onClick={() => setIsChaptersExpanded(true)}
+            style={{
+              marginTop: '0.9rem',
+              padding: '0.9rem 1.15rem',
+              background: 'rgba(0, 0, 0, 0.25)',
+              border: '1px solid rgba(255, 255, 255, 0.05)',
+              borderRadius: '12px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              cursor: 'pointer',
+              flexWrap: 'wrap',
+              gap: '1rem',
+              transition: 'background 0.15s ease'
+            }}
+            onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.03)'}
+            onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(0, 0, 0, 0.25)'}
+          >
+            {/* Quick Metrics Badges */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', flexWrap: 'wrap' }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.78rem', color: '#34d399', fontWeight: 600 }}>
+                <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#34d399' }} />
+                {completedSubjectChapters} Mastered
+              </span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.78rem', color: '#fbbf24', fontWeight: 600 }}>
+                <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#fbbf24' }} />
+                {inProgressSubjectChapters} In Progress
+              </span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.78rem', color: '#94a3b8', fontWeight: 600 }}>
+                <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#64748b' }} />
+                {notStartedSubjectChapters} Not Started
+              </span>
+
+              <span style={{ color: 'var(--text-secondary)', fontSize: '0.76rem', borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: '0.85rem' }}>
+                Summary active • Detailed cards collapsed to keep interface clutter-free
+              </span>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#818cf8', fontSize: '0.78rem', fontWeight: 600 }}>
+              <span>Expand Chapter List</span>
+              <span>▾</span>
+            </div>
+          </div>
+        )}
+
+        {/* EXPANDED VIEW: Search & Filter Tabs + Full Chapters Grid */}
+        {isChaptersExpanded && (
+          <div style={{ marginTop: '1.25rem', animation: 'fadeIn 0.2s ease-out' }}>
+            {/* Filter Bar: Live Search + Status Tabs */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.85rem', marginBottom: '1.25rem' }}>
           
           {/* Status Tabs */}
           <div style={{
@@ -1187,50 +1445,251 @@ function SubjectPageContent() {
             })}
           </div>
         )}
-      </div>
 
-      {/* 6. UPCOMING EXAMINATIONS SUMMARY (CLUTTER-FREE, LINKING TO DEDICATED EXAM PAGES) */}
-      <div id="upcoming-exams-section" style={{ textAlign: 'left', marginBottom: '2.5rem' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <span style={{ fontSize: '1.25rem' }}>📝</span>
-              <h2 style={{ fontSize: '1.3rem', fontWeight: 700, color: '#fff', margin: 0 }}>
-                Upcoming Examinations Summary
-              </h2>
-            </div>
-            <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-              Summary of scheduled exams. Access dedicated exam workspaces for detailed mark distribution, model tests, and evaluation.
-            </p>
-          </div>
-
+        {/* Bottom Collapse Bar */}
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          paddingTop: '1rem',
+          marginTop: '1rem',
+          borderTop: '1px solid rgba(255, 255, 255, 0.06)'
+        }}>
+          <span style={{ fontSize: '0.76rem', color: 'var(--text-secondary)' }}>
+            Showing {filteredChapters.length} of {totalSubjectChapters} syllabus chapters
+          </span>
           <button
-            onClick={() => { setNewExamTitle(''); setShowAddExamModal(true); }}
+            type="button"
+            onClick={() => setIsChaptersExpanded(false)}
             style={{
-              padding: '0.45rem 0.95rem',
-              background: 'rgba(99, 102, 241, 0.18)',
-              border: '1px solid rgba(99, 102, 241, 0.35)',
-              borderRadius: '8px',
-              color: 'var(--accent-primary)',
-              fontSize: '0.82rem',
+              background: 'transparent',
+              border: 'none',
+              color: '#a5b4fc',
+              fontSize: '0.78rem',
               fontWeight: 600,
-              cursor: 'pointer'
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.35rem'
             }}
           >
-            + Add Exam
+            <span>Collapse Curriculum</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="18 15 12 9 6 15" />
+            </svg>
           </button>
         </div>
+      </div>
+    )}
+  </div>
 
-        {/* Exams Summary Cards Grid */}
-        {exams.length === 0 ? (
-          <div style={{ padding: '2.5rem 1rem', background: 'rgba(0,0,0,0.18)', borderRadius: '14px', border: '1px dashed rgba(255,255,255,0.08)', textAlign: 'center' }}>
-            <p style={{ color: 'var(--text-secondary)', margin: '0 0 1rem 0', fontSize: '0.9rem' }}>No exams created for this subject yet.</p>
-            <button onClick={() => setShowAddExamModal(true)} className="primary" style={{ padding: '0.5rem 1.25rem', borderRadius: '8px' }}>
-              + Add First Exam
-            </button>
+      {/* 6. UPCOMING EXAMINATIONS SUMMARY (COLLAPSIBLE ACCORDION PANEL - SUMMARY BY DEFAULT) */}
+      <div 
+        id="upcoming-exams-section" 
+        style={{
+          background: 'rgba(255, 255, 255, 0.025)',
+          border: isExamsExpanded ? '1px solid rgba(129, 140, 248, 0.35)' : '1px solid rgba(255, 255, 255, 0.08)',
+          borderRadius: '18px',
+          padding: '1.4rem 1.6rem',
+          marginBottom: '2.5rem',
+          textAlign: 'left',
+          transition: 'all 0.2s ease',
+          boxShadow: isExamsExpanded ? '0 12px 30px -8px rgba(0, 0, 0, 0.5)' : 'none'
+        }}
+      >
+        {/* Accordion Header Bar (Clickable) */}
+        <div
+          onClick={() => setIsExamsExpanded(prev => !prev)}
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            cursor: 'pointer',
+            userSelect: 'none',
+            flexWrap: 'wrap',
+            gap: '1rem',
+            paddingBottom: isExamsExpanded ? '1.25rem' : '0.2rem',
+            borderBottom: isExamsExpanded ? '1px solid rgba(255, 255, 255, 0.08)' : 'none',
+            transition: 'padding-bottom 0.2s ease'
+          }}
+        >
+          {/* Left: Icon, Title & Summary Meta */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+            <div style={{
+              width: '42px',
+              height: '42px',
+              borderRadius: '12px',
+              background: isExamsExpanded ? 'rgba(99, 102, 241, 0.2)' : 'rgba(255, 255, 255, 0.05)',
+              border: isExamsExpanded ? '1px solid rgba(129, 140, 248, 0.4)' : '1px solid rgba(255, 255, 255, 0.1)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '1.25rem'
+            }}>
+              📝
+            </div>
+
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#fff', margin: 0 }}>
+                  Upcoming Examinations Summary
+                </h2>
+                <span style={{
+                  fontSize: '0.74rem',
+                  fontWeight: 700,
+                  padding: '0.15rem 0.55rem',
+                  borderRadius: '8px',
+                  background: 'rgba(99, 102, 241, 0.15)',
+                  color: '#a5b4fc'
+                }}>
+                  {exams.length} {exams.length === 1 ? 'Exam Track' : 'Exam Tracks'} Mapped
+                </span>
+                {nextUpExam && (
+                  <span style={{
+                    fontSize: '0.7rem',
+                    fontWeight: 700,
+                    padding: '0.12rem 0.5rem',
+                    borderRadius: '8px',
+                    background: 'rgba(245, 158, 11, 0.18)',
+                    color: '#fbbf24',
+                    border: '1px solid rgba(251, 191, 36, 0.35)'
+                  }}>
+                    ⚡ Next Up: {nextUpExam.title}
+                  </span>
+                )}
+              </div>
+              <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                {isExamsExpanded
+                  ? 'Dedicated exam workspaces with mark distributions, model test history, and scoring.'
+                  : 'Exam track summary view. Expand to enter dedicated workspaces or view readiness per exam.'}
+              </p>
+            </div>
           </div>
-        ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1rem' }}>
+
+          {/* Right: Add Exam + Accordion Toggle Chevron */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setNewExamTitle('');
+                setShowAddExamModal(true);
+              }}
+              style={{
+                padding: '0.4rem 0.85rem',
+                background: 'rgba(99, 102, 241, 0.15)',
+                border: '1px solid rgba(99, 102, 241, 0.35)',
+                borderRadius: '8px',
+                color: '#a5b4fc',
+                fontSize: '0.8rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                transition: 'all 0.15s ease'
+              }}
+            >
+              + Add Exam
+            </button>
+
+            {/* Accordion Expand / Collapse Pill */}
+            <div
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.45rem',
+                padding: '0.4rem 0.85rem',
+                borderRadius: '8px',
+                background: isExamsExpanded ? 'rgba(99, 102, 241, 0.22)' : 'rgba(255, 255, 255, 0.06)',
+                border: isExamsExpanded ? '1px solid rgba(129, 140, 248, 0.45)' : '1px solid rgba(255, 255, 255, 0.12)',
+                color: isExamsExpanded ? '#c7d2fe' : '#e2e8f0',
+                fontSize: '0.8rem',
+                fontWeight: 600,
+                transition: 'all 0.15s ease'
+              }}
+            >
+              <span>{isExamsExpanded ? 'Collapse Exams' : `View All Exam Tracks (${exams.length})`}</span>
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                style={{
+                  transform: isExamsExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                  transition: 'transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)'
+                }}
+              >
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        {/* DEFAULT SUMMARY PREVIEW BAR (Visible when Collapsed) */}
+        {!isExamsExpanded && (
+          <div
+            onClick={() => setIsExamsExpanded(true)}
+            style={{
+              marginTop: '0.9rem',
+              padding: '0.9rem 1.15rem',
+              background: 'rgba(0, 0, 0, 0.25)',
+              border: '1px solid rgba(255, 255, 255, 0.05)',
+              borderRadius: '12px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              cursor: 'pointer',
+              flexWrap: 'wrap',
+              gap: '1rem',
+              transition: 'background 0.15s ease'
+            }}
+            onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.03)'}
+            onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(0, 0, 0, 0.25)'}
+          >
+            {/* Quick Exams Focus Information */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', flexWrap: 'wrap' }}>
+              {nextUpExam ? (
+                <>
+                  <span style={{ fontSize: '0.78rem', color: '#fbbf24', fontWeight: 700 }}>
+                    ⚡ Immediate Exam Focus: {nextUpExam.title}
+                  </span>
+                  <span style={{ fontSize: '0.76rem', color: 'var(--text-secondary)' }}>
+                    • {exams.length} tracks scheduled
+                  </span>
+                </>
+              ) : (
+                <span style={{ fontSize: '0.78rem', color: '#cbd5e1' }}>
+                  {exams.length > 0 ? `${exams.length} exam tracks active.` : 'No exams scheduled yet.'}
+                </span>
+              )}
+
+              <span style={{ color: 'var(--text-secondary)', fontSize: '0.76rem', borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: '0.85rem' }}>
+                Summary active • Detailed workspaces collapsed to keep interface clutter-free
+              </span>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#818cf8', fontSize: '0.78rem', fontWeight: 600 }}>
+              <span>Expand Exam Workspaces</span>
+              <span>▾</span>
+            </div>
+          </div>
+        )}
+
+        {/* EXPANDED VIEW: Detailed Exam Cards Grid */}
+        {isExamsExpanded && (
+          <div style={{ marginTop: '1.25rem', animation: 'fadeIn 0.2s ease-out' }}>
+            {/* Exams Summary Cards Grid */}
+            {exams.length === 0 ? (
+              <div style={{ padding: '2.5rem 1rem', background: 'rgba(0,0,0,0.18)', borderRadius: '14px', border: '1px dashed rgba(255,255,255,0.08)', textAlign: 'center' }}>
+                <p style={{ color: 'var(--text-secondary)', margin: '0 0 1rem 0', fontSize: '0.9rem' }}>No exams created for this subject yet.</p>
+                <button onClick={() => setShowAddExamModal(true)} className="primary" style={{ padding: '0.5rem 1.25rem', borderRadius: '8px' }}>
+                  + Add First Exam
+                </button>
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1rem' }}>
             {exams.map(ex => {
               const examHref = `/kid/exam?id=${searchParams.get("id")}&subject=${subjectSlug}&examId=${ex.id}&subjectId=${subject.id}${parentIdQuery}`;
               const isNextUp = nextUpExam && ex.id === nextUpExam.id;
@@ -1373,7 +1832,43 @@ function SubjectPageContent() {
             })}
           </div>
         )}
+
+        {/* Bottom Collapse Bar */}
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          paddingTop: '1rem',
+          marginTop: '1rem',
+          borderTop: '1px solid rgba(255, 255, 255, 0.06)'
+        }}>
+          <span style={{ fontSize: '0.76rem', color: 'var(--text-secondary)' }}>
+            Showing {exams.length} dedicated exam workspaces
+          </span>
+          <button
+            type="button"
+            onClick={() => setIsExamsExpanded(false)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: '#a5b4fc',
+              fontSize: '0.78rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.35rem'
+            }}
+          >
+            <span>Collapse Exams</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="18 15 12 9 6 15" />
+            </svg>
+          </button>
+        </div>
       </div>
+    )}
+  </div>
 
       {/* 7. UNIVERSAL SUBJECT SETTINGS MODAL */}
       {showSubjectSettings && (
