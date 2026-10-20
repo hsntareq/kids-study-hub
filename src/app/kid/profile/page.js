@@ -99,6 +99,18 @@ function KidProfileContent() {
   const [collapsedSets, setCollapsedSets] = useState({});
   const pillsScrollRef = useRef(null);
 
+  // Student email assignment & Teacher invite state
+  const [showAssignEmailModal, setShowAssignEmailModal] = useState(false);
+  const [studentEmailInput, setStudentEmailInput] = useState('');
+  const [isSavingEmail, setIsSavingEmail] = useState(false);
+  const [emailModalError, setEmailModalError] = useState('');
+
+  const [showInviteTeacherModal, setShowInviteTeacherModal] = useState(false);
+  const [teacherEmailInput, setTeacherEmailInput] = useState('');
+  const [isSendingInvite, setIsSendingInvite] = useState(false);
+  const [inviteModalError, setInviteModalError] = useState('');
+  const [inviteModalSuccess, setInviteModalSuccess] = useState('');
+
   const saveDebounceTimer = useRef(null);
 
   const toggleSubject = (subjectId) => {
@@ -520,16 +532,17 @@ function KidProfileContent() {
   const handleGlobalAdd = async (e) => {
     e.preventDefault();
     if (!newTitle || !user || !kid) return;
+    const dataOwnerUid = searchParams.get("parentId") || user.uid;
 
     if (addType === 'subject') {
-      const sRef = ref(database, `users/${user.uid}/kids/${kid.id}/subjects`);
+      const sRef = ref(database, `users/${dataOwnerUid}/kids/${kid.id}/subjects`);
       await set(push(sRef), { title: newTitle });
     } else if (addType === 'exam') {
-      const eRef = ref(database, `users/${user.uid}/kids/${kid.id}/exams`);
+      const eRef = ref(database, `users/${dataOwnerUid}/kids/${kid.id}/exams`);
       await set(push(eRef), { title: newTitle });
     } else if (addType === 'chapter') {
       if (!selectedSubjectId || !selectedExamId) return;
-      const cRef = ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${selectedSubjectId}/chapters/${selectedExamId}`);
+      const cRef = ref(database, `users/${dataOwnerUid}/kids/${kid.id}/subjects/${selectedSubjectId}/chapters/${selectedExamId}`);
       await set(push(cRef), { title: newTitle, pdfPage: newPdfPage });
     }
     
@@ -546,14 +559,15 @@ function KidProfileContent() {
 
   const handleSaveEdit = async (id, type, parentSubjectId = null, parentExamId = null) => {
     if (!editTitle.trim() || !user || !kid) return;
+    const dataOwnerUid = searchParams.get("parentId") || user.uid;
     
     if (type === 'subject') {
-      await set(ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${id}/title`), editTitle);
+      await set(ref(database, `users/${dataOwnerUid}/kids/${kid.id}/subjects/${id}/title`), editTitle);
     } else if (type === 'exam') {
-      await set(ref(database, `users/${user.uid}/kids/${kid.id}/exams/${id}/title`), editTitle);
+      await set(ref(database, `users/${dataOwnerUid}/kids/${kid.id}/exams/${id}/title`), editTitle);
     } else if (type === 'chapter') {
-      await set(ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${parentSubjectId}/chapters/${parentExamId}/${id}/title`), editTitle);
-      await set(ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${parentSubjectId}/chapters/${parentExamId}/${id}/pdfPage`), editPdfPage);
+      await set(ref(database, `users/${dataOwnerUid}/kids/${kid.id}/subjects/${parentSubjectId}/chapters/${parentExamId}/${id}/title`), editTitle);
+      await set(ref(database, `users/${dataOwnerUid}/kids/${kid.id}/subjects/${parentSubjectId}/chapters/${parentExamId}/${id}/pdfPage`), editPdfPage);
     }
     
     setEditingId(null);
@@ -563,8 +577,9 @@ function KidProfileContent() {
 
   const handleSaveSubjectSettings = async () => {
     if (!settingsSubject || !user || !kid) return;
-    await set(ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${settingsSubject.id}/bookUrl`), subjectBookUrl.trim());
-    await set(ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${settingsSubject.id}/examRetentionDays`), Number(subjectExamRetentionDays) || 0);
+    const dataOwnerUid = searchParams.get("parentId") || user.uid;
+    await set(ref(database, `users/${dataOwnerUid}/kids/${kid.id}/subjects/${settingsSubject.id}/bookUrl`), subjectBookUrl.trim());
+    await set(ref(database, `users/${dataOwnerUid}/kids/${kid.id}/subjects/${settingsSubject.id}/examRetentionDays`), Number(subjectExamRetentionDays) || 0);
     setSettingsSubject(null);
     setSubjectBookUrl('');
     setSubjectExamRetentionDays('7');
@@ -572,21 +587,24 @@ function KidProfileContent() {
 
   const handleSaveExamSettings = async () => {
     if (!settingsExamInfo || !user || !kid) return;
-    await set(ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${settingsExamInfo.subjectId}/examSettings/${settingsExamInfo.examId}/markDistribution`), examMarkDistribution);
+    const dataOwnerUid = searchParams.get("parentId") || user.uid;
+    await set(ref(database, `users/${dataOwnerUid}/kids/${kid.id}/subjects/${settingsExamInfo.subjectId}/examSettings/${settingsExamInfo.examId}/markDistribution`), examMarkDistribution);
     setSettingsExamInfo(null);
     setExamMarkDistribution('');
   };
 
   const handleSaveInlineMarkDist = async (subjectId, examId) => {
     if (!user || !kid) return;
-    await set(ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${subjectId}/examSettings/${examId}/markDistribution`), inlineMarkDistValue);
+    const dataOwnerUid = searchParams.get("parentId") || user.uid;
+    await set(ref(database, `users/${dataOwnerUid}/kids/${kid.id}/subjects/${subjectId}/examSettings/${examId}/markDistribution`), inlineMarkDistValue);
     setEditingMarkDistKey(null);
   };
 
   const handleToggleChapterComplete = async (subjectId, examId, chapId, currentCompleted) => {
     if (!user || !kid) return;
+    const dataOwnerUid = searchParams.get("parentId") || user.uid;
     const newCompleted = !currentCompleted;
-    const chapPath = `users/${user.uid}/kids/${kid.id}/subjects/${subjectId}/chapters/${examId}/${chapId}`;
+    const chapPath = `users/${dataOwnerUid}/kids/${kid.id}/subjects/${subjectId}/chapters/${examId}/${chapId}`;
     await set(ref(database, `${chapPath}/completed`), newCompleted);
     await set(ref(database, `${chapPath}/status`), newCompleted ? 'completed' : 'not_started');
   };
@@ -628,12 +646,104 @@ function KidProfileContent() {
 
   const handleDelete = async (id, type, parentSubjectId = null, parentExamId = null) => {
     if (!window.confirm(`Are you sure you want to delete this ${type}?`)) return;
+    const dataOwnerUid = searchParams.get("parentId") || user.uid;
     let path = '';
-    if (type === 'subject') path = `users/${user.uid}/kids/${kid.id}/subjects/${id}`;
-    else if (type === 'exam') path = `users/${user.uid}/kids/${kid.id}/exams/${id}`;
-    else if (type === 'chapter') path = `users/${user.uid}/kids/${kid.id}/subjects/${parentSubjectId}/chapters/${parentExamId}/${id}`;
+    if (type === 'subject') path = `users/${dataOwnerUid}/kids/${kid.id}/subjects/${id}`;
+    else if (type === 'exam') path = `users/${dataOwnerUid}/kids/${kid.id}/exams/${id}`;
+    else if (type === 'chapter') path = `users/${dataOwnerUid}/kids/${kid.id}/subjects/${parentSubjectId}/chapters/${parentExamId}/${id}`;
     
     await remove(ref(database, path));
+  };
+
+  // Assign or update student email and sync studentLinks
+  const handleSaveStudentEmail = async (e) => {
+    e.preventDefault();
+    if (!studentEmailInput.trim() || !user || !kid) return;
+    const cleanEmail = studentEmailInput.trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(cleanEmail)) {
+      setEmailModalError('Please enter a valid email address.');
+      return;
+    }
+
+    setIsSavingEmail(true);
+    setEmailModalError('');
+    try {
+      const dataOwnerUid = searchParams.get("parentId") || user.uid;
+      const safeEmail = cleanEmail.replace(/\./g, ',');
+
+      // Update student's email in their profile record
+      await set(ref(database, `users/${dataOwnerUid}/kids/${kid.id}/email`), cleanEmail);
+
+      // Create / update studentLinks entry for fast search and assignment
+      await set(ref(database, `studentLinks/${safeEmail}`), {
+        parentId: dataOwnerUid,
+        kidId: kid.id,
+        name: kid.name,
+        grade: kid.grade || '',
+        email: cleanEmail,
+        color: kid.color || '#3b82f6',
+        updatedAt: Date.now()
+      });
+
+      // If kid previously had a different email, clean up the old link
+      if (kid.email && kid.email.toLowerCase() !== cleanEmail) {
+        const oldSafeEmail = kid.email.toLowerCase().replace(/\./g, ',');
+        await remove(ref(database, `studentLinks/${oldSafeEmail}`));
+      }
+
+      setKid(prev => ({ ...prev, email: cleanEmail }));
+      setShowAssignEmailModal(false);
+    } catch (err) {
+      console.error('Error assigning student email:', err);
+      setEmailModalError(err.message || 'Failed to update email. Please try again.');
+    } finally {
+      setIsSavingEmail(false);
+    }
+  };
+
+  // Invite teacher or parent by email
+  const handleSendTeacherInvite = async (e) => {
+    e.preventDefault();
+    if (!teacherEmailInput.trim() || !user || !kid) return;
+    const cleanTeacherEmail = teacherEmailInput.trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(cleanTeacherEmail)) {
+      setInviteModalError('Please enter a valid email address.');
+      return;
+    }
+
+    setIsSendingInvite(true);
+    setInviteModalError('');
+    setInviteModalSuccess('');
+    try {
+      const dataOwnerUid = searchParams.get("parentId") || user.uid;
+      const safeTeacherEmail = cleanTeacherEmail.replace(/\./g, ',');
+
+      // Write to teacherInvites
+      await set(ref(database, `teacherInvites/${safeTeacherEmail}/${kid.id}`), {
+        kidId: kid.id,
+        parentId: dataOwnerUid,
+        name: kid.name,
+        grade: kid.grade || '',
+        email: kid.email || '',
+        color: kid.color || '#3b82f6',
+        invitedBy: user.email || 'Parent/Guardian',
+        invitedAt: Date.now()
+      });
+
+      setInviteModalSuccess(`Invitation sent to ${cleanTeacherEmail}! When they log in to their dashboard, they can accept this student.`);
+      setTimeout(() => {
+        setShowInviteTeacherModal(false);
+        setTeacherEmailInput('');
+        setInviteModalSuccess('');
+      }, 2500);
+    } catch (err) {
+      console.error('Error inviting teacher:', err);
+      setInviteModalError(err.message || 'Failed to send invite. Please try again.');
+    } finally {
+      setIsSendingInvite(false);
+    }
   };
 
   // Open Popover to generate model test
@@ -1365,10 +1475,121 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
             </div>
           )}
           
-          <div style={{ textAlign: 'left' }}>
-            <h1 style={{ fontSize: '2.5rem', marginBottom: '0.5rem', lineHeight: 1.1 }}>{kid.name}</h1>
-            <p style={{ fontSize: '1.2rem', color: 'var(--text-secondary)', margin: '0 0 0.5rem 0' }}>{kid.grade}</p>
-            {kid.email && <p style={{ fontSize: '0.95rem', color: 'var(--text-secondary)', margin: 0, opacity: 0.8 }}>{kid.email}</p>}
+          <div style={{ textAlign: 'left', flex: 1 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+              <h1 style={{ fontSize: '2.5rem', margin: 0, lineHeight: 1.1 }}>{kid.name}</h1>
+              {searchParams.get("parentId") && (
+                <span style={{
+                  fontSize: '0.75rem',
+                  fontWeight: 700,
+                  padding: '0.2rem 0.6rem',
+                  borderRadius: '9999px',
+                  background: 'rgba(56, 189, 248, 0.15)',
+                  border: '1px solid rgba(56, 189, 248, 0.4)',
+                  color: '#38bdf8'
+                }}>
+                  👨‍🏫 Assigned View
+                </span>
+              )}
+            </div>
+            <p style={{ fontSize: '1.15rem', color: 'var(--text-secondary)', margin: '0.35rem 0 0.75rem 0' }}>{kid.grade}</p>
+
+            {/* Email assignment & Teacher invitation bar */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+              {kid.email ? (
+                <div style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  padding: '0.35rem 0.75rem',
+                  borderRadius: '8px',
+                  background: 'rgba(255, 255, 255, 0.05)',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  fontSize: '0.86rem',
+                  color: '#cbd5e1'
+                }}>
+                  <span>✉️</span>
+                  <span style={{ fontWeight: 600 }}>{kid.email}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStudentEmailInput(kid.email || '');
+                      setEmailModalError('');
+                      setShowAssignEmailModal(true);
+                    }}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#a5b4fc',
+                      cursor: 'pointer',
+                      fontSize: '0.78rem',
+                      fontWeight: 600,
+                      textDecoration: 'underline',
+                      marginLeft: '0.25rem',
+                      padding: 0
+                    }}
+                    title="Change student email address"
+                  >
+                    Edit
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStudentEmailInput('');
+                    setEmailModalError('');
+                    setShowAssignEmailModal(true);
+                  }}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.4rem',
+                    padding: '0.35rem 0.8rem',
+                    borderRadius: '8px',
+                    background: 'rgba(99, 102, 241, 0.15)',
+                    border: '1px solid rgba(129, 140, 248, 0.4)',
+                    color: '#a5b4fc',
+                    fontSize: '0.84rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  <span>✉️</span>
+                  <span>+ Assign Student Email</span>
+                </button>
+              )}
+
+              {/* Invite Teacher / Parent Action */}
+              <button
+                type="button"
+                onClick={() => {
+                  setTeacherEmailInput('');
+                  setInviteModalError('');
+                  setInviteModalSuccess('');
+                  setShowInviteTeacherModal(true);
+                }}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                  padding: '0.35rem 0.8rem',
+                  borderRadius: '8px',
+                  background: 'rgba(16, 185, 129, 0.12)',
+                  border: '1px solid rgba(16, 185, 129, 0.35)',
+                  color: '#6ee7b7',
+                  fontSize: '0.84rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+                title="Invite a teacher or parent to monitor and assess this student"
+              >
+                <span>🔗</span>
+                <span>Invite Teacher / Parent</span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -5495,6 +5716,285 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                 Save Time Limit
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Assign / Edit Student Email Modal */}
+      {showAssignEmailModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.75)',
+          backdropFilter: 'blur(6px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+          padding: '1rem'
+        }}>
+          <div style={{
+            background: 'linear-gradient(145deg, #1e1b4b 0%, #0f172a 100%)',
+            border: '1px solid rgba(99, 102, 241, 0.35)',
+            borderRadius: '16px',
+            padding: '1.75rem',
+            width: '100%',
+            maxWidth: '480px',
+            boxShadow: '0 20px 50px rgba(0,0,0,0.6)',
+            textAlign: 'left'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
+              <div>
+                <h3 style={{ margin: '0 0 0.35rem 0', fontSize: '1.25rem', color: '#fff', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span>✉️</span>
+                  <span>{kid?.email ? 'Edit Student Email' : 'Assign Student Email'}</span>
+                </h3>
+                <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                  Assigning an email enables student direct login and allows teachers to assign this student by email.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAssignEmailModal(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-secondary)',
+                  fontSize: '1.5rem',
+                  lineHeight: 1,
+                  cursor: 'pointer',
+                  padding: '0.2rem'
+                }}
+              >
+                &times;
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveStudentEmail} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.86rem', color: '#cbd5e1', fontWeight: 600 }}>
+                  Student Email Address
+                </label>
+                <input
+                  type="email"
+                  required
+                  placeholder="e.g. student@school.edu or student@gmail.com"
+                  value={studentEmailInput}
+                  onChange={(e) => setStudentEmailInput(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '0.75rem 1rem',
+                    background: 'rgba(0, 0, 0, 0.35)',
+                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    borderRadius: '8px',
+                    color: '#fff',
+                    fontSize: '0.95rem'
+                  }}
+                  autoFocus
+                />
+              </div>
+
+              {emailModalError && (
+                <div style={{
+                  padding: '0.65rem 0.85rem',
+                  borderRadius: '8px',
+                  background: 'rgba(239, 68, 68, 0.15)',
+                  border: '1px solid rgba(239, 68, 68, 0.35)',
+                  color: '#fca5a5',
+                  fontSize: '0.84rem'
+                }}>
+                  {emailModalError}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowAssignEmailModal(false)}
+                  style={{
+                    padding: '0.6rem 1.2rem',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    color: '#cbd5e1',
+                    fontSize: '0.88rem',
+                    fontWeight: 600,
+                    cursor: 'pointer'
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingEmail}
+                  style={{
+                    padding: '0.6rem 1.4rem',
+                    borderRadius: '8px',
+                    border: 'none',
+                    background: 'var(--accent-gradient, linear-gradient(135deg, #6366f1 0%, #a855f7 100%))',
+                    color: '#fff',
+                    fontSize: '0.88rem',
+                    fontWeight: 700,
+                    cursor: isSavingEmail ? 'not-allowed' : 'pointer',
+                    opacity: isSavingEmail ? 0.7 : 1,
+                    boxShadow: '0 4px 15px rgba(99, 102, 241, 0.4)'
+                  }}
+                >
+                  {isSavingEmail ? 'Saving...' : 'Save Email'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Invite Teacher / Parent Modal */}
+      {showInviteTeacherModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.75)',
+          backdropFilter: 'blur(6px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+          padding: '1rem'
+        }}>
+          <div style={{
+            background: 'linear-gradient(145deg, #064e3b 0%, #0f172a 100%)',
+            border: '1px solid rgba(16, 185, 129, 0.35)',
+            borderRadius: '16px',
+            padding: '1.75rem',
+            width: '100%',
+            maxWidth: '480px',
+            boxShadow: '0 20px 50px rgba(0,0,0,0.6)',
+            textAlign: 'left'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
+              <div>
+                <h3 style={{ margin: '0 0 0.35rem 0', fontSize: '1.25rem', color: '#fff', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span>🔗</span>
+                  <span>Invite Teacher or Parent</span>
+                </h3>
+                <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                  Invite a teacher or parent using their email. When they sign in, they will receive an invite to assign {kid?.name} to their dashboard.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowInviteTeacherModal(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-secondary)',
+                  fontSize: '1.5rem',
+                  lineHeight: 1,
+                  cursor: 'pointer',
+                  padding: '0.2rem'
+                }}
+              >
+                &times;
+              </button>
+            </div>
+
+            <form onSubmit={handleSendTeacherInvite} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.86rem', color: '#cbd5e1', fontWeight: 600 }}>
+                  Teacher / Parent Email
+                </label>
+                <input
+                  type="email"
+                  required
+                  placeholder="e.g. teacher@school.edu or parent@example.com"
+                  value={teacherEmailInput}
+                  onChange={(e) => setTeacherEmailInput(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '0.75rem 1rem',
+                    background: 'rgba(0, 0, 0, 0.35)',
+                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    borderRadius: '8px',
+                    color: '#fff',
+                    fontSize: '0.95rem'
+                  }}
+                  autoFocus
+                />
+              </div>
+
+              {inviteModalError && (
+                <div style={{
+                  padding: '0.65rem 0.85rem',
+                  borderRadius: '8px',
+                  background: 'rgba(239, 68, 68, 0.15)',
+                  border: '1px solid rgba(239, 68, 68, 0.35)',
+                  color: '#fca5a5',
+                  fontSize: '0.84rem'
+                }}>
+                  {inviteModalError}
+                </div>
+              )}
+
+              {inviteModalSuccess && (
+                <div style={{
+                  padding: '0.65rem 0.85rem',
+                  borderRadius: '8px',
+                  background: 'rgba(16, 185, 129, 0.15)',
+                  border: '1px solid rgba(16, 185, 129, 0.4)',
+                  color: '#6ee7b7',
+                  fontSize: '0.84rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem'
+                }}>
+                  <span>✅</span>
+                  <span>{inviteModalSuccess}</span>
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowInviteTeacherModal(false)}
+                  style={{
+                    padding: '0.6rem 1.2rem',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    color: '#cbd5e1',
+                    fontSize: '0.88rem',
+                    fontWeight: 600,
+                    cursor: 'pointer'
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSendingInvite}
+                  style={{
+                    padding: '0.6rem 1.4rem',
+                    borderRadius: '8px',
+                    border: 'none',
+                    background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                    color: '#fff',
+                    fontSize: '0.88rem',
+                    fontWeight: 700,
+                    cursor: isSendingInvite ? 'not-allowed' : 'pointer',
+                    opacity: isSendingInvite ? 0.7 : 1,
+                    boxShadow: '0 4px 15px rgba(16, 185, 129, 0.4)'
+                  }}
+                >
+                  {isSendingInvite ? 'Sending Invite...' : 'Send Invite'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
