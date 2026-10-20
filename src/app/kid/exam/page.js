@@ -8,6 +8,7 @@ import { ref, onValue, set, push, remove } from 'firebase/database';
 import { generateGeminiContent } from '../../../lib/gemini';
 import Link from 'next/link';
 import MarkDistributionField from '../../../components/MarkDistributionField';
+import MarkDistributionView from '../../../components/MarkDistributionView';
 
 function ExamPageContent() {
   const router = useRouter();
@@ -61,6 +62,19 @@ function ExamPageContent() {
   const [showAddChapterModal, setShowAddChapterModal] = useState(false);
   const [newChapterTitle, setNewChapterTitle] = useState('');
   const [newChapterPdfPage, setNewChapterPdfPage] = useState('');
+
+  // Timer & Exam completion state
+  const [isExamStarted, setIsExamStarted] = useState(false);
+  const [isExamFinished, setIsExamFinished] = useState(false);
+  const [examStartedAt, setExamStartedAt] = useState(null);
+  const [examSubmittedAt, setExamSubmittedAt] = useState(null);
+  const [timerSeconds, setTimerSeconds] = useState(0);
+
+  // Question Navigator State (Scroller vs Collapsible by Question Type)
+  const [navigatorViewMode, setNavigatorViewMode] = useState('collapsible'); // 'collapsible' or 'scroller'
+  const [selectedSetFilter, setSelectedSetFilter] = useState('all');
+  const [collapsedSets, setCollapsedSets] = useState({});
+  const pillsScrollRef = useRef(null);
 
   const saveDebounceTimer = useRef(null);
 
@@ -127,56 +141,218 @@ function ExamPageContent() {
     return s.trim();
   };
 
+  // Enrich questions with set numbers (MCQ is Set 1 -> 1.1, 1.2..., Set 2 -> 2.1, 2.2...)
+  const enrichWithSetNumbers = (questions) => {
+    if (!questions || !Array.isArray(questions) || questions.length === 0) return [];
+
+    const sectionOrder = [];
+    const sectionInfo = new Map();
+
+    questions.forEach((q, i) => {
+      let rawSec = (q.section || '').trim();
+      const hasOpts = q.options && q.options.length > 0;
+      const isMcq = hasOpts || /mcq|multiple choice/i.test(rawSec);
+
+      let secKey = rawSec;
+      if (!secKey) {
+        secKey = isMcq ? '1. Multiple Choice Questions (MCQ)' : 'Descriptive Questions';
+      }
+
+      if (!sectionInfo.has(secKey)) {
+        sectionInfo.set(secKey, {
+          name: secKey,
+          isMcq,
+          firstIndex: i
+        });
+        sectionOrder.push(secKey);
+      }
+    });
+
+    const sectionToSetNum = new Map();
+    const usedNumbers = new Set();
+
+    // 1. Any section with explicit leading number like "1. MCQ" or "2. Short Questions"
+    sectionOrder.forEach(secKey => {
+      const numMatch = secKey.match(/^(\d+)[.):\s]/);
+      if (numMatch) {
+        const num = parseInt(numMatch[1], 10);
+        sectionToSetNum.set(secKey, num);
+        usedNumbers.add(num);
+      }
+    });
+
+    // 2. If MCQ section exists and doesn't have an explicit number, assign 1
+    const mcqSec = sectionOrder.find(sec => sectionInfo.get(sec)?.isMcq);
+    if (mcqSec && !sectionToSetNum.has(mcqSec)) {
+      if (!usedNumbers.has(1)) {
+        sectionToSetNum.set(mcqSec, 1);
+        usedNumbers.add(1);
+      }
+    }
+
+    // 3. Assign sequential numbers (1, 2, 3...) to remaining sections
+    let currentCounter = 1;
+    sectionOrder.forEach(secKey => {
+      if (!sectionToSetNum.has(secKey)) {
+        while (usedNumbers.has(currentCounter)) {
+          currentCounter++;
+        }
+        sectionToSetNum.set(secKey, currentCounter);
+        usedNumbers.add(currentCounter);
+      }
+    });
+
+    const setCounters = {};
+
+    return questions.map((q) => {
+      let rawSec = (q.section || '').trim();
+      const hasOpts = q.options && q.options.length > 0;
+      const isMcq = hasOpts || /mcq|multiple choice/i.test(rawSec);
+
+      let secKey = rawSec;
+      if (!secKey) {
+        secKey = isMcq ? '1. Multiple Choice Questions (MCQ)' : 'Descriptive Questions';
+      }
+
+      const setNum = sectionToSetNum.get(secKey) || 1;
+      setCounters[setNum] = (setCounters[setNum] || 0) + 1;
+      const subNum = setCounters[setNum];
+      const displayNumber = `${setNum}.${subNum}`;
+
+      let cleanSecTitle = secKey.replace(/^(?:section|part)?\s*\d+[:.)\s-]*/i, '').trim();
+      if (!cleanSecTitle) cleanSecTitle = secKey;
+
+      return {
+        ...q,
+        setNumber: setNum,
+        subNumber: subNum,
+        displayNumber,
+        cleanSectionTitle: cleanSecTitle
+      };
+    });
+  };
+
   // Parser for questions
   const parseQuestionsData = (raw) => {
     if (!raw) return [];
-    if (Array.isArray(raw)) {
-      return raw.map((q, i) => ({
-        ...q,
-        id: q.id || i + 1,
-        section: cleanText(q.section || 'General Section'),
-        question: cleanText(q.question),
-        options: (q.options || []).map(opt => cleanText(opt)),
-        answerKey: cleanText(q.answerKey || q.correctAnswer || q.solution || '')
-      }));
-    }
-    if (typeof raw === 'object' && Array.isArray(raw.questions)) {
-      return raw.questions.map((q, i) => ({
-        ...q,
-        id: q.id || i + 1,
-        section: cleanText(q.section || 'General Section'),
-        question: cleanText(q.question),
-        options: (q.options || []).map(opt => cleanText(opt)),
-        answerKey: cleanText(q.answerKey || q.correctAnswer || q.solution || '')
-      }));
-    }
-    if (typeof raw === 'string') {
+
+    const normalize = (q, i, defaultSec = 'General Section') => ({
+      ...q,
+      id: q.id || i + 1,
+      section: cleanText(q.section || q.category || q.type || defaultSec),
+      question: cleanText(q.question || q.prompt || q.text || q.questionText || ''),
+      options: (q.options || q.choices || []).map(opt => cleanText(opt)),
+      answerKey: cleanText(q.answerKey || q.correctAnswer || q.solution || q.answer || ''),
+      marks: q.marks !== undefined ? Number(q.marks) : undefined
+    });
+
+    const extractArray = (data) => {
+      if (!data) return [];
+      if (Array.isArray(data)) return data.map((q, i) => normalize(q, i));
+      if (typeof data !== 'object') return [];
+
+      if (Array.isArray(data.questions)) {
+        return data.questions.map((q, i) => normalize(q, i));
+      }
+      if (data.modelTest && Array.isArray(data.modelTest.questions)) {
+        return data.modelTest.questions.map((q, i) => normalize(q, i));
+      }
+      if (data.model_test && Array.isArray(data.model_test.questions)) {
+        return data.model_test.questions.map((q, i) => normalize(q, i));
+      }
+      if (data.exam && Array.isArray(data.exam.questions)) {
+        return data.exam.questions.map((q, i) => normalize(q, i));
+      }
+      if (Array.isArray(data.sections)) {
+        const collected = [];
+        data.sections.forEach((sec, sIdx) => {
+          const secQuestions = sec.questions || sec.items || [];
+          if (Array.isArray(secQuestions)) {
+            secQuestions.forEach(q => {
+              collected.push(normalize(q, collected.length, sec.title || sec.name || `Section ${sIdx + 1}`));
+            });
+          }
+        });
+        if (collected.length > 0) return collected;
+      }
+      for (const key of Object.keys(data)) {
+        if (Array.isArray(data[key]) && data[key].length > 0 && typeof data[key][0] === 'object') {
+          if (data[key][0].question || data[key][0].prompt || data[key][0].text) {
+            return data[key].map((q, i) => normalize(q, i, key));
+          }
+        }
+      }
+      return [];
+    };
+
+    let result = [];
+    if (Array.isArray(raw)) result = extractArray(raw);
+    else if (typeof raw === 'object') result = extractArray(raw);
+    else if (typeof raw === 'string') {
       try {
         const clean = raw.replace(/```json\s*/gi, '').replace(/```\s*$/gi, '').trim();
         const parsed = JSON.parse(clean);
-        if (Array.isArray(parsed)) {
-          return parsed.map((q, i) => ({
-            ...q,
-            id: q.id || i + 1,
-            section: cleanText(q.section || 'General Section'),
-            question: cleanText(q.question),
-            options: (q.options || []).map(opt => cleanText(opt)),
-            answerKey: cleanText(q.answerKey || q.correctAnswer || q.solution || '')
-          }));
-        }
-        if (parsed && Array.isArray(parsed.questions)) {
-          return parsed.questions.map((q, i) => ({
-            ...q,
-            id: q.id || i + 1,
-            section: cleanText(q.section || 'General Section'),
-            question: cleanText(q.question),
-            options: (q.options || []).map(opt => cleanText(opt)),
-            answerKey: cleanText(q.answerKey || q.correctAnswer || q.solution || '')
-          }));
-        }
+        result = extractArray(parsed);
       } catch (_) {}
+
+      if (!result || result.length === 0) {
+        // Fallback robust line-by-line parser (handles text/markdown-formatted responses)
+        const lines = raw.split('\n');
+        const questions = [];
+        let currentQ = null;
+        let currentSection = 'General Section';
+
+        for (let line of lines) {
+          let trimmed = line.trim();
+          if (!trimmed) continue;
+
+          if (trimmed.match(/^(?:#+\s*)?(?:\*\*)?(?:section|part)\s+[a-z0-9]/i)) {
+            currentSection = cleanText(trimmed);
+            continue;
+          }
+
+          const qMatch = trimmed.match(/^(?:[\*\-]\s*)?(?:\*\*)?(?:question\s*(\d+)|q(\d+)|(\d+))(?:\*\*)?(?:[:.)]|(?:\*\*:))\s*(.*)/i);
+          if (qMatch) {
+            if (currentQ) questions.push(currentQ);
+            const qNum = qMatch[1] || qMatch[2] || qMatch[3];
+            const rest = qMatch[4] || '';
+            const markMatch = rest.match(/\[(\d+)\s*(?:marks?|pts?)\]/i) || rest.match(/\((\d+)\s*(?:marks?|pts?)\)/i);
+            const marks = markMatch ? parseInt(markMatch[1], 10) : 5;
+            const cleanContent = cleanText(rest.replace(/\[\d+\s*(?:marks?|pts?)\]/gi, '').replace(/\(\d+\s*(?:marks?|pts?)\)/gi, ''));
+
+            currentQ = {
+              id: questions.length + 1,
+              number: qNum,
+              section: currentSection,
+              question: cleanContent || `Question ${qNum}`,
+              marks: marks,
+              options: [],
+              answerKey: ''
+            };
+            continue;
+          }
+
+          const optMatch = trimmed.match(/^(?:[\*\-]\s*)?(?:\()?\s*([a-d])(?:\)|\.)\s+(.*)/i);
+          if (currentQ && optMatch) {
+            currentQ.options.push(optMatch[1].toUpperCase() + ') ' + cleanText(optMatch[2]));
+            continue;
+          }
+
+          if (currentQ && (trimmed.toLowerCase().startsWith('answer:') || trimmed.toLowerCase().startsWith('ans:') || trimmed.toLowerCase().startsWith('**answer:'))) {
+            currentQ.answerKey = cleanText(trimmed.replace(/^(?:\*\*answer:\*\*|answer:|ans:?)\s*/i, ''));
+            continue;
+          }
+
+          if (currentQ && !currentQ.options.length) {
+            currentQ.question += ' ' + cleanText(trimmed);
+          }
+        }
+        if (currentQ) questions.push(currentQ);
+        result = questions;
+      }
     }
-    return [];
+
+    return enrichWithSetNumbers(result);
   };
 
   // Keyboard navigation for question slides
@@ -197,6 +373,15 @@ function ExamPageContent() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [viewingModelTest, questionDisplayMode]);
+
+  // Auto-scroll active question pill into center view
+  useEffect(() => {
+    if (!viewingModelTest || questionDisplayMode !== 'slide') return;
+    const activeBtn = document.getElementById(`q-pill-${currentSlideIndex}`);
+    if (activeBtn) {
+      activeBtn.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+    }
+  }, [viewingModelTest, currentSlideIndex, questionDisplayMode, navigatorViewMode]);
 
   // Auth and data listener
   useEffect(() => {
@@ -371,14 +556,45 @@ function ExamPageContent() {
 
     try {
       const selectedChapterTitles = selectedChaptersForTest.map(id => chaptersMap[id]?.title).filter(Boolean);
-      const promptText = `Generate a comprehensive Model Test for student: ${kid.name || 'Student'}.
+      const promptText = `You are an expert school examiner creating a realistic, high quality Model Test for student: ${kid.name || 'Student'}.
+Generate a comprehensive Model Test with structured questions strictly formatted according to the syllabus and mark distribution.
+
 Subject: ${subject.title}
-Exam: ${exam.title}
-Difficulty: ${testDifficulty}
-Guidelines to strictly follow: ${testGuidelines.join(', ')}
-${testMarkDistribution ? `Mark Distribution Structure:\n${testMarkDistribution}\n` : ''}
-${selectedChapterTitles.length > 0 ? `Syllabus Chapters to cover:\n${selectedChapterTitles.join(', ')}\n` : ''}
-${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n` : ''}`;
+Exam Type: ${exam.title}
+Model Test Date: ${modelTestDate || 'Today'}
+
+Syllabus Chapters to cover:
+${selectedChapterTitles.length > 0 ? selectedChapterTitles.map(t => `- ${t}`).join('\n') : '- Entire course curriculum'}
+
+Mark Distribution Pattern (STRICT REQUIREMENT - ALLOCATE MARKS AND GENERATE QUESTIONS EXACTLY AS SPECIFIED IN EACH PART):
+${testMarkDistribution ? testMarkDistribution : '100 Marks Standard: Section A: 20 MCQs (20 Marks), Section B: Short Questions (30 Marks), Section C: Descriptive / Creative Questions (50 Marks)'}
+
+Difficulty Level: ${testDifficulty}
+Guidelines to strictly follow:
+${testGuidelines.length > 0 ? testGuidelines.map(g => `- ${g}`).join('\n') : '- Standard school examination best practices'}
+
+${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n` : ''}
+
+CRITICAL RULES FOR GENERATION:
+1. STRICT ADHERENCE TO MARK DISTRIBUTION: You MUST generate individual question items for EVERY section and question count specified in the Mark Distribution above. For instance, if a section specifies "8 questions × 7 marks = 56 Marks from chapters 3, 6, 7, 8, 10", generate all individual questions covering those specific chapters with 7 marks each!
+2. ZERO MARKDOWN AND ZERO LATEX: DO NOT use markdown bold (**), headers (###), backticks (\`), or LaTeX ($). Use standard plain keyboard symbols: "x", "÷", "+", "-", "/", "%". Every question and answer must be clean, readable text.
+3. Return STRICTLY a valid JSON object matching this schema:
+{
+  "title": "${modelTestTitle.trim() || `${subject.title} - ${exam.title} Model Test`}",
+  "fullMarks": 100,
+  "timeAllowed": "2 Hours",
+  "questions": [
+    {
+      "id": 1,
+      "section": "Section name / Question type (e.g. Competency-Based Questions / Section A: MCQ)",
+      "question": "Clear, complete question text without asterisks or markdown",
+      "marks": 7,
+      "options": ["A) option 1", "B) option 2", "C) option 3", "D) option 4"],
+      "answerKey": "Accurate step-by-step solution or answer key"
+    }
+  ]
+}
+Ensure the "questions" array contains ALL the individual generated questions covering the required mark distribution.`;
 
       const questionsText = await generateGeminiContent(promptText);
 
@@ -416,6 +632,39 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
     }
   };
 
+  const formatTime = (totalSeconds) => {
+    const s = Math.max(0, Math.floor(totalSeconds));
+    const hrs = Math.floor(s / 3600);
+    const mins = Math.floor((s % 3600) / 60);
+    const secs = s % 60;
+    if (hrs > 0) {
+      return `${hrs}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    }
+    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  };
+
+  const formatDuration = (totalSeconds) => {
+    const s = Math.max(0, Math.floor(totalSeconds));
+    const hrs = Math.floor(s / 3600);
+    const mins = Math.floor((s % 3600) / 60);
+    const secs = s % 60;
+    if (hrs > 0) return `${hrs}h ${mins}m ${secs}s`;
+    if (mins > 0) return `${mins}m ${secs}s`;
+    return `${secs}s`;
+  };
+
+  // Timer effect
+  useEffect(() => {
+    if (!viewingModelTest || isExamFinished || !isExamStarted || !examStartedAt) return;
+
+    setTimerSeconds(Math.floor((Date.now() - examStartedAt) / 1000));
+    const interval = setInterval(() => {
+      setTimerSeconds(Math.floor((Date.now() - examStartedAt) / 1000));
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [viewingModelTest, isExamFinished, isExamStarted, examStartedAt]);
+
   // Open test viewer modal
   const openTestViewer = (test) => {
     setViewingModelTest(test);
@@ -429,6 +678,81 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
     setOverallExaminerFeedback(test.examinerGrading?.overallFeedback || '');
     setNotificationMsg('');
     setSavingStatus('');
+
+    const finished = Boolean(test.isFinished || test.submittedAt || test.examinerGrading?.evaluatedAt);
+    const hasStarted = Boolean(test.startedAt || finished || (test.studentAnswers && Object.keys(test.studentAnswers).length > 0));
+    setIsExamFinished(finished);
+    setIsExamStarted(hasStarted);
+    setExamStartedAt(test.startedAt || (hasStarted ? Date.now() : null));
+    setExamSubmittedAt(test.submittedAt || null);
+  };
+
+  const handleStartExam = async () => {
+    if (!viewingModelTest || !user || !kid || !subject || !exam) return;
+    const now = Date.now();
+    setExamStartedAt(now);
+    setIsExamStarted(true);
+    try {
+      const path = `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${subject.id}/modelTests/${exam.id}/${viewingModelTest.testId || viewingModelTest.id}`;
+      await set(ref(database, `${path}/startedAt`), now);
+      setViewingModelTest(prev => ({
+        ...prev,
+        startedAt: now
+      }));
+    } catch (err) {
+      console.error('Error starting exam timer:', err);
+    }
+  };
+
+  const handleFinishAndSubmitExam = async () => {
+    if (!viewingModelTest || !user || !kid || !subject || !exam) return;
+    const confirmed = window.confirm("Are you sure you want to finish and submit your exam? Once submitted, the timer will stop and answers will be unlocked for review.");
+    if (!confirmed) return;
+
+    try {
+      setSavingStatus('saving');
+      const now = Date.now();
+      const timeSpent = examStartedAt ? Math.max(1, Math.floor((now - examStartedAt) / 1000)) : (viewingModelTest.timeSpentSeconds || 0);
+
+      const path = `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${subject.id}/modelTests/${exam.id}/${viewingModelTest.testId || viewingModelTest.id}`;
+      await set(ref(database, `${path}/isFinished`), true);
+      await set(ref(database, `${path}/submittedAt`), now);
+      await set(ref(database, `${path}/timeSpentSeconds`), timeSpent);
+      await set(ref(database, `${path}/studentAnswers`), studentAnswers);
+
+      setViewingModelTest(prev => ({
+        ...prev,
+        isFinished: true,
+        submittedAt: now,
+        timeSpentSeconds: timeSpent,
+        studentAnswers
+      }));
+
+      setIsExamFinished(true);
+      setExamSubmittedAt(now);
+      setNotificationMsg('🎉 Exam completed and submitted successfully! Answer keys and solutions are now unlocked.');
+      setTimeout(() => setNotificationMsg(''), 4500);
+    } catch (err) {
+      alert('Error submitting exam: ' + err.message);
+    } finally {
+      setSavingStatus('');
+    }
+  };
+
+  const handleCopyTest = () => {
+    if (!viewingModelTest) return;
+    if (!isExamFinished && testViewMode === 'student') {
+      const questionsOnly = modalQuestions.map(q => {
+        let text = `${q.displayNumber}. ${q.question}`;
+        if (q.options && q.options.length > 0) {
+          text += '\n' + q.options.join('\n');
+        }
+        return text;
+      }).join('\n\n');
+      copyToClipboard(questionsOnly);
+    } else {
+      copyToClipboard(viewingModelTest.questions);
+    }
   };
 
   const handleDeleteModelTest = async (testId) => {
@@ -466,7 +790,12 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
   };
 
   const handleStudentAnswerChange = (qId, text, immediate = false) => {
-    const updated = { ...studentAnswers, [qId]: text };
+    const updated = { ...studentAnswers };
+    if (!text || !text.trim()) {
+      delete updated[qId];
+    } else {
+      updated[qId] = text;
+    }
     setStudentAnswers(updated);
     saveStudentAnswers(updated, immediate);
   };
@@ -620,6 +949,47 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
         : (viewingModelTest?.result && viewingModelTest.result !== '40/100' && viewingModelTest.result !== 'Pending'
             ? viewingModelTest.result
             : `0/${modalTotalMax}`));
+
+  const defaultDurationMinutes = viewingModelTest?.duration 
+    ? Number(viewingModelTest.duration) 
+    : (modalTotalMax <= 20 ? 30 : modalTotalMax <= 50 ? 60 : modalTotalMax <= 100 ? 90 : 120);
+  const totalDurationSeconds = defaultDurationMinutes * 60;
+  const elapsedSeconds = isExamFinished && viewingModelTest?.timeSpentSeconds 
+    ? Number(viewingModelTest.timeSpentSeconds) 
+    : (examStartedAt ? Math.max(0, Math.floor((Date.now() - examStartedAt) / 1000)) : 0);
+  const remainingSeconds = Math.max(0, totalDurationSeconds - elapsedSeconds);
+  const isTimeLow = isExamStarted && !isExamFinished && remainingSeconds <= 300 && remainingSeconds > 0;
+  const isTimeUp = isExamStarted && !isExamFinished && remainingSeconds === 0;
+
+  // Group questions by set / question type for contained collapsible & filtered navigation
+  const questionSets = (() => {
+    const map = new Map();
+    modalQuestions.forEach((q, idx) => {
+      const setNum = q.setNumber || 1;
+      if (!map.has(setNum)) {
+        map.set(setNum, {
+          setNumber: setNum,
+          title: q.cleanSectionTitle || `Set ${setNum}`,
+          questions: []
+        });
+      }
+      map.get(setNum).questions.push({ ...q, globalIndex: idx });
+    });
+    return Array.from(map.values());
+  })();
+
+  const toggleSetCollapse = (setNum) => {
+    setCollapsedSets(prev => ({
+      ...prev,
+      [setNum]: !prev[setNum]
+    }));
+  };
+
+  const handleScrollPills = (direction) => {
+    if (!pillsScrollRef.current) return;
+    const distance = direction === 'left' ? -260 : 260;
+    pillsScrollRef.current.scrollBy({ left: distance, behavior: 'smooth' });
+  };
 
   return (
     <main className="view-container">
@@ -833,17 +1203,12 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
               </div>
             </div>
           ) : (
-            <div style={{ textAlign: 'left', background: 'rgba(0,0,0,0.22)', border: '1px solid rgba(255,255,255,0.04)', borderRadius: '10px', padding: '1rem' }}>
-              {markDistValue ? (
-                <p style={{ margin: 0, fontSize: '0.92rem', color: '#cbd5e1', whiteSpace: 'pre-line', lineHeight: 1.55 }}>
-                  {markDistValue}
-                </p>
-              ) : (
-                <p style={{ margin: 0, fontSize: '0.88rem', color: 'var(--text-secondary)', opacity: 0.8 }}>
-                  No mark distribution configured for this exam yet. Click <strong>Set Mark Distribution</strong> to set MCQ, short questions, and descriptive mark allocation.
-                </p>
-              )}
-            </div>
+            <MarkDistributionView
+              value={markDistValue}
+              onEdit={() => setIsEditingMarkDist(true)}
+              defaultLayout="cards"
+              showWeightageBar={true}
+            />
           )}
         </div>
 
@@ -1365,35 +1730,194 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
         </div>
       )}
 
-      {/* Model Test Question Paper, Answer Sheet & Grading Modal */}
+      {/* Model Test Question Paper, Answer Sheet & Grading - FULL PAGE VIEW */}
       {viewingModelTest && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 120, padding: '1rem' }}>
-          <div className="card" style={{ maxWidth: '840px', width: '100%', maxHeight: '94vh', overflowY: 'auto', position: 'relative', textAlign: 'left', padding: '1.8rem' }}>
-            
-            {/* Viewer Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem', borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.8rem' }}>
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          width: '100vw',
+          height: '100vh',
+          background: '#090d16',
+          zIndex: 9999,
+          overflowY: 'auto',
+          display: 'flex',
+          flexDirection: 'column'
+        }}>
+          {/* Top Sticky Header */}
+          <header style={{
+            position: 'sticky',
+            top: 0,
+            zIndex: 40,
+            background: 'rgba(15, 23, 42, 0.96)',
+            backdropFilter: 'blur(12px)',
+            borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+            padding: '0.8rem 1.75rem',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: '0.8rem'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+              <button
+                type="button"
+                onClick={() => setViewingModelTest(null)}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.35rem',
+                  padding: '0.45rem 0.85rem',
+                  borderRadius: '8px',
+                  background: 'rgba(255, 255, 255, 0.08)',
+                  border: '1px solid rgba(255, 255, 255, 0.12)',
+                  color: '#fff',
+                  fontSize: '0.83rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                <span>←</span>
+                <span>Exit Exam</span>
+              </button>
+
               <div>
-                <h2 style={{ margin: '0 0 0.25rem 0', fontSize: '1.45rem', color: '#fff' }}>
-                  {viewingModelTest.title || 'Model Test'}
-                </h2>
-                <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-                  <span>📅 {viewingModelTest.date || 'Today'}</span>
-                  <span>• Total Marks: {modalTotalMax}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <h1 style={{ margin: 0, fontSize: '1.2rem', color: '#fff', fontWeight: 700 }}>
+                    {viewingModelTest.title || 'Model Test'}
+                  </h1>
                   {viewingModelTest.difficulty && (
-                    <span style={{ padding: '0.1rem 0.5rem', borderRadius: '10px', background: 'rgba(139, 92, 246, 0.2)', color: 'var(--accent-primary)', fontWeight: 600, fontSize: '0.72rem' }}>
+                    <span style={{ padding: '0.1rem 0.5rem', borderRadius: '10px', background: 'rgba(139, 92, 246, 0.2)', border: '1px solid rgba(139, 92, 246, 0.3)', color: '#c4b5fd', fontWeight: 600, fontSize: '0.72rem' }}>
                       {viewingModelTest.difficulty}
                     </span>
                   )}
                 </div>
+                <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
+                  <span>📅 {viewingModelTest.date || 'Today'}</span>
+                  <span>•</span>
+                  <span>Total Marks: <strong style={{ color: '#fff' }}>{modalTotalMax}</strong></span>
+                  <span>•</span>
+                  <span style={{ color: '#34d399', fontWeight: 600 }}>Result {currentModalDisplayResult}</span>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+              
+              {/* Live Exam Timer Badge */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.45rem',
+                padding: '0.35rem 0.8rem',
+                borderRadius: '8px',
+                background: isExamFinished 
+                  ? 'rgba(16, 185, 129, 0.12)' 
+                  : (isTimeLow || isTimeUp ? 'rgba(239, 68, 68, 0.18)' : 'rgba(0, 0, 0, 0.45)'),
+                border: `1px solid ${isExamFinished 
+                  ? 'rgba(16, 185, 129, 0.35)' 
+                  : (isTimeLow || isTimeUp ? '#ef4444' : 'rgba(255, 255, 255, 0.12)')}`,
+                boxShadow: isTimeLow ? '0 0 10px rgba(239, 68, 68, 0.35)' : 'none'
+              }}>
+                <span style={{ fontSize: '1rem' }}>
+                  {isExamFinished ? '⏱️' : (isTimeLow || isTimeUp ? '⏰' : '⏱️')}
+                </span>
+                <div style={{ textAlign: 'left', minWidth: '70px' }}>
+                  <div style={{
+                    fontSize: '0.9rem',
+                    fontWeight: 800,
+                    fontFamily: 'monospace',
+                    letterSpacing: '0.5px',
+                    color: isExamFinished 
+                      ? '#34d399' 
+                      : (isTimeLow || isTimeUp ? '#f87171' : '#38bdf8')
+                  }}>
+                    {isExamFinished 
+                      ? formatDuration(elapsedSeconds)
+                      : (isExamStarted ? formatTime(remainingSeconds) : `${defaultDurationMinutes}m Limit`)}
+                  </div>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>
+                    {isExamFinished ? 'Time Taken' : (isExamStarted ? 'Time Left' : 'Duration')}
+                  </div>
+                </div>
               </div>
 
-              <button 
-                onClick={() => setViewingModelTest(null)}
-                style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1.4rem', padding: '0.2rem 0.5rem' }}
+              {/* Mode Switcher */}
+              <div style={{ display: 'flex', background: 'rgba(0,0,0,0.4)', padding: '0.2rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                <button
+                  type="button"
+                  onClick={() => setTestViewMode('student')}
+                  style={{
+                    padding: '0.35rem 0.8rem',
+                    borderRadius: '6px',
+                    border: 'none',
+                    fontSize: '0.8rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    background: testViewMode === 'student' ? 'var(--accent-gradient)' : 'transparent',
+                    color: testViewMode === 'student' ? '#fff' : 'var(--text-secondary)'
+                  }}
+                >
+                  👨‍🎓 Student
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!isExamFinished) {
+                      const unlock = window.confirm("🔒 Student has not submitted this exam yet. Answers and rubrics are locked.\n\nAre you a teacher/parent who wants to finish the exam now to evaluate?");
+                      if (unlock) {
+                        handleFinishAndSubmitExam();
+                        setTestViewMode('examiner');
+                      }
+                      return;
+                    }
+                    setTestViewMode('examiner');
+                  }}
+                  style={{
+                    padding: '0.35rem 0.8rem',
+                    borderRadius: '6px',
+                    border: 'none',
+                    fontSize: '0.8rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    background: testViewMode === 'examiner' ? 'var(--accent-gradient)' : 'transparent',
+                    color: testViewMode === 'examiner' ? '#fff' : (!isExamFinished ? 'rgba(255,255,255,0.45)' : 'var(--text-secondary)')
+                  }}
+                  title={!isExamFinished ? 'Locked until student finishes the exam' : 'Examiner Mode'}
+                >
+                  {!isExamFinished ? '🔒 Examiner' : '📝 Examiner'}
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleCopyTest}
+                style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '6px', color: '#cbd5e1', cursor: 'pointer' }}
               >
-                ✕
+                {copiedSuccess ? '✓ Copied' : '📋 Copy'}
+              </button>
+              <button
+                type="button"
+                onClick={() => window.print()}
+                style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '6px', color: '#cbd5e1', cursor: 'pointer' }}
+              >
+                🖨️ Print
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewingModelTest(null)}
+                style={{ padding: '0.4rem 0.8rem', background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#f87171', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
+              >
+                ✕ Exit
               </button>
             </div>
+          </header>
+
+          {/* Full Page Body */}
+          <main style={{ flex: 1, width: '100%', maxWidth: '1020px', margin: '0 auto', padding: 'clamp(0.75rem, 2vw, 1.25rem) clamp(0.5rem, 2.5vw, 1.25rem) clamp(5.5rem, 12vh, 7rem) clamp(0.5rem, 2.5vw, 1.25rem)', boxSizing: 'border-box', textAlign: 'left' }}>
 
             {/* Notification Banner */}
             {notificationMsg && (
@@ -1402,51 +1926,105 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
               </div>
             )}
 
-            {/* Mode Selector Tab Bar & Current Result */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.3)', padding: '0.5rem', borderRadius: '10px', marginBottom: '1.25rem', gap: '0.5rem', flexWrap: 'wrap' }}>
-              <div style={{ display: 'flex', gap: '0.4rem' }}>
+            {/* Exam Finished & Submitted Review Banner */}
+            {isExamFinished && (
+              <div style={{
+                background: 'linear-gradient(90deg, rgba(16, 185, 129, 0.15) 0%, rgba(59, 130, 246, 0.1) 100%)',
+                border: '1px solid rgba(16, 185, 129, 0.35)',
+                borderRadius: '12px',
+                padding: '1rem 1.4rem',
+                marginBottom: '1.25rem',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: '0.8rem'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <span style={{ fontSize: '1.6rem' }}>🎉</span>
+                  <div>
+                    <div style={{ fontSize: '1.05rem', fontWeight: 700, color: '#fff' }}>Exam Completed & Submitted</div>
+                    <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                      Review mode unlocked. Correct answers, solution rubrics, and detailed breakdowns are visible below.
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.85rem', color: '#34d399', background: 'rgba(16, 185, 129, 0.2)', padding: '0.3rem 0.8rem', borderRadius: '12px', fontWeight: 700 }}>
+                    ⏱️ Time Taken: {formatDuration(elapsedSeconds)}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Student Exam Not Started Screen */}
+            {testViewMode === 'student' && !isExamStarted && !isExamFinished ? (
+              <div style={{
+                background: 'rgba(15, 23, 42, 0.85)',
+                border: '1px solid rgba(139, 92, 246, 0.3)',
+                borderRadius: '16px',
+                padding: '2.5rem',
+                textAlign: 'center',
+                maxWidth: '680px',
+                margin: '2rem auto',
+                boxShadow: '0 10px 40px rgba(0,0,0,0.5)'
+              }}>
+                <div style={{ fontSize: '3rem', marginBottom: '0.75rem' }}>📝</div>
+                <h2 style={{ fontSize: '1.6rem', color: '#fff', margin: '0 0 0.5rem 0' }}>
+                  Ready to take {viewingModelTest.title || 'Model Test'}?
+                </h2>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.92rem', marginBottom: '1.5rem', lineHeight: 1.6 }}>
+                  This exam contains <strong>{modalQuestions.length} Questions</strong> with a total of <strong>{modalTotalMax} Marks</strong>.
+                </p>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.8rem', marginBottom: '1.8rem', textAlign: 'center' }}>
+                  <div style={{ background: 'rgba(255,255,255,0.04)', padding: '0.75rem', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Questions</div>
+                    <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#fff' }}>{modalQuestions.length}</div>
+                  </div>
+                  <div style={{ background: 'rgba(255,255,255,0.04)', padding: '0.75rem', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Total Marks</div>
+                    <div style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--accent-primary)' }}>{modalTotalMax}</div>
+                  </div>
+                  <div style={{ background: 'rgba(255,255,255,0.04)', padding: '0.75rem', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Time Limit</div>
+                    <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#38bdf8' }}>{defaultDurationMinutes} Min</div>
+                  </div>
+                </div>
+
+                <div style={{ background: 'rgba(0,0,0,0.3)', borderRadius: '10px', padding: '1rem', marginBottom: '2rem', textAlign: 'left', border: '1px solid rgba(255,255,255,0.06)' }}>
+                  <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#f1f5f9', marginBottom: '0.4rem' }}>
+                    ⚠️ Exam Rules & Instructions:
+                  </div>
+                  <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.82rem', color: 'var(--text-secondary)', lineHeight: 1.7 }}>
+                    <li>The <strong>{defaultDurationMinutes}-minute countdown timer</strong> will begin as soon as you click Start Exam.</li>
+                    <li>All typed answers and selected options will save automatically in real-time.</li>
+                    <li><strong>Answers and solutions are hidden</strong> until you finish and submit your paper.</li>
+                    <li>You can attach photos of your handwritten answer papers at any time.</li>
+                  </ul>
+                </div>
+
                 <button
                   type="button"
-                  onClick={() => setTestViewMode('student')}
+                  onClick={handleStartExam}
                   style={{
-                    padding: '0.45rem 1rem',
-                    fontSize: '0.85rem',
-                    fontWeight: 600,
-                    borderRadius: '8px',
+                    padding: '0.85rem 2.5rem',
+                    fontSize: '1.05rem',
+                    fontWeight: 700,
+                    background: 'var(--accent-gradient)',
+                    color: '#fff',
                     border: 'none',
+                    borderRadius: '10px',
                     cursor: 'pointer',
-                    background: testViewMode === 'student' ? 'var(--accent-gradient)' : 'rgba(255,255,255,0.05)',
-                    color: testViewMode === 'student' ? '#fff' : 'var(--text-secondary)'
+                    boxShadow: '0 4px 20px rgba(139, 92, 246, 0.45)',
+                    transition: 'transform 0.15s ease'
                   }}
                 >
-                  👨‍🎓 Student: Answer & Upload Paper
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTestViewMode('examiner')}
-                  style={{
-                    padding: '0.45rem 1rem',
-                    fontSize: '0.85rem',
-                    fontWeight: 600,
-                    borderRadius: '8px',
-                    border: 'none',
-                    cursor: 'pointer',
-                    background: testViewMode === 'examiner' ? 'var(--accent-gradient)' : 'rgba(255,255,255,0.05)',
-                    color: testViewMode === 'examiner' ? '#fff' : 'var(--text-secondary)'
-                  }}
-                >
-                  📝 Examiner: Check & Give Number
+                  🚀 Start Exam Now
                 </button>
               </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Current:</span>
-                <span style={{ fontSize: '0.9rem', fontWeight: 700, color: '#34d399', background: 'rgba(16, 185, 129, 0.15)', padding: '0.2rem 0.65rem', borderRadius: '14px', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
-                  Result {currentModalDisplayResult}
-                </span>
-              </div>
-            </div>
-
+            ) : (
+              <>
             {/* Uploaded Answer Paper Gallery */}
             {testViewMode === 'examiner' && (
               <div style={{ marginBottom: '1.25rem', background: 'rgba(139, 92, 246, 0.08)', border: '1px solid rgba(139, 92, 246, 0.25)', borderRadius: '12px', padding: '0.9rem' }}>
@@ -1519,10 +2097,17 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
 
             {/* Slide Navigation Header Bar */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-                <span style={{ fontSize: '1rem', fontWeight: 700, color: '#fff' }}>
-                  {questionDisplayMode === 'slide' ? `Question ${currentSlideIndex + 1} of ${modalQuestions.length}` : `All Questions (${modalQuestions.length})`}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '1.05rem', fontWeight: 700, color: '#fff' }}>
+                  {questionDisplayMode === 'slide' 
+                    ? `Question ${modalQuestions[currentSlideIndex]?.displayNumber || currentSlideIndex + 1} of ${modalQuestions.length}`
+                    : `All Questions (${modalQuestions.length})`}
                 </span>
+                {questionDisplayMode === 'slide' && modalQuestions[currentSlideIndex] && (
+                  <span style={{ fontSize: '0.8rem', color: '#c4b5fd', background: 'rgba(139, 92, 246, 0.12)', border: '1px solid rgba(139, 92, 246, 0.25)', padding: '0.15rem 0.5rem', borderRadius: '6px' }}>
+                    Set {modalQuestions[currentSlideIndex].setNumber}: {modalQuestions[currentSlideIndex].cleanSectionTitle}
+                  </span>
+                )}
                 <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', padding: '0.15rem 0.6rem', borderRadius: '12px', background: 'rgba(255,255,255,0.06)' }}>
                   {testViewMode === 'student' ? `${modalAnsweredCount}/${modalQuestions.length} Answered` : `${modalGradedCount}/${modalQuestions.length} Graded • Awarded: ${modalAwardedSum}/${modalTotalMax}`}
                 </span>
@@ -1565,46 +2150,352 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
               </div>
             )}
 
-            {/* Question Jump Pills */}
+            {/* Contained Question Navigator (Collapsible by Question Type & Contained Scroller Strip) */}
             {questionDisplayMode === 'slide' && modalQuestions.length > 0 && (
-              <div style={{ display: 'flex', gap: '0.4rem', overflowX: 'auto', paddingBottom: '0.5rem', marginBottom: '1.1rem' }}>
-                {modalQuestions.map((q, qIdx) => {
-                  const isActive = qIdx === currentSlideIndex;
-                  const isAns = Boolean(studentAnswers[q.id]?.trim());
-                  const isGrd = awardedMarks[q.id] !== undefined && awardedMarks[q.id] !== '';
-                  const awd = awardedMarks[q.id];
-                  const qMax = Number(q.marks) || 5;
-
-                  return (
+              <div style={{
+                width: '100%',
+                maxWidth: '100%',
+                boxSizing: 'border-box',
+                background: 'rgba(15, 23, 42, 0.75)',
+                border: '1px solid rgba(255, 255, 255, 0.08)',
+                borderRadius: '12px',
+                padding: '0.75rem',
+                marginBottom: '1.25rem',
+                boxShadow: '0 4px 20px rgba(0, 0, 0, 0.25)'
+              }}>
+                {/* Navigator Header Controls: Set Filter Tabs + View Mode Toggles */}
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: '0.6rem',
+                  marginBottom: '0.65rem',
+                  flexWrap: 'wrap'
+                }}>
+                  {/* Set Tabs / Filter */}
+                  <div style={{ display: 'flex', gap: '0.35rem', overflowX: 'auto', maxWidth: '100%', paddingBottom: '2px', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)', marginRight: '0.2rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                      Sets:
+                    </span>
                     <button
-                      key={q.id || qIdx}
                       type="button"
-                      onClick={() => {
-                        if (testViewMode === 'student') saveStudentAnswers(studentAnswers, true);
-                        else saveExaminerGrading(awardedMarks, examinerNotes, overallExaminerFeedback);
-                        setCurrentSlideIndex(qIdx);
-                      }}
+                      onClick={() => setSelectedSetFilter('all')}
                       style={{
-                        flexShrink: 0,
-                        padding: '0.35rem 0.65rem',
-                        borderRadius: '8px',
-                        fontSize: '0.78rem',
+                        padding: '0.22rem 0.6rem',
+                        borderRadius: '6px',
+                        fontSize: '0.75rem',
                         fontWeight: 600,
                         cursor: 'pointer',
-                        border: isActive ? '1.5px solid var(--accent-primary)' : '1px solid rgba(255,255,255,0.08)',
-                        background: isActive ? 'rgba(139, 92, 246, 0.25)' : (testViewMode === 'student' ? (isAns ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.03)') : (isGrd ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.03)')),
-                        color: isActive ? '#fff' : (testViewMode === 'student' ? (isAns ? '#34d399' : 'var(--text-secondary)') : (isGrd ? '#34d399' : 'var(--text-secondary)')),
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.3rem'
+                        border: selectedSetFilter === 'all' ? '1px solid var(--accent-primary)' : '1px solid rgba(255,255,255,0.08)',
+                        background: selectedSetFilter === 'all' ? 'rgba(139, 92, 246, 0.25)' : 'rgba(255,255,255,0.03)',
+                        color: selectedSetFilter === 'all' ? '#fff' : 'var(--text-secondary)',
+                        whiteSpace: 'nowrap'
                       }}
                     >
-                      <span>Q{q.id || qIdx + 1}</span>
-                      {testViewMode === 'student' && isAns && <span style={{ fontSize: '0.7rem', color: '#34d399' }}>✓</span>}
-                      {testViewMode === 'examiner' && isGrd && <span style={{ fontSize: '0.68rem', color: '#34d399' }}>[{awd}/{qMax}]</span>}
+                      All ({modalQuestions.length})
                     </button>
-                  );
-                })}
+                    {questionSets.map(s => {
+                      const isFilterActive = selectedSetFilter === s.setNumber;
+                      const isCurrentActive = modalQuestions[currentSlideIndex]?.setNumber === s.setNumber;
+                      const sAnswered = s.questions.filter(q => Boolean(studentAnswers[q.id]?.trim())).length;
+
+                      return (
+                        <button
+                          key={s.setNumber}
+                          type="button"
+                          onClick={() => {
+                            setSelectedSetFilter(s.setNumber);
+                            if (!isCurrentActive && s.questions.length > 0) {
+                              setCurrentSlideIndex(s.questions[0].globalIndex);
+                            }
+                          }}
+                          style={{
+                            padding: '0.22rem 0.6rem',
+                            borderRadius: '6px',
+                            fontSize: '0.75rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            border: isFilterActive ? '1px solid var(--accent-primary)' : (isCurrentActive ? '1px solid rgba(139, 92, 246, 0.4)' : '1px solid rgba(255,255,255,0.08)'),
+                            background: isFilterActive ? 'rgba(139, 92, 246, 0.25)' : (isCurrentActive ? 'rgba(139, 92, 246, 0.1)' : 'rgba(255,255,255,0.03)'),
+                            color: isFilterActive || isCurrentActive ? '#fff' : 'var(--text-secondary)',
+                            whiteSpace: 'nowrap',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.35rem'
+                          }}
+                        >
+                          <span>Set {s.setNumber}: {s.title}</span>
+                          <span style={{ fontSize: '0.68rem', opacity: 0.8, color: sAnswered === s.questions.length ? '#34d399' : 'inherit' }}>
+                            ({sAnswered}/{s.questions.length})
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Mode Selector & Scroller Arrow Controls */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <div style={{ display: 'flex', background: 'rgba(0,0,0,0.4)', borderRadius: '6px', padding: '2px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                      <button
+                        type="button"
+                        onClick={() => setNavigatorViewMode('collapsible')}
+                        style={{
+                          padding: '0.22rem 0.55rem',
+                          fontSize: '0.72rem',
+                          fontWeight: 600,
+                          border: 'none',
+                          borderRadius: '4px',
+                          background: navigatorViewMode === 'collapsible' ? 'var(--accent-primary)' : 'transparent',
+                          color: navigatorViewMode === 'collapsible' ? '#fff' : 'var(--text-secondary)',
+                          cursor: 'pointer'
+                        }}
+                        title="Group questions by type with collapsible sections"
+                      >
+                        📁 By Question Type
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setNavigatorViewMode('scroller')}
+                        style={{
+                          padding: '0.22rem 0.55rem',
+                          fontSize: '0.72rem',
+                          fontWeight: 600,
+                          border: 'none',
+                          borderRadius: '4px',
+                          background: navigatorViewMode === 'scroller' ? 'var(--accent-primary)' : 'transparent',
+                          color: navigatorViewMode === 'scroller' ? '#fff' : 'var(--text-secondary)',
+                          cursor: 'pointer'
+                        }}
+                        title="Horizontal scroll strip with navigation arrows"
+                      >
+                        ↔ Scroller Strip
+                      </button>
+                    </div>
+
+                    {navigatorViewMode === 'scroller' && (
+                      <div style={{ display: 'flex', gap: '0.25rem' }}>
+                        <button
+                          type="button"
+                          onClick={() => handleScrollPills('left')}
+                          style={{
+                            padding: '0.22rem 0.5rem',
+                            fontSize: '0.75rem',
+                            background: 'rgba(255,255,255,0.06)',
+                            border: '1px solid rgba(255,255,255,0.1)',
+                            borderRadius: '5px',
+                            color: '#fff',
+                            cursor: 'pointer'
+                          }}
+                          title="Scroll left"
+                        >
+                          ◀
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleScrollPills('right')}
+                          style={{
+                            padding: '0.22rem 0.5rem',
+                            fontSize: '0.75rem',
+                            background: 'rgba(255,255,255,0.06)',
+                            border: '1px solid rgba(255,255,255,0.1)',
+                            borderRadius: '5px',
+                            color: '#fff',
+                            cursor: 'pointer'
+                          }}
+                          title="Scroll right"
+                        >
+                          ▶
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* CONTENT AREA */}
+                {navigatorViewMode === 'collapsible' ? (
+                  /* Collapsible Sets View (flexWrap: wrap ensures zero overflow) */
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+                    {questionSets
+                      .filter(s => selectedSetFilter === 'all' || selectedSetFilter === s.setNumber)
+                      .map(s => {
+                        const isCollapsed = Boolean(collapsedSets[s.setNumber]);
+                        const isSetCurrent = modalQuestions[currentSlideIndex]?.setNumber === s.setNumber;
+                        const sAnswered = s.questions.filter(q => Boolean(studentAnswers[q.id]?.trim())).length;
+
+                        return (
+                          <div
+                            key={s.setNumber}
+                            style={{
+                              background: isSetCurrent ? 'rgba(139, 92, 246, 0.08)' : 'rgba(0,0,0,0.22)',
+                              border: isSetCurrent ? '1px solid rgba(139, 92, 246, 0.3)' : '1px solid rgba(255,255,255,0.06)',
+                              borderRadius: '8px',
+                              overflow: 'hidden'
+                            }}
+                          >
+                            {/* Set Collapsible Header */}
+                            <div
+                              onClick={() => toggleSetCollapse(s.setNumber)}
+                              style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                padding: '0.45rem 0.75rem',
+                                cursor: 'pointer',
+                                background: isSetCurrent ? 'rgba(139, 92, 246, 0.14)' : 'rgba(255,255,255,0.02)',
+                                userSelect: 'none'
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                <span style={{ fontSize: '0.82rem', fontWeight: 700, color: isSetCurrent ? '#fff' : '#e2e8f0' }}>
+                                  Set {s.setNumber}: {s.title}
+                                </span>
+                                <span style={{ fontSize: '0.7rem', color: sAnswered === s.questions.length ? '#34d399' : 'var(--text-secondary)', background: 'rgba(255,255,255,0.06)', padding: '0.1rem 0.45rem', borderRadius: '10px' }}>
+                                  {sAnswered}/{s.questions.length} Answered
+                                </span>
+                                {isSetCurrent && (
+                                  <span style={{ fontSize: '0.65rem', background: 'rgba(16, 185, 129, 0.2)', color: '#34d399', padding: '0.1rem 0.4rem', borderRadius: '4px', fontWeight: 700 }}>
+                                    ● Current Set
+                                  </span>
+                                )}
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', color: 'var(--text-secondary)', fontSize: '0.72rem' }}>
+                                <span>{isCollapsed ? '▼ Expand' : '▲ Collapse'}</span>
+                              </div>
+                            </div>
+
+                            {/* Set Questions Grid (Wrapped inside container) */}
+                            {!isCollapsed && (
+                              <div style={{
+                                display: 'flex',
+                                flexWrap: 'wrap',
+                                gap: '0.35rem',
+                                padding: '0.55rem 0.75rem'
+                              }}>
+                                {s.questions.map(q => {
+                                  const isActive = q.globalIndex === currentSlideIndex;
+                                  const isAns = Boolean(studentAnswers[q.id]?.trim());
+                                  const isGrd = awardedMarks[q.id] !== undefined && awardedMarks[q.id] !== '';
+                                  const awd = awardedMarks[q.id];
+                                  const qMax = Number(q.marks) || 5;
+
+                                  return (
+                                    <button
+                                      key={q.id || q.globalIndex}
+                                      id={`q-pill-${q.globalIndex}`}
+                                      type="button"
+                                      onClick={() => {
+                                        if (testViewMode === 'student') saveStudentAnswers(studentAnswers, true);
+                                        else saveExaminerGrading(awardedMarks, examinerNotes, overallExaminerFeedback);
+                                        setCurrentSlideIndex(q.globalIndex);
+                                      }}
+                                      style={{
+                                        padding: '0.32rem 0.6rem',
+                                        borderRadius: '7px',
+                                        fontSize: '0.78rem',
+                                        fontWeight: 700,
+                                        cursor: 'pointer',
+                                        border: isActive ? '1.5px solid var(--accent-primary)' : '1px solid rgba(255,255,255,0.08)',
+                                        background: isActive
+                                          ? 'rgba(139, 92, 246, 0.35)'
+                                          : (testViewMode === 'student'
+                                              ? (isAns ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.03)')
+                                              : (isGrd ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.03)')),
+                                        color: isActive
+                                          ? '#fff'
+                                          : (testViewMode === 'student'
+                                              ? (isAns ? '#34d399' : 'var(--text-secondary)')
+                                              : (isGrd ? '#34d399' : 'var(--text-secondary)')),
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '0.3rem',
+                                        boxShadow: isActive ? '0 0 10px rgba(139, 92, 246, 0.35)' : 'none',
+                                        transition: 'all 0.12s ease'
+                                      }}
+                                      title={`Question ${q.displayNumber} (${q.cleanSectionTitle || cleanText(q.section)})`}
+                                    >
+                                      <span>{q.displayNumber || `Q${q.globalIndex + 1}`}</span>
+                                      {testViewMode === 'student' && isAns && <span style={{ fontSize: '0.72rem', color: '#34d399' }}>✓</span>}
+                                      {testViewMode === 'examiner' && isGrd && <span style={{ fontSize: '0.68rem', color: '#34d399' }}>[{awd}/{qMax}]</span>}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                  </div>
+                ) : (
+                  /* Contained Scroller Strip View */
+                  <div
+                    ref={pillsScrollRef}
+                    style={{
+                      display: 'flex',
+                      gap: '0.4rem',
+                      overflowX: 'auto',
+                      scrollBehavior: 'smooth',
+                      padding: '0.2rem 0.2rem 0.4rem 0.2rem',
+                      width: '100%',
+                      minWidth: 0,
+                      boxSizing: 'border-box'
+                    }}
+                  >
+                    {(selectedSetFilter === 'all'
+                      ? modalQuestions
+                      : modalQuestions.filter(q => q.setNumber === selectedSetFilter)
+                    ).map((q, filteredIdx) => {
+                      const originalIdx = modalQuestions.findIndex(orig => orig.id === q.id);
+                      const qIdx = originalIdx !== -1 ? originalIdx : filteredIdx;
+                      const isActive = qIdx === currentSlideIndex;
+                      const isAns = Boolean(studentAnswers[q.id]?.trim());
+                      const isGrd = awardedMarks[q.id] !== undefined && awardedMarks[q.id] !== '';
+                      const awd = awardedMarks[q.id];
+                      const qMax = Number(q.marks) || 5;
+
+                      return (
+                        <button
+                          key={q.id || qIdx}
+                          id={`q-pill-${qIdx}`}
+                          type="button"
+                          onClick={() => {
+                            if (testViewMode === 'student') saveStudentAnswers(studentAnswers, true);
+                            else saveExaminerGrading(awardedMarks, examinerNotes, overallExaminerFeedback);
+                            setCurrentSlideIndex(qIdx);
+                          }}
+                          style={{
+                            flexShrink: 0,
+                            padding: '0.35rem 0.65rem',
+                            borderRadius: '8px',
+                            fontSize: '0.8rem',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            border: isActive ? '1.5px solid var(--accent-primary)' : '1px solid rgba(255,255,255,0.08)',
+                            background: isActive
+                              ? 'rgba(139, 92, 246, 0.35)'
+                              : (testViewMode === 'student'
+                                  ? (isAns ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.03)')
+                                  : (isGrd ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.03)')),
+                            color: isActive
+                              ? '#fff'
+                              : (testViewMode === 'student'
+                                  ? (isAns ? '#34d399' : 'var(--text-secondary)')
+                                  : (isGrd ? '#34d399' : 'var(--text-secondary)')),
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.3rem',
+                            boxShadow: isActive ? '0 0 10px rgba(139, 92, 246, 0.35)' : 'none',
+                            transition: 'all 0.12s ease'
+                          }}
+                          title={`Question ${q.displayNumber} (${q.cleanSectionTitle || cleanText(q.section)})`}
+                        >
+                          <span>{q.displayNumber || `Q${qIdx + 1}`}</span>
+                          {testViewMode === 'student' && isAns && <span style={{ fontSize: '0.72rem', color: '#34d399' }}>✓</span>}
+                          {testViewMode === 'examiner' && isGrd && <span style={{ fontSize: '0.68rem', color: '#34d399' }}>[{awd}/{qMax}]</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
 
@@ -1623,200 +2514,512 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
                 const isGrd = awardedMarks[q.id] !== undefined && awardedMarks[q.id] !== '';
 
                 return (
-                  <div
-                    key={q.id || actualIndex}
-                    style={{
-                      background: 'rgba(0,0,0,0.28)',
-                      border: '1px solid rgba(255,255,255,0.08)',
-                      borderRadius: '12px',
-                      padding: '1.3rem',
-                      textAlign: 'left'
-                    }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.4rem' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                        <span style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--accent-primary)', background: 'rgba(139, 92, 246, 0.15)', padding: '0.18rem 0.6rem', borderRadius: '6px' }}>
-                          Q{q.id || actualIndex + 1}
+                  <div key={q.id || actualIndex}>
+                    {/* Set Divider in List View */}
+                    {questionDisplayMode !== 'slide' && (idx === 0 || modalQuestions[idx - 1]?.setNumber !== q.setNumber) && (
+                      <div style={{
+                        marginTop: idx > 0 ? '1.5rem' : '0.5rem',
+                        marginBottom: '0.75rem',
+                        padding: '0.75rem 1.1rem',
+                        background: 'linear-gradient(90deg, rgba(139, 92, 246, 0.18), rgba(0,0,0,0.25))',
+                        borderLeft: '4px solid var(--accent-primary)',
+                        borderRadius: '8px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        flexWrap: 'wrap',
+                        gap: '0.5rem'
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                          <span style={{ fontSize: '0.85rem', fontWeight: 800, color: 'var(--accent-primary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                            Set {q.setNumber}
+                          </span>
+                          <span style={{ fontSize: '1rem', fontWeight: 700, color: '#fff' }}>
+                            {q.cleanSectionTitle || cleanText(q.section)}
+                          </span>
+                        </div>
+                        <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                          Questions {q.setNumber}.1 – {q.setNumber}.{modalQuestions.filter(x => x.setNumber === q.setNumber).length}
                         </span>
-                        {q.section && (
-                          <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                            {q.section}
-                          </span>
-                        )}
-                      </div>
-
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        {testViewMode === 'student' && isAns && (
-                          <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#34d399', background: 'rgba(16, 185, 129, 0.15)', padding: '0.15rem 0.5rem', borderRadius: '10px' }}>
-                            ✓ Answered
-                          </span>
-                        )}
-                        {testViewMode === 'examiner' && (
-                          <span style={{ fontSize: '0.75rem', fontWeight: 600, color: isGrd ? '#34d399' : '#facc15', background: isGrd ? 'rgba(16, 185, 129, 0.15)' : 'rgba(234, 179, 8, 0.15)', padding: '0.15rem 0.5rem', borderRadius: '10px' }}>
-                            {isGrd ? `✓ Awarded: ${awarded}/${qMarks}` : 'Pending Marking'}
-                          </span>
-                        )}
-                        <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#f1f5f9', background: 'rgba(255,255,255,0.06)', padding: '0.2rem 0.6rem', borderRadius: '12px' }}>
-                          [{qMarks} Marks]
-                        </span>
-                      </div>
-                    </div>
-
-                    <div style={{ fontSize: '1.02rem', color: '#f8fafc', lineHeight: 1.6, marginBottom: '0.9rem', whiteSpace: 'pre-line' }}>
-                      {cleanText(q.question)}
-                    </div>
-
-                    {q.options && q.options.length > 0 && (
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.5rem', marginBottom: '0.9rem' }}>
-                        {q.options.map((opt, optIdx) => {
-                          const isPicked = studentAns === opt || studentAns.startsWith(opt.slice(0, 2));
-                          const isCorrectKey = hasKey && (q.answerKey.toLowerCase().includes(opt.slice(0, 2).toLowerCase()) || q.answerKey.toLowerCase().includes(opt.toLowerCase()));
-
-                          return (
-                            <button
-                              key={optIdx}
-                              type="button"
-                              onClick={() => {
-                                if (testViewMode === 'student') handleStudentAnswerChange(q.id, opt, true);
-                              }}
-                              disabled={testViewMode === 'examiner'}
-                              style={{
-                                padding: '0.55rem 0.85rem',
-                                borderRadius: '8px',
-                                textAlign: 'left',
-                                fontSize: '0.88rem',
-                                background: isPicked ? 'rgba(139, 92, 246, 0.25)' : 'rgba(255,255,255,0.03)',
-                                border: `1px solid ${isPicked ? 'var(--accent-primary)' : 'rgba(255,255,255,0.08)'}`,
-                                color: isPicked ? '#fff' : 'var(--text-secondary)',
-                                cursor: testViewMode === 'student' ? 'pointer' : 'default',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'space-between'
-                              }}
-                            >
-                              <span>{opt}</span>
-                              {testViewMode === 'student' && isPicked && <span style={{ color: '#a78bfa' }}>✓</span>}
-                              {testViewMode === 'examiner' && isCorrectKey && (
-                                <span style={{ fontSize: '0.7rem', color: '#34d399', background: 'rgba(16, 185, 129, 0.15)', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>Key ✓</span>
-                              )}
-                            </button>
-                          );
-                        })}
                       </div>
                     )}
 
-                    {/* Student Answer Space */}
-                    <div style={{ marginTop: '0.65rem', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '8px', padding: '0.85rem' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
-                        <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                          ✍️ Student's Answer / Solution:
-                        </label>
-                        {studentAns && <span style={{ fontSize: '0.72rem', color: '#34d399' }}>✓ Response entered & saved</span>}
+                    <div
+                      style={{
+                        background: 'linear-gradient(180deg, rgba(30, 41, 59, 0.45) 0%, rgba(15, 23, 42, 0.65) 100%)',
+                        border: '1px solid rgba(255,255,255,0.09)',
+                        borderRadius: '16px',
+                        padding: 'clamp(1rem, 2.5vw, 1.45rem)',
+                        boxShadow: '0 8px 32px rgba(0,0,0,0.36)',
+                        backdropFilter: 'blur(12px)',
+                        WebkitBackdropFilter: 'blur(12px)',
+                        textAlign: 'left',
+                        boxSizing: 'border-box',
+                        overflow: 'hidden'
+                      }}
+                    >
+                      {/* Question Meta Header */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.95rem', flexWrap: 'wrap', gap: '0.6rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', flexWrap: 'wrap' }}>
+                          <span style={{
+                            fontSize: 'clamp(0.85rem, 1.8vw, 0.95rem)',
+                            fontWeight: 800,
+                            color: '#fff',
+                            background: 'var(--accent-gradient)',
+                            padding: '0.28rem 0.8rem',
+                            borderRadius: '9999px',
+                            letterSpacing: '0.3px',
+                            boxShadow: '0 2px 10px rgba(139,92,246,0.35)',
+                            flexShrink: 0
+                          }}>
+                            Question {q.displayNumber || actualIndex + 1}
+                          </span>
+                          <span style={{
+                            fontSize: 'clamp(0.75rem, 1.5vw, 0.82rem)',
+                            fontWeight: 600,
+                            color: '#c4b5fd',
+                            background: 'rgba(139, 92, 246, 0.12)',
+                            border: '1px solid rgba(139, 92, 246, 0.25)',
+                            padding: '0.24rem 0.65rem',
+                            borderRadius: '8px',
+                            maxWidth: '100%',
+                            wordBreak: 'break-word'
+                          }}>
+                            Set {q.setNumber}: {q.cleanSectionTitle || cleanText(q.section)}
+                          </span>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                          {testViewMode === 'student' && isAns && (
+                            <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#34d399', background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.25)', padding: '0.2rem 0.6rem', borderRadius: '9999px', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+                              <span>✓</span>
+                              <span>Answered</span>
+                            </span>
+                          )}
+                          {testViewMode === 'examiner' && (
+                            <span style={{ fontSize: '0.75rem', fontWeight: 600, color: isGrd ? '#34d399' : '#facc15', background: isGrd ? 'rgba(16, 185, 129, 0.15)' : 'rgba(234, 179, 8, 0.15)', border: `1px solid ${isGrd ? 'rgba(16, 185, 129, 0.3)' : 'rgba(234, 179, 8, 0.3)'}`, padding: '0.2rem 0.6rem', borderRadius: '9999px' }}>
+                              {isGrd ? `✓ Awarded: ${awarded}/${qMarks}` : 'Pending Marking'}
+                            </span>
+                          )}
+                          <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#f1f5f9', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)', padding: '0.2rem 0.65rem', borderRadius: '9999px' }}>
+                            [{qMarks} Marks]
+                          </span>
+                        </div>
                       </div>
 
-                      {testViewMode === 'student' ? (
-                        <div>
-                          <textarea
-                            value={studentAns}
-                            onChange={(e) => handleStudentAnswerChange(q.id, e.target.value)}
-                            placeholder="Write your step-by-step solution here..."
-                            rows={3}
-                            style={{ width: '100%', padding: '0.65rem', background: 'rgba(0,0,0,0.35)', border: '1px solid var(--glass-border)', borderRadius: '6px', color: '#fff', fontSize: '0.9rem', resize: 'vertical' }}
-                          />
-                          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.4rem' }}>
-                            <button
-                              type="button"
-                              onClick={() => saveStudentAnswers(studentAnswers, true)}
-                              style={{ padding: '0.3rem 0.75rem', fontSize: '0.78rem', background: 'rgba(139, 92, 246, 0.2)', border: '1px solid var(--accent-primary)', color: '#fff', borderRadius: '6px', cursor: 'pointer' }}
-                            >
-                              💾 Save Answer
-                            </button>
+                      {/* Question Prompt */}
+                      <div style={{ fontSize: 'clamp(0.98rem, 1.8vw, 1.1rem)', color: '#f8fafc', lineHeight: 1.65, marginBottom: '1rem', whiteSpace: 'pre-line', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
+                        {cleanText(q.question)}
+                      </div>
+
+                      {/* Multiple Choice Options */}
+                      {q.options && q.options.length > 0 && (
+                        <div style={{ marginBottom: '1rem' }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 250px), 1fr))', gap: '0.65rem', marginBottom: '0.4rem' }}>
+                            {q.options.map((opt, optIdx) => {
+                              const isPicked = Boolean(studentAns?.trim()) && (
+                                studentAns.trim() === opt.trim() || 
+                                (opt.trim().length >= 2 && studentAns.trim().startsWith(opt.trim().slice(0, 2)))
+                              );
+                              const isCorrectKey = hasKey && (q.answerKey.toLowerCase().includes(opt.slice(0, 2).toLowerCase()) || q.answerKey.toLowerCase().includes(opt.toLowerCase()));
+
+                              let btnBg = 'rgba(255,255,255,0.03)';
+                              let btnBorder = 'rgba(255,255,255,0.08)';
+                              let btnColor = 'var(--text-secondary)';
+
+                              if (!isExamFinished) {
+                                if (isPicked) {
+                                  btnBg = 'rgba(139, 92, 246, 0.22)';
+                                  btnBorder = 'var(--accent-primary)';
+                                  btnColor = '#fff';
+                                }
+                              } else {
+                                if (isPicked && isCorrectKey) {
+                                  btnBg = 'rgba(16, 185, 129, 0.22)';
+                                  btnBorder = '#10b981';
+                                  btnColor = '#fff';
+                                } else if (isPicked && !isCorrectKey) {
+                                  btnBg = 'rgba(239, 68, 68, 0.22)';
+                                  btnBorder = '#ef4444';
+                                  btnColor = '#fff';
+                                } else if (!isPicked && isCorrectKey) {
+                                  btnBg = 'rgba(16, 185, 129, 0.1)';
+                                  btnBorder = 'rgba(16, 185, 129, 0.5)';
+                                  btnColor = '#34d399';
+                                }
+                              }
+
+                              return (
+                                <button
+                                  key={optIdx}
+                                  type="button"
+                                  onClick={() => {
+                                    if (testViewMode === 'student' && !isExamFinished) {
+                                      if (isPicked) {
+                                        handleStudentAnswerChange(q.id, '', true);
+                                      } else {
+                                        handleStudentAnswerChange(q.id, opt, true);
+                                      }
+                                    }
+                                  }}
+                                  disabled={testViewMode === 'examiner' || isExamFinished}
+                                  title={testViewMode === 'student' && !isExamFinished && isPicked ? 'Click again to unselect' : ''}
+                                  style={{
+                                    padding: '0.65rem 0.85rem',
+                                    borderRadius: '10px',
+                                    textAlign: 'left',
+                                    fontSize: '0.88rem',
+                                    background: btnBg,
+                                    border: `1px solid ${btnBorder}`,
+                                    color: btnColor,
+                                    cursor: testViewMode === 'student' && !isExamFinished ? 'pointer' : 'default',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.65rem',
+                                    transition: 'all 0.18s ease',
+                                    boxSizing: 'border-box',
+                                    width: '100%'
+                                  }}
+                                >
+                                  <span
+                                    style={{
+                                      width: '24px',
+                                      height: '24px',
+                                      borderRadius: '50%',
+                                      background: isPicked ? 'var(--accent-primary)' : 'rgba(255,255,255,0.08)',
+                                      color: isPicked ? '#fff' : 'var(--text-secondary)',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      fontSize: '0.75rem',
+                                      fontWeight: 700,
+                                      flexShrink: 0
+                                    }}
+                                  >
+                                    {String.fromCharCode(65 + optIdx)}
+                                  </span>
+                                  <span style={{ flex: 1, wordBreak: 'break-word', lineHeight: 1.45 }}>{opt}</span>
+                                  {!isExamFinished && testViewMode === 'student' && isPicked && (
+                                    <span style={{ fontSize: '0.75rem', color: '#c4b5fd', fontWeight: 600, flexShrink: 0 }}>✓ Picked</span>
+                                  )}
+                                  {isExamFinished && isPicked && isCorrectKey && (
+                                    <span style={{ fontSize: '0.75rem', color: '#34d399', fontWeight: 700, flexShrink: 0 }}>✓ Correct</span>
+                                  )}
+                                  {isExamFinished && isPicked && !isCorrectKey && (
+                                    <span style={{ fontSize: '0.75rem', color: '#f87171', fontWeight: 700, flexShrink: 0 }}>✕ Your Answer</span>
+                                  )}
+                                  {isExamFinished && !isPicked && isCorrectKey && (
+                                    <span style={{ fontSize: '0.72rem', color: '#34d399', background: 'rgba(16, 185, 129, 0.2)', padding: '0.1rem 0.4rem', borderRadius: '4px', flexShrink: 0 }}>✓ Key</span>
+                                  )}
+                                  {testViewMode === 'examiner' && !isExamFinished && isCorrectKey && (
+                                    <span style={{ fontSize: '0.7rem', color: '#34d399', background: 'rgba(16, 185, 129, 0.15)', padding: '0.1rem 0.4rem', borderRadius: '4px', flexShrink: 0 }}>Key ✓</span>
+                                  )}
+                                </button>
+                              );
+                            })}
                           </div>
-                        </div>
-                      ) : (
-                        <div style={{ padding: '0.6rem', background: 'rgba(0,0,0,0.25)', borderRadius: '6px', fontSize: '0.88rem', color: studentAns ? '#e2e8f0' : 'var(--text-secondary)', fontStyle: studentAns ? 'normal' : 'italic', minHeight: '40px', whiteSpace: 'pre-line' }}>
-                          {studentAns || 'No typed answer.'}
+
+                          {!isExamFinished && testViewMode === 'student' && Boolean(studentAns?.trim()) && (
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.3rem' }}>
+                              <button
+                                type="button"
+                                onClick={() => handleStudentAnswerChange(q.id, '', true)}
+                                style={{
+                                  background: 'transparent',
+                                  border: 'none',
+                                  color: '#f87171',
+                                  fontSize: '0.75rem',
+                                  cursor: 'pointer',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.25rem',
+                                  padding: '0.15rem 0.4rem',
+                                  borderRadius: '4px'
+                                }}
+                                title="Clear selection for this question"
+                              >
+                                ✕ Clear Option Selection
+                              </button>
+                            </div>
+                          )}
+
+                          {/* AFTER FINISH: Show Explanation/Solution for MCQ */}
+                          {isExamFinished && hasKey && (
+                            <div style={{ marginTop: '0.65rem', padding: '0.6rem 0.9rem', background: 'rgba(16, 185, 129, 0.08)', borderRadius: '8px', borderLeft: '3px solid #10b981', fontSize: '0.84rem', color: '#cbd5e1' }}>
+                              💡 <strong style={{ color: '#34d399' }}>Answer Key / Solution:</strong> {q.answerKey}
+                            </div>
+                          )}
                         </div>
                       )}
-                    </div>
 
-                    {/* Examiner Evaluation Space */}
-                    {testViewMode === 'examiner' && (
-                      <div style={{ marginTop: '0.85rem', background: 'rgba(139, 92, 246, 0.06)', border: '1px solid rgba(139, 92, 246, 0.2)', borderRadius: '8px', padding: '0.85rem' }}>
-                        {hasKey && (
-                          <div style={{ marginBottom: '0.65rem' }}>
-                            <button
-                              type="button"
-                              onClick={() => setShowAnswerKeys(prev => ({ ...prev, [q.id]: !prev[q.id] }))}
-                              style={{ background: 'transparent', border: 'none', color: 'var(--accent-primary)', fontSize: '0.78rem', cursor: 'pointer', padding: 0 }}
-                            >
-                              {showAnswerKeys[q.id] ? '▲ Hide Marking Key' : '▼ View Marking Key'}
-                            </button>
-                            {showAnswerKeys[q.id] && (
-                              <div style={{ marginTop: '0.35rem', padding: '0.5rem 0.75rem', background: 'rgba(0,0,0,0.4)', borderRadius: '6px', fontSize: '0.82rem', color: '#cbd5e1', borderLeft: '3px solid var(--accent-primary)' }}>
-                                💡 <strong>Rubric:</strong> {q.answerKey}
+                      {/* Student Answer Space */}
+                      <div style={{
+                        marginTop: '1rem',
+                        background: 'rgba(10, 15, 29, 0.55)',
+                        border: '1px solid rgba(255,255,255,0.08)',
+                        borderRadius: '12px',
+                        padding: 'clamp(0.75rem, 2vw, 1.1rem)'
+                      }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <label style={{ fontSize: '0.85rem', fontWeight: 700, color: '#f1f5f9', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                              <span>✍️</span>
+                              <span>Student's Answer / Solution Workspace</span>
+                            </label>
+                            {q.options && q.options.length > 0 && (
+                              <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.06)', padding: '0.12rem 0.45rem', borderRadius: '4px' }}>
+                                Optional note / steps
+                              </span>
+                            )}
+                          </div>
+
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            {studentAns ? (
+                              <span style={{ fontSize: '0.74rem', color: '#34d399', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#34d399', display: 'inline-block' }} />
+                                <span>Response Saved</span>
+                              </span>
+                            ) : (
+                              <span style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+                                ○ No answer entered yet
+                              </span>
+                            )}
+
+                            {!isExamFinished && testViewMode === 'student' && Boolean(studentAns?.trim()) && (
+                              <button
+                                type="button"
+                                onClick={() => handleStudentAnswerChange(q.id, '', true)}
+                                style={{
+                                  padding: '0.2rem 0.5rem',
+                                  fontSize: '0.72rem',
+                                  fontWeight: 500,
+                                  background: 'rgba(239, 68, 68, 0.12)',
+                                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                                  color: '#f87171',
+                                  borderRadius: '5px',
+                                  cursor: 'pointer',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.25rem',
+                                  transition: 'all 0.15s ease'
+                                }}
+                                title="Clear answer for this question"
+                              >
+                                ✕ Clear
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {testViewMode === 'student' ? (
+                          <div>
+                            <textarea
+                              value={studentAns}
+                              onChange={(e) => handleStudentAnswerChange(q.id, e.target.value)}
+                              disabled={isExamFinished}
+                              placeholder={isExamFinished ? "No response entered." : "Write your step-by-step solution, calculations, or answer here..."}
+                              rows={4}
+                              style={{
+                                width: '100%',
+                                boxSizing: 'border-box',
+                                padding: '0.75rem 0.95rem',
+                                background: isExamFinished ? 'rgba(0,0,0,0.2)' : 'rgba(0,0,0,0.4)',
+                                border: '1px solid rgba(255,255,255,0.12)',
+                                borderRadius: '8px',
+                                color: isExamFinished ? '#cbd5e1' : '#fff',
+                                fontSize: '0.92rem',
+                                lineHeight: 1.6,
+                                fontFamily: 'inherit',
+                                minHeight: 'clamp(100px, 16vh, 160px)',
+                                maxHeight: '380px',
+                                resize: isExamFinished ? 'none' : 'vertical',
+                                outline: 'none',
+                                transition: 'border-color 0.2s, box-shadow 0.2s'
+                              }}
+                              onFocus={(e) => {
+                                if (!isExamFinished) {
+                                  e.target.style.borderColor = 'var(--accent-primary)';
+                                  e.target.style.boxShadow = '0 0 0 3px rgba(139, 92, 246, 0.2)';
+                                }
+                              }}
+                              onBlur={(e) => {
+                                e.target.style.borderColor = 'rgba(255,255,255,0.12)';
+                                e.target.style.boxShadow = 'none';
+                              }}
+                            />
+                            {!isExamFinished && (
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
+                                <span style={{ fontSize: '0.73rem', color: 'var(--text-secondary)' }}>
+                                  ⚡ Answers auto-save as you type or click Next Question
+                                </span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                  {Boolean(studentAns?.trim()) && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleStudentAnswerChange(q.id, '', true)}
+                                      style={{
+                                        padding: '0.32rem 0.75rem',
+                                        fontSize: '0.78rem',
+                                        background: 'rgba(239, 68, 68, 0.12)',
+                                        border: '1px solid rgba(239, 68, 68, 0.3)',
+                                        color: '#f87171',
+                                        borderRadius: '6px',
+                                        cursor: 'pointer'
+                                      }}
+                                    >
+                                      ✕ Clear
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => saveStudentAnswers(studentAnswers, true)}
+                                    style={{
+                                      padding: '0.32rem 0.85rem',
+                                      fontSize: '0.78rem',
+                                      fontWeight: 600,
+                                      background: 'rgba(139, 92, 246, 0.25)',
+                                      border: '1px solid var(--accent-primary)',
+                                      color: '#fff',
+                                      borderRadius: '6px',
+                                      cursor: 'pointer',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '0.35rem'
+                                    }}
+                                  >
+                                    💾 Save Answer
+                                  </button>
+                                </div>
                               </div>
                             )}
                           </div>
+                        ) : (
+                          <div style={{
+                            padding: '0.75rem 0.95rem',
+                            background: 'rgba(0,0,0,0.3)',
+                            border: '1px solid rgba(255,255,255,0.06)',
+                            borderRadius: '8px',
+                            fontSize: '0.9rem',
+                            color: studentAns ? '#e2e8f0' : 'var(--text-secondary)',
+                            fontStyle: studentAns ? 'normal' : 'italic',
+                            minHeight: '48px',
+                            lineHeight: 1.6,
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word'
+                          }}>
+                            {studentAns || 'No typed answer provided by student.'}
+                          </div>
                         )}
-
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.8rem', flexWrap: 'wrap' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#f1f5f9' }}>Give Number / Marks:</span>
-                            <input
-                              type="number"
-                              min={0}
-                              max={qMarks}
-                              value={awarded}
-                              onChange={(e) => {
-                                const num = Math.min(Math.max(0, Number(e.target.value) || 0), qMarks);
-                                setAwardedMarks(prev => ({ ...prev, [q.id]: num }));
-                              }}
-                              placeholder="0"
-                              style={{ width: '60px', padding: '0.3rem 0.5rem', fontSize: '0.88rem', fontWeight: 700, color: '#34d399', textAlign: 'center', background: 'rgba(0,0,0,0.5)', border: '1px solid var(--accent-primary)', borderRadius: '6px' }}
-                            />
-                            <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>/ {qMarks} Marks</span>
-                          </div>
-
-                          <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
-                            <button type="button" onClick={() => handleAwardMarkAndConfirm(q.id, qMarks, qMarks)} style={{ padding: '0.22rem 0.6rem', fontSize: '0.75rem', background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#34d399', borderRadius: '4px', cursor: 'pointer' }}>
-                              Full ({qMarks})
-                            </button>
-                            <button type="button" onClick={() => handleAwardMarkAndConfirm(q.id, Math.round(qMarks / 2), qMarks)} style={{ padding: '0.22rem 0.6rem', fontSize: '0.75rem', background: 'rgba(234, 179, 8, 0.15)', border: '1px solid rgba(234, 179, 8, 0.3)', color: '#facc15', borderRadius: '4px', cursor: 'pointer' }}>
-                              Half ({Math.round(qMarks / 2)})
-                            </button>
-                            <button type="button" onClick={() => handleAwardMarkAndConfirm(q.id, 0, qMarks)} style={{ padding: '0.22rem 0.6rem', fontSize: '0.75rem', background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#f87171', borderRadius: '4px', cursor: 'pointer' }}>
-                              0
-                            </button>
-                            <button type="button" onClick={() => handleAwardMarkAndConfirm(q.id, awardedMarks[q.id] !== undefined ? awardedMarks[q.id] : 0, qMarks)} style={{ padding: '0.22rem 0.75rem', fontSize: '0.75rem', fontWeight: 600, background: 'rgba(16, 185, 129, 0.25)', border: '1px solid #34d399', color: '#34d399', borderRadius: '4px', cursor: 'pointer' }}>
-                              ✓ Confirm Mark
-                            </button>
-                          </div>
-                        </div>
-
-                        <div style={{ marginTop: '0.6rem' }}>
-                          <input
-                            type="text"
-                            value={examinerNotes[q.id] || ''}
-                            onChange={(e) => {
-                              const note = e.target.value;
-                              setExaminerNotes(prev => ({ ...prev, [q.id]: note }));
-                              saveExaminerGrading(awardedMarks, { ...examinerNotes, [q.id]: note }, overallExaminerFeedback);
-                            }}
-                            placeholder="Teacher's note or correction on this question..."
-                            style={{ width: '100%', padding: '0.35rem 0.6rem', fontSize: '0.8rem', background: 'rgba(0,0,0,0.3)', border: '1px solid var(--glass-border)', borderRadius: '6px', color: '#cbd5e1' }}
-                          />
-                        </div>
                       </div>
-                    )}
+
+                      {/* AFTER FINISH: Show Rubric / Model Solution for Descriptive Questions */}
+                      {isExamFinished && hasKey && (
+                        <div style={{ marginTop: '0.85rem', background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.25)', borderRadius: '10px', padding: '0.85rem 1rem' }}>
+                          <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#34d399', marginBottom: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                            <span>💡 Official Model Answer & Rubric:</span>
+                          </div>
+                          <div style={{ fontSize: '0.88rem', color: '#e2e8f0', lineHeight: 1.6, whiteSpace: 'pre-line', wordBreak: 'break-word' }}>
+                            {q.answerKey}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Examiner Evaluation Space */}
+                      {testViewMode === 'examiner' && (
+                        <div style={{ marginTop: '0.95rem', background: 'rgba(139, 92, 246, 0.06)', border: '1px solid rgba(139, 92, 246, 0.2)', borderRadius: '10px', padding: '0.85rem 1rem' }}>
+                          {hasKey && (
+                            <div style={{ marginBottom: '0.65rem' }}>
+                              <button
+                                type="button"
+                                onClick={() => setShowAnswerKeys(prev => ({ ...prev, [q.id]: !prev[q.id] }))}
+                                style={{ background: 'transparent', border: 'none', color: 'var(--accent-primary)', fontSize: '0.78rem', cursor: 'pointer', padding: 0 }}
+                              >
+                                {showAnswerKeys[q.id] ? '▲ Hide Marking Key' : '▼ View Marking Key'}
+                              </button>
+                              {showAnswerKeys[q.id] && (
+                                <div style={{ marginTop: '0.35rem', padding: '0.5rem 0.75rem', background: 'rgba(0,0,0,0.4)', borderRadius: '6px', fontSize: '0.82rem', color: '#cbd5e1', borderLeft: '3px solid var(--accent-primary)' }}>
+                                  💡 <strong>Rubric:</strong> {q.answerKey}
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.8rem', flexWrap: 'wrap' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                              <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#f1f5f9' }}>Give Number / Marks:</span>
+                              <input
+                                type="number"
+                                min={0}
+                                max={qMarks}
+                                value={awarded}
+                                onChange={(e) => {
+                                  const num = Math.min(Math.max(0, Number(e.target.value) || 0), qMarks);
+                                  setAwardedMarks(prev => ({ ...prev, [q.id]: num }));
+                                }}
+                                placeholder="0"
+                                style={{ width: '60px', padding: '0.3rem 0.5rem', fontSize: '0.88rem', fontWeight: 700, color: '#34d399', textAlign: 'center', background: 'rgba(0,0,0,0.5)', border: '1px solid var(--accent-primary)', borderRadius: '6px' }}
+                              />
+                              <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>/ {qMarks} Marks</span>
+                            </div>
+
+                            <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                              <button type="button" onClick={() => handleAwardMarkAndConfirm(q.id, qMarks, qMarks)} style={{ padding: '0.22rem 0.6rem', fontSize: '0.75rem', background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#34d399', borderRadius: '4px', cursor: 'pointer' }}>
+                                Full ({qMarks})
+                              </button>
+                              <button type="button" onClick={() => handleAwardMarkAndConfirm(q.id, Math.round(qMarks / 2), qMarks)} style={{ padding: '0.22rem 0.6rem', fontSize: '0.75rem', background: 'rgba(234, 179, 8, 0.15)', border: '1px solid rgba(234, 179, 8, 0.3)', color: '#facc15', borderRadius: '4px', cursor: 'pointer' }}>
+                                Half ({Math.round(qMarks / 2)})
+                              </button>
+                              <button type="button" onClick={() => handleAwardMarkAndConfirm(q.id, 0, qMarks)} style={{ padding: '0.22rem 0.6rem', fontSize: '0.75rem', background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#f87171', borderRadius: '4px', cursor: 'pointer' }}>
+                                0
+                              </button>
+                              <button type="button" onClick={() => handleAwardMarkAndConfirm(q.id, awardedMarks[q.id] !== undefined ? awardedMarks[q.id] : 0, qMarks)} style={{ padding: '0.22rem 0.75rem', fontSize: '0.75rem', fontWeight: 600, background: 'rgba(16, 185, 129, 0.25)', border: '1px solid #34d399', color: '#34d399', borderRadius: '4px', cursor: 'pointer' }}>
+                                ✓ Confirm Mark
+                              </button>
+                            </div>
+                          </div>
+
+                          <div style={{ marginTop: '0.6rem' }}>
+                            <input
+                              type="text"
+                              value={examinerNotes[q.id] || ''}
+                              onChange={(e) => {
+                                const note = e.target.value;
+                                setExaminerNotes(prev => ({ ...prev, [q.id]: note }));
+                                saveExaminerGrading(awardedMarks, { ...examinerNotes, [q.id]: note }, overallExaminerFeedback);
+                              }}
+                              placeholder="Teacher's note or correction on this question..."
+                              style={{ width: '100%', boxSizing: 'border-box', padding: '0.35rem 0.6rem', fontSize: '0.8rem', background: 'rgba(0,0,0,0.3)', border: '1px solid var(--glass-border)', borderRadius: '6px', color: '#cbd5e1' }}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 );
               })}
             </div>
 
-            {/* Slide Navigation Controls */}
+            {/* Docked Sticky Slide Navigation Controls */}
             {questionDisplayMode === 'slide' && modalQuestions.length > 0 && (
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '1.2rem', paddingTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.08)', flexWrap: 'wrap', gap: '0.8rem' }}>
+              <div style={{
+                position: 'sticky',
+                bottom: 'clamp(0.5rem, 2vh, 1rem)',
+                zIndex: 35,
+                background: 'rgba(15, 23, 42, 0.95)',
+                backdropFilter: 'blur(16px)',
+                WebkitBackdropFilter: 'blur(16px)',
+                border: '1px solid rgba(255, 255, 255, 0.12)',
+                boxShadow: '0 12px 35px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.05)',
+                borderRadius: '16px',
+                padding: 'clamp(0.6rem, 1.8vw, 0.85rem) clamp(0.75rem, 2.5vw, 1.25rem)',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: '0.65rem',
+                marginTop: '1.5rem',
+                boxSizing: 'border-box',
+                width: '100%'
+              }}>
                 <button
                   type="button"
                   onClick={() => {
@@ -1828,24 +3031,37 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
                   }}
                   disabled={currentSlideIndex === 0}
                   style={{
-                    padding: '0.55rem 1.2rem',
-                    borderRadius: '8px',
+                    padding: 'clamp(0.5rem, 1.5vw, 0.65rem) clamp(0.75rem, 2vw, 1.2rem)',
+                    borderRadius: '10px',
                     border: '1px solid rgba(255,255,255,0.12)',
                     background: currentSlideIndex === 0 ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.08)',
                     color: currentSlideIndex === 0 ? 'rgba(255,255,255,0.25)' : '#fff',
                     cursor: currentSlideIndex === 0 ? 'not-allowed' : 'pointer',
-                    fontSize: '0.85rem',
-                    fontWeight: 600
+                    fontSize: 'clamp(0.78rem, 1.5vw, 0.86rem)',
+                    fontWeight: 600,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.4rem',
+                    flexShrink: 0,
+                    transition: 'all 0.15s ease'
                   }}
                 >
-                  ← Previous Question
+                  <span>←</span>
+                  <span>Previous</span>
                 </button>
 
-                <div style={{ textAlign: 'center' }}>
-                  <span style={{ fontSize: '0.83rem', fontWeight: 600, color: '#f1f5f9' }}>
-                    Question {currentSlideIndex + 1} of {modalQuestions.length}
-                  </span>
-                  <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>Tip: Use ← → keys to slide</div>
+                <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.15rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', justifyContent: 'center' }}>
+                    <span style={{ fontSize: 'clamp(0.8rem, 1.6vw, 0.9rem)', fontWeight: 700, color: '#f1f5f9' }}>
+                      Question {modalQuestions[currentSlideIndex]?.displayNumber || currentSlideIndex + 1}
+                    </span>
+                    <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                      of {modalQuestions.length}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', opacity: 0.85 }}>
+                    Tip: Use ← → keys to slide
+                  </div>
                 </div>
 
                 {currentSlideIndex < modalQuestions.length - 1 ? (
@@ -1857,26 +3073,36 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
                       setCurrentSlideIndex(prev => prev + 1);
                     }}
                     style={{
-                      padding: '0.55rem 1.2rem',
-                      borderRadius: '8px',
+                      padding: 'clamp(0.5rem, 1.5vw, 0.65rem) clamp(0.85rem, 2vw, 1.3rem)',
+                      borderRadius: '10px',
                       border: 'none',
                       background: 'var(--accent-gradient)',
                       color: '#fff',
                       cursor: 'pointer',
-                      fontSize: '0.85rem',
-                      fontWeight: 600
+                      fontSize: 'clamp(0.78rem, 1.5vw, 0.86rem)',
+                      fontWeight: 600,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.4rem',
+                      flexShrink: 0,
+                      boxShadow: '0 3px 12px rgba(139, 92, 246, 0.35)',
+                      transition: 'all 0.15s ease'
                     }}
                   >
-                    Next Question →
+                    <span>Next</span>
+                    <span>→</span>
                   </button>
                 ) : (
                   <button
                     type="button"
                     onClick={() => {
                       if (testViewMode === 'student') {
-                        saveStudentAnswers(studentAnswers, true);
-                        setNotificationMsg('✅ All responses submitted successfully!');
-                        setTimeout(() => setNotificationMsg(''), 3000);
+                        if (isExamFinished) {
+                          setNotificationMsg('✅ Exam is already submitted! You are reviewing the answers.');
+                          setTimeout(() => setNotificationMsg(''), 2500);
+                        } else {
+                          handleFinishAndSubmitExam();
+                        }
                       } else {
                         saveExaminerGrading(awardedMarks, examinerNotes, overallExaminerFeedback);
                         setNotificationMsg(`🎉 Paper evaluated successfully! Result published: Result ${modalAwardedSum}/${modalTotalMax}`);
@@ -1884,9 +3110,18 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
                       }
                     }}
                     className="primary"
-                    style={{ padding: '0.55rem 1.2rem', borderRadius: '8px', fontSize: '0.85rem', fontWeight: 600 }}
+                    style={{
+                      padding: 'clamp(0.5rem, 1.5vw, 0.65rem) clamp(0.85rem, 2vw, 1.3rem)',
+                      borderRadius: '10px',
+                      fontSize: 'clamp(0.78rem, 1.5vw, 0.86rem)',
+                      fontWeight: 700,
+                      flexShrink: 0,
+                      boxShadow: '0 3px 14px rgba(16, 185, 129, 0.4)'
+                    }}
                   >
-                    {testViewMode === 'student' ? '🚀 Finish & Submit Paper' : `✅ Finish Checking (${modalAwardedSum}/${modalTotalMax})`}
+                    {testViewMode === 'student' 
+                      ? (isExamFinished ? '✅ Exam Completed' : '🚀 Finish & Submit') 
+                      : `✅ Finish Checking (${modalAwardedSum}/${modalTotalMax})`}
                   </button>
                 )}
               </div>
@@ -1925,7 +3160,7 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
               <div style={{ display: 'flex', gap: '0.5rem' }}>
                 <button
                   type="button"
-                  onClick={() => copyToClipboard(viewingModelTest.questions)}
+                  onClick={handleCopyTest}
                   style={{ padding: '0.45rem 0.8rem', fontSize: '0.82rem', background: 'rgba(255,255,255,0.06)', border: '1px solid var(--glass-border)', borderRadius: '6px', cursor: 'pointer' }}
                 >
                   {copiedSuccess ? '✓ Copied' : 'Copy Test'}
@@ -1939,16 +3174,39 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
                 </button>
               </div>
 
-              <button
-                type="button"
-                onClick={() => setViewingModelTest(null)}
-                style={{ padding: '0.55rem 1.4rem', background: 'rgba(255,255,255,0.1)', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '0.88rem' }}
-              >
-                Close
-              </button>
+              <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
+                {testViewMode === 'student' && !isExamFinished && (
+                  <button
+                    type="button"
+                    onClick={handleFinishAndSubmitExam}
+                    style={{
+                      padding: '0.55rem 1.2rem',
+                      background: 'var(--accent-gradient)',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: '8px',
+                      cursor: 'pointer',
+                      fontSize: '0.85rem',
+                      fontWeight: 600
+                    }}
+                  >
+                    🚀 Finish & Submit Paper
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setViewingModelTest(null)}
+                  style={{ padding: '0.55rem 1.4rem', background: 'rgba(255,255,255,0.1)', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '0.88rem' }}
+                >
+                  Close
+                </button>
+              </div>
             </div>
 
-          </div>
+            </>
+          )}
+
+          </main>
         </div>
       )}
 
