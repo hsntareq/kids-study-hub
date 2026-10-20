@@ -7,6 +7,7 @@ import { generateGeminiContent } from '../../../lib/gemini';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { ref, get, push, set, onValue, remove } from 'firebase/database';
 import Link from 'next/link';
+import MarkDistributionField from '../../../components/MarkDistributionField';
 
 function KidProfileContent() {
   const router = useRouter();
@@ -25,6 +26,7 @@ function KidProfileContent() {
   const [selectedExamId, setSelectedExamId] = useState('');
   const [newTitle, setNewTitle] = useState('');
   const [expandedSubjects, setExpandedSubjects] = useState({});
+  const [subjectsLayoutMode, setSubjectsLayoutMode] = useState('grid'); // 'grid' | 'carousel'
   const [expandedExams, setExpandedExams] = useState({});
   const [editingId, setEditingId] = useState(null);
   const [editTitle, setEditTitle] = useState('');
@@ -33,6 +35,7 @@ function KidProfileContent() {
   const [editPdfPage, setEditPdfPage] = useState('');
   const [settingsSubject, setSettingsSubject] = useState(null);
   const [subjectBookUrl, setSubjectBookUrl] = useState('');
+  const [subjectExamRetentionDays, setSubjectExamRetentionDays] = useState('7');
   
   const [settingsExamInfo, setSettingsExamInfo] = useState(null);
   const [examMarkDistribution, setExamMarkDistribution] = useState('');
@@ -40,6 +43,10 @@ function KidProfileContent() {
   // Mark Distribution inline edit state
   const [editingMarkDistKey, setEditingMarkDistKey] = useState(null); // `${subjectId}_${examId}`
   const [inlineMarkDistValue, setInlineMarkDistValue] = useState('');
+
+  // Exam Archive state
+  const [archiveToast, setArchiveToast] = useState(null); // { message, subjectId, examId }
+  const [showArchivedExamsMap, setShowArchivedExamsMap] = useState({}); // { [subjectId]: boolean }
 
   // Model test popover / generator state
   const [modelTestTarget, setModelTestTarget] = useState(null); // { subject, exam }
@@ -92,6 +99,20 @@ function KidProfileContent() {
   const countWords = (text) => {
     if (!text) return 0;
     return text.trim().split(/\s+/).filter(Boolean).length;
+  };
+
+  const getSubjectIcon = (title) => {
+    const t = (title || '').toLowerCase();
+    if (t.includes('math')) return '📐';
+    if (t.includes('scien') || t.includes('physic') || t.includes('chem') || t.includes('bio')) return '🔬';
+    if (t.includes('eng') || t.includes('lit') || t.includes('gram') || t.includes('read') || t.includes('lang')) return '📖';
+    if (t.includes('hist') || t.includes('geog') || t.includes('social') || t.includes('civic')) return '🌍';
+    if (t.includes('comp') || t.includes('ict') || t.includes('code') || t.includes('tech') || t.includes('program')) return '💻';
+    if (t.includes('art') || t.includes('draw')) return '🎨';
+    if (t.includes('music')) return '🎵';
+    if (t.includes('islam') || t.includes('relig') || t.includes('moral')) return '🕌';
+    if (t.includes('bangla') || t.includes('bengali')) return '🇧🇩';
+    return '📚';
   };
 
   // Image compressor for answer sheet upload
@@ -402,9 +423,11 @@ function KidProfileContent() {
 
   const handleSaveSubjectSettings = async () => {
     if (!settingsSubject || !user || !kid) return;
-    await set(ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${settingsSubject.id}/bookUrl`), subjectBookUrl);
+    await set(ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${settingsSubject.id}/bookUrl`), subjectBookUrl.trim());
+    await set(ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${settingsSubject.id}/examRetentionDays`), Number(subjectExamRetentionDays) || 0);
     setSettingsSubject(null);
     setSubjectBookUrl('');
+    setSubjectExamRetentionDays('7');
   };
 
   const handleSaveExamSettings = async () => {
@@ -430,8 +453,37 @@ function KidProfileContent() {
 
   const handleUpdateExamStatus = async (subjectId, examId, newStatus) => {
     if (!user || !kid) return;
-    const path = `users/${user.uid}/kids/${kid.id}/subjects/${subjectId}/examSettings/${examId}/status`;
+    const dataOwnerUid = searchParams.get("parentId") || user.uid;
+    const path = `users/${dataOwnerUid}/kids/${kid.id}/subjects/${subjectId}/examSettings/${examId}/status`;
     await set(ref(database, path), newStatus);
+  };
+
+  const handleArchiveExam = async (subjectId, examId, examTitle) => {
+    if (!user || !kid) return;
+    const dataOwnerUid = searchParams.get("parentId") || user.uid;
+    const basePath = `users/${dataOwnerUid}/kids/${kid.id}/subjects/${subjectId}/examSettings/${examId}`;
+    
+    // Set isArchived flag, archived timestamp, and mark status Completed
+    await set(ref(database, `${basePath}/isArchived`), true);
+    await set(ref(database, `${basePath}/archivedAt`), Date.now());
+    await set(ref(database, `${basePath}/status`), 'Completed');
+
+    setArchiveToast({
+      message: `Exam "${examTitle}" was closed and moved to archives.`,
+      subjectId,
+      examId
+    });
+    setTimeout(() => {
+      setArchiveToast((cur) => cur && cur.examId === examId ? null : cur);
+    }, 6000);
+  };
+
+  const handleRestoreExam = async (subjectId, examId) => {
+    if (!user || !kid) return;
+    const dataOwnerUid = searchParams.get("parentId") || user.uid;
+    const basePath = `users/${dataOwnerUid}/kids/${kid.id}/subjects/${subjectId}/examSettings/${examId}`;
+    await set(ref(database, `${basePath}/isArchived`), false);
+    setArchiveToast(null);
   };
 
   const handleDelete = async (id, type, parentSubjectId = null, parentExamId = null) => {
@@ -971,15 +1023,188 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
 
         {/* Subjects, Exams, and Syllabus Section */}
         <div style={{ marginTop: '2.5rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-            <h2 style={{ textAlign: 'left', fontSize: '1.5rem', margin: 0 }}>Subjects</h2>
-            <button onClick={() => { setNewTitle(''); setAddType('subject'); setShowAddModal(true); }} style={{ background: 'var(--accent-primary)', color: '#fff', border: 'none', borderRadius: '50%', width: '36px', height: '36px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }} title="Add Subject / Exam / Chapter">
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-            </button>
+          
+          {/* Section Header with View Mode Switcher and Add Subject Action */}
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: '1rem',
+            marginBottom: '1.5rem'
+          }}>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+                <h2 style={{ textAlign: 'left', fontSize: '1.5rem', fontWeight: 700, margin: 0, color: '#fff', letterSpacing: '-0.02em' }}>
+                  Enrolled Subjects
+                </h2>
+                <span style={{
+                  fontSize: '0.74rem',
+                  fontWeight: 700,
+                  padding: '0.15rem 0.55rem',
+                  borderRadius: '9999px',
+                  background: 'rgba(99, 102, 241, 0.18)',
+                  border: '1px solid rgba(129, 140, 248, 0.35)',
+                  color: '#a5b4fc'
+                }}>
+                  {subjects.length} {subjects.length === 1 ? 'Subject' : 'Subjects'}
+                </span>
+              </div>
+              <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.84rem', color: 'var(--text-secondary)' }}>
+                Curriculum syllabus readiness, upcoming exam workspaces, and dedicated subject hubs
+              </p>
+            </div>
+
+            {/* Actions: Responsive View Switcher (Grid vs Horizontal Scroll) + Add Subject */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+              
+              {/* View Switcher Capsule (Grid vs Carousel) */}
+              {subjects.length > 1 && (
+                <div style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  background: 'rgba(0, 0, 0, 0.35)',
+                  padding: '0.25rem',
+                  borderRadius: '10px',
+                  border: '1px solid rgba(255, 255, 255, 0.08)'
+                }}>
+                  <button
+                    type="button"
+                    onClick={() => setSubjectsLayoutMode('grid')}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.35rem',
+                      padding: '0.35rem 0.65rem',
+                      borderRadius: '7px',
+                      fontSize: '0.78rem',
+                      fontWeight: 600,
+                      border: 'none',
+                      background: subjectsLayoutMode === 'grid' ? 'rgba(99, 102, 241, 0.3)' : 'transparent',
+                      color: subjectsLayoutMode === 'grid' ? '#fff' : '#94a3b8',
+                      boxShadow: subjectsLayoutMode === 'grid' ? '0 2px 8px rgba(0,0,0,0.3)' : 'none',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease'
+                    }}
+                    title="Responsive Grid Layout"
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="3" y="3" width="7" height="7"></rect>
+                      <rect x="14" y="3" width="7" height="7"></rect>
+                      <rect x="14" y="14" width="7" height="7"></rect>
+                      <rect x="3" y="14" width="7" height="7"></rect>
+                    </svg>
+                    <span>Grid</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setSubjectsLayoutMode('carousel')}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.35rem',
+                      padding: '0.35rem 0.65rem',
+                      borderRadius: '7px',
+                      fontSize: '0.78rem',
+                      fontWeight: 600,
+                      border: 'none',
+                      background: subjectsLayoutMode === 'carousel' ? 'rgba(99, 102, 241, 0.3)' : 'transparent',
+                      color: subjectsLayoutMode === 'carousel' ? '#fff' : '#94a3b8',
+                      boxShadow: subjectsLayoutMode === 'carousel' ? '0 2px 8px rgba(0,0,0,0.3)' : 'none',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease'
+                    }}
+                    title="Horizontal Scroll Strip for Mobile & Touch"
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="2" y="5" width="20" height="14" rx="2"></rect>
+                      <line x1="2" y1="10" x2="22" y2="10"></line>
+                    </svg>
+                    <span>Carousel</span>
+                  </button>
+                </div>
+              )}
+
+              {/* Add Subject Button */}
+              <button
+                onClick={() => { setNewTitle(''); setAddType('subject'); setShowAddModal(true); }}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.45rem',
+                  padding: '0.55rem 1.15rem',
+                  background: 'var(--accent-gradient, linear-gradient(135deg, #6366f1, #8b5cf6))',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '10px',
+                  fontSize: '0.84rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  boxShadow: '0 4px 14px rgba(99, 102, 241, 0.35)',
+                  transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = 'translateY(-2px)';
+                  e.currentTarget.style.boxShadow = '0 8px 24px rgba(99, 102, 241, 0.5)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.boxShadow = '0 4px 14px rgba(99, 102, 241, 0.35)';
+                }}
+                onMouseDown={(e) => e.currentTarget.style.transform = 'scale(0.98)'}
+                title="Add Subject / Exam / Chapter"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                <span>Add Subject</span>
+              </button>
+            </div>
           </div>
           
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.2rem' }}>
-            {subjects.length === 0 && <p style={{ color: 'var(--text-secondary)', textAlign: 'left' }}>No subjects added yet. Click the + icon to add one.</p>}
+          {/* Responsive Cards Container: Adaptive Grid or Horizontal Scroll */}
+          <div style={subjectsLayoutMode === 'carousel' ? {
+            display: 'flex',
+            gap: '1.25rem',
+            overflowX: 'auto',
+            paddingBottom: '1rem',
+            scrollSnapType: 'x mandatory',
+            WebkitOverflowScrolling: 'touch'
+          } : {
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))',
+            gridAutoFlow: 'dense',
+            gap: '1.25rem',
+            alignItems: 'start'
+          }}>
+            {subjects.length === 0 && (
+              <div style={{
+                gridColumn: '1 / -1',
+                padding: '2.5rem 1.5rem',
+                background: 'rgba(255, 255, 255, 0.02)',
+                borderRadius: '16px',
+                border: '1px dashed rgba(255, 255, 255, 0.1)',
+                textAlign: 'center',
+                color: 'var(--text-secondary)'
+              }}>
+                <span style={{ fontSize: '2rem', display: 'block', marginBottom: '0.5rem' }}>📚</span>
+                <p style={{ margin: '0 0 1rem 0', fontSize: '0.95rem' }}>No subjects added yet. Click &quot;Add Subject&quot; above to map curriculum.</p>
+                <button
+                  type="button"
+                  onClick={() => { setNewTitle(''); setAddType('subject'); setShowAddModal(true); }}
+                  style={{
+                    padding: '0.5rem 1.25rem',
+                    background: 'var(--accent-gradient, linear-gradient(135deg, #6366f1, #8b5cf6))',
+                    color: '#fff',
+                    borderRadius: '10px',
+                    border: 'none',
+                    fontWeight: 600,
+                    cursor: 'pointer'
+                  }}
+                >
+                  + Add First Subject
+                </button>
+              </div>
+            )}
             {subjects.map(subject => {
               const subjectSlug = subject.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 
@@ -996,14 +1221,53 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                 const examProgress = examTotalChaps > 0 ? Math.round((examCompletedChaps / examTotalChaps) * 100) : 0;
 
                 const examSetting = (subject.examSettings && subject.examSettings[exam.id]) || {};
+                const isArchived = Boolean(examSetting.isArchived || examSetting.status === 'Archived' || exam.isArchived);
                 const examStatus = examSetting.status || (examProgress === 100 && examTotalChaps > 0 ? 'Completed' : (examProgress > 0 ? 'In Progress' : 'Not Started'));
 
                 const rawTests = (subject.modelTests && subject.modelTests[exam.id]) || {};
-                const testCount = Object.keys(rawTests).length;
+                const testList = Object.entries(rawTests).map(([tId, t]) => {
+                  let scoreDisplay = 'Pending';
+                  let percent = null;
+                  let isGraded = false;
 
+                  if (t.examinerGrading?.totalAwarded !== undefined) {
+                    const awarded = Number(t.examinerGrading.totalAwarded) || 0;
+                    const max = Number(t.examinerGrading.totalMax) || 100;
+                    percent = Math.round((awarded / max) * 100);
+                    scoreDisplay = `${awarded}/${max}`;
+                    isGraded = true;
+                  } else if (t.result && t.result !== 'Pending' && t.result !== '0') {
+                    scoreDisplay = t.result;
+                    if (t.result.includes('/')) {
+                      const [num, den] = t.result.split('/').map(Number);
+                      if (!isNaN(num) && !isNaN(den) && den > 0) {
+                        percent = Math.round((num / den) * 100);
+                        isGraded = true;
+                      }
+                    } else if (!isNaN(Number(t.result))) {
+                      percent = Number(t.result);
+                      isGraded = true;
+                    }
+                  }
+
+                  return {
+                    id: tId,
+                    ...t,
+                    scoreDisplay,
+                    percent,
+                    isGraded
+                  };
+                }).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+                const testCount = testList.length;
                 totalChapters += examTotalChaps;
                 completedChapters += examCompletedChaps;
                 totalTests += testCount;
+
+                const gradedTests = testList.filter(t => t.isGraded && t.percent !== null);
+                const avgTestScore = gradedTests.length > 0
+                  ? Math.round(gradedTests.reduce((sum, t) => sum + t.percent, 0) / gradedTests.length)
+                  : null;
 
                 return {
                   ...exam,
@@ -1011,190 +1275,1134 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                   completedChapters: examCompletedChaps,
                   progress: examProgress,
                   status: examStatus,
-                  testCount
+                  isArchived,
+                  archivedAt: examSetting.archivedAt || null,
+                  testCount,
+                  tests: testList,
+                  avgTestScore,
+                  gradedTestsCount: gradedTests.length
                 };
               });
 
+              // Separate active and archived exams
+              const activeExams = subjectExams.filter(ex => !ex.isArchived);
+              const archivedExams = subjectExams.filter(ex => ex.isArchived);
+
               const progressPercent = totalChapters > 0 ? Math.round((completedChapters / totalChapters) * 100) : 0;
+              const remainingChapters = Math.max(0, totalChapters - completedChapters);
+
+              // Determine immediate next exam from active (non-archived) exams:
+              const nextUpExam = activeExams.find(ex => ex.status === 'In Progress') 
+                || activeExams.find(ex => ex.status !== 'Completed')
+                || activeExams[0];
+
+              const examsWithModelTests = activeExams.filter(ex => ex.tests && ex.tests.length > 0);
+
               const queryParentId = searchParams.get("parentId");
               const parentIdQuery = queryParentId ? `&parentId=${queryParentId}` : '';
               const subjectHubHref = `/kid/subject?id=${searchParams.get("id")}&subject=${subjectSlug}&subjectId=${subject.id}${parentIdQuery}`;
+
+              const isExpanded = !!expandedSubjects[subject.id];
 
               return (
                 <div 
                   key={subject.id} 
                   style={{ 
-                    background: 'rgba(255, 255, 255, 0.03)', 
-                    border: '1px solid var(--glass-border)', 
-                    borderRadius: '16px', 
-                    padding: '1.4rem 1.6rem',
+                    background: isExpanded
+                      ? 'linear-gradient(145deg, rgba(28, 33, 56, 0.98), rgba(16, 20, 38, 0.99))'
+                      : 'linear-gradient(145deg, rgba(23, 28, 44, 0.95), rgba(15, 18, 32, 0.98))', 
+                    border: isExpanded
+                      ? '1px solid rgba(139, 92, 246, 0.45)'
+                      : '1px solid rgba(255, 255, 255, 0.08)', 
+                    borderRadius: isExpanded ? '22px' : '18px', 
+                    padding: isExpanded ? '1.65rem 1.85rem' : '1.35rem 1.45rem',
                     display: 'flex',
                     flexDirection: 'column',
-                    gap: '1.1rem',
+                    gap: isExpanded ? '1.35rem' : '1.1rem',
                     textAlign: 'left',
-                    transition: 'all 0.2s',
-                    boxShadow: '0 4px 20px rgba(0,0,0,0.15)'
+                    transition: 'all 0.35s cubic-bezier(0.16, 1, 0.3, 1)',
+                    boxShadow: isExpanded
+                      ? '0 24px 60px -12px rgba(0, 0, 0, 0.65), 0 0 36px -4px rgba(139, 92, 246, 0.18)'
+                      : '0 8px 32px rgba(0, 0, 0, 0.28)',
+                    position: 'relative',
+                    ...(subjectsLayoutMode === 'carousel' ? {
+                      flex: isExpanded ? '0 0 100%' : '0 0 min(380px, 86vw)',
+                      width: isExpanded ? '100%' : 'auto',
+                      scrollSnapAlign: 'start'
+                    } : {
+                      gridColumn: isExpanded ? '1 / -1' : 'auto',
+                      width: '100%',
+                      minWidth: 0
+                    })
+                  }}
+                  onMouseOver={(e) => {
+                    e.currentTarget.style.borderColor = isExpanded ? 'rgba(139, 92, 246, 0.65)' : 'rgba(139, 92, 246, 0.35)';
+                    e.currentTarget.style.boxShadow = isExpanded 
+                      ? '0 28px 64px -10px rgba(0, 0, 0, 0.7), 0 0 44px -2px rgba(139, 92, 246, 0.25)' 
+                      : '0 12px 36px rgba(139, 92, 246, 0.12)';
+                  }}
+                  onMouseOut={(e) => {
+                    e.currentTarget.style.borderColor = isExpanded ? 'rgba(139, 92, 246, 0.45)' : 'rgba(255, 255, 255, 0.08)';
+                    e.currentTarget.style.boxShadow = isExpanded 
+                      ? '0 24px 60px -12px rgba(0, 0, 0, 0.65), 0 0 36px -4px rgba(139, 92, 246, 0.18)' 
+                      : '0 8px 32px rgba(0, 0, 0, 0.28)';
                   }}
                 >
-                  {/* Subject Header Row */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-                      <h3 style={{ margin: 0, fontSize: '1.35rem', color: '#fff', fontWeight: 600 }}>
-                        {subject.title}
-                      </h3>
-
-                      <button 
-                        onClick={() => { setSettingsSubject(subject); setSubjectBookUrl(subject.bookUrl || ''); }} 
-                        style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: '0.2rem', display: 'flex', alignItems: 'center', transition: 'color 0.2s' }} 
-                        onMouseOver={(e) => e.currentTarget.style.color = 'var(--accent-primary)'} 
-                        onMouseOut={(e) => e.currentTarget.style.color = 'var(--text-secondary)'} 
-                        title="Subject Settings (Book URL)"
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-                      </button>
-
-                      {subject.bookUrl && (
-                        <span style={{ fontSize: '0.74rem', background: 'rgba(59, 130, 246, 0.15)', color: '#93c5fd', border: '1px solid rgba(59, 130, 246, 0.3)', padding: '0.15rem 0.5rem', borderRadius: '10px' }}>
-                          📖 Textbook
-                        </span>
-                      )}
-                    </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.05)', padding: '0.25rem 0.65rem', borderRadius: '12px' }}>
-                        {totalChapters} {totalChapters === 1 ? 'Chapter' : 'Chapters'}
-                      </span>
-
-                      <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.05)', padding: '0.25rem 0.65rem', borderRadius: '12px' }}>
-                        {subjectExams.length} {subjectExams.length === 1 ? 'Exam' : 'Exams'}
-                      </span>
-
-                      {totalTests > 0 && (
-                        <span style={{ fontSize: '0.78rem', color: 'var(--accent-primary)', background: 'rgba(139, 92, 246, 0.15)', padding: '0.25rem 0.65rem', borderRadius: '12px', fontWeight: 600 }}>
-                          {totalTests} {totalTests === 1 ? 'Test' : 'Tests'}
-                        </span>
-                      )}
-
-                      {/* Primary Link Button to Subject Detail Page */}
-                      <Link
-                        href={subjectHubHref}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '0.4rem',
-                          padding: '0.42rem 1rem',
-                          fontSize: '0.82rem',
-                          fontWeight: 600,
-                          background: 'var(--accent-gradient)',
-                          color: '#fff',
-                          borderRadius: '16px',
-                          textDecoration: 'none',
-                          boxShadow: '0 2px 8px rgba(139, 92, 246, 0.25)',
-                          transition: 'all 0.2s'
-                        }}
-                        onMouseOver={(e) => e.currentTarget.style.transform = 'translateY(-1px)'}
-                        onMouseOut={(e) => e.currentTarget.style.transform = 'translateY(0)'}
-                      >
-                        <span>Open Subject Hub</span>
-                        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
-                      </Link>
-                    </div>
-                  </div>
-
-                  {/* Syllabus Progress Bar */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-                      <span>Syllabus Mastery</span>
-                      <span style={{ fontWeight: 600, color: progressPercent === 100 ? '#34d399' : '#c4b5fd' }}>
-                        {progressPercent}% Complete ({completedChapters}/{totalChapters} Chapters Mastered)
-                      </span>
-                    </div>
-                    <div style={{ height: '7px', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '4px', overflow: 'hidden' }}>
+                  {/* Subject Header Row: Icon, Title, Textbook Badge & Settings */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', minWidth: 0, flex: 1 }}>
+                      {/* Subject Icon Badge */}
                       <div style={{
-                        height: '100%',
-                        width: `${progressPercent}%`,
-                        background: progressPercent === 100
-                          ? 'linear-gradient(90deg, #10b981, #059669)'
-                          : 'linear-gradient(90deg, #6366f1, #a855f7)',
-                        borderRadius: '4px',
-                        transition: 'width 0.4s ease'
-                      }} />
-                    </div>
-                  </div>
+                        width: '42px',
+                        height: '42px',
+                        borderRadius: '12px',
+                        background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.2), rgba(59, 130, 246, 0.15))',
+                        border: '1px solid rgba(139, 92, 246, 0.3)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '1.3rem',
+                        flexShrink: 0,
+                        boxShadow: '0 4px 12px rgba(139, 92, 246, 0.15)'
+                      }}>
+                        {getSubjectIcon(subject.title)}
+                      </div>
 
-                  {/* Quick Access to Exams (Progressive Disclosure) */}
-                  {subjectExams.length > 0 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', marginTop: '0.2rem' }}>
-                      <span style={{ fontSize: '0.74rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                        Exams & Workspace
-                      </span>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '0.6rem' }}>
-                        {subjectExams.map(ex => {
-                          const queryParentId = searchParams.get("parentId");
-                          const parentIdQuery = queryParentId ? `&parentId=${queryParentId}` : '';
-                          const examHref = `/kid/exam?id=${searchParams.get("id")}&subject=${subjectSlug}&examId=${ex.id}&subjectId=${subject.id}${parentIdQuery}`;
-                          return (
-                            <Link
-                              key={ex.id}
-                              href={examHref}
-                              style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'space-between',
-                                padding: '0.65rem 0.85rem',
-                                background: 'rgba(255, 255, 255, 0.025)',
-                                border: '1px solid rgba(255, 255, 255, 0.06)',
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                          <h3 style={{ margin: 0, fontSize: isExpanded ? '1.35rem' : '1.22rem', color: '#fff', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {subject.title}
+                          </h3>
+
+                          {isExpanded && (
+                            <span style={{
+                              fontSize: '0.68rem',
+                              fontWeight: 700,
+                              padding: '0.14rem 0.55rem',
+                              borderRadius: '8px',
+                              background: 'rgba(139, 92, 246, 0.2)',
+                              border: '1px solid rgba(139, 92, 246, 0.4)',
+                              color: '#d8b4fe',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.3rem',
+                              letterSpacing: '0.02em'
+                            }}>
+                              <span>✨</span>
+                              <span>Full Workspace</span>
+                            </span>
+                          )}
+
+                          {subject.bookUrl && (
+                            <a 
+                              href={subject.bookUrl} 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              style={{ 
+                                fontSize: '0.7rem', 
+                                background: 'rgba(59, 130, 246, 0.15)', 
+                                color: '#93c5fd', 
+                                border: '1px solid rgba(59, 130, 246, 0.3)', 
+                                padding: '0.12rem 0.5rem', 
                                 borderRadius: '10px',
                                 textDecoration: 'none',
-                                transition: 'all 0.2s',
-                                gap: '0.6rem'
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.25rem',
+                                transition: 'all 0.2s'
                               }}
-                              onMouseOver={(e) => {
-                                e.currentTarget.style.background = 'rgba(255, 255, 255, 0.06)';
-                                e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.35)';
-                              }}
-                              onMouseOut={(e) => {
-                                e.currentTarget.style.background = 'rgba(255, 255, 255, 0.025)';
-                                e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.06)';
-                              }}
-                              title={`Open ${ex.title} Exam Workspace`}
+                              onMouseOver={(e) => e.currentTarget.style.background = 'rgba(59, 130, 246, 0.28)'}
+                              onMouseOut={(e) => e.currentTarget.style.background = 'rgba(59, 130, 246, 0.15)'}
+                              title="Open Online Textbook / PDF"
                             >
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem', minWidth: 0 }}>
-                                <span style={{ fontWeight: 600, fontSize: '0.88rem', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                  {ex.title}
-                                </span>
-                                <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                                  {ex.completedChapters}/{ex.totalChapters} Chaps • {ex.testCount} Tests
-                                </span>
-                              </div>
+                              <span>📖 Textbook</span>
+                              <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                            </a>
+                          )}
+                        </div>
 
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexShrink: 0 }}>
-                                <span style={{
-                                  fontSize: '0.68rem',
-                                  padding: '0.15rem 0.45rem',
-                                  borderRadius: '10px',
-                                  fontWeight: 600,
-                                  background:
-                                    ex.status === 'Completed' ? 'rgba(16, 185, 129, 0.15)' :
-                                    ex.status === 'In Progress' ? 'rgba(59, 130, 246, 0.15)' :
-                                    ex.status === 'Reviewing' ? 'rgba(168, 85, 247, 0.15)' :
-                                    'rgba(148, 163, 184, 0.1)',
-                                  color:
-                                    ex.status === 'Completed' ? '#34d399' :
-                                    ex.status === 'In Progress' ? '#60a5fa' :
-                                    ex.status === 'Reviewing' ? '#c084fc' :
-                                    '#94a3b8'
-                                }}>
-                                  {ex.status}
-                                </span>
-                                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--text-secondary)' }}><polyline points="9 18 15 12 9 6"></polyline></svg>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginTop: '0.2rem', fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+                          <span>{totalChapters} {totalChapters === 1 ? 'Chapter' : 'Chapters'}</span>
+                          <span>•</span>
+                          <span>{subjectExams.length} {subjectExams.length === 1 ? 'Exam' : 'Exams'}</span>
+                          {totalTests > 0 && (
+                            <>
+                              <span>•</span>
+                              <span style={{ color: 'var(--accent-primary)', fontWeight: 600 }}>{totalTests} Tests</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Subject Settings Button */}
+                    <button 
+                      onClick={() => {
+                        setSettingsSubject(subject);
+                        setSubjectBookUrl(subject.bookUrl || '');
+                        setSubjectExamRetentionDays(subject.examRetentionDays !== undefined ? String(subject.examRetentionDays) : '7');
+                      }} 
+                      style={{ 
+                        width: '34px',
+                        height: '34px',
+                        padding: 0,
+                        borderRadius: '10px',
+                        background: 'rgba(255, 255, 255, 0.04)', 
+                        border: '1px solid rgba(255, 255, 255, 0.08)', 
+                        color: 'var(--text-secondary)', 
+                        cursor: 'pointer', 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        justifyContent: 'center',
+                        transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+                        flexShrink: 0
+                      }} 
+                      onMouseOver={(e) => {
+                        e.currentTarget.style.color = '#fff';
+                        e.currentTarget.style.background = 'rgba(139, 92, 246, 0.22)';
+                        e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.4)';
+                        e.currentTarget.style.transform = 'rotate(45deg)';
+                      }} 
+                      onMouseOut={(e) => {
+                        e.currentTarget.style.color = 'var(--text-secondary)';
+                        e.currentTarget.style.background = 'rgba(255, 255, 255, 0.04)';
+                        e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.08)';
+                        e.currentTarget.style.transform = 'rotate(0deg)';
+                      }} 
+                      title="Subject Settings & Auto-Archive Configuration"
+                      aria-label="Subject Settings"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                    </button>
+                  </div>
+
+                  {/* Summary Metric Cards: Side-by-Side Responsive Grid when Expanded */}
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: isExpanded ? 'repeat(auto-fit, minmax(300px, 1fr))' : '1fr',
+                    gap: '0.85rem',
+                    alignItems: 'stretch'
+                  }}>
+                    {/* High-Contrast Circular Progress Ring & Syllabus Mastery */}
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '1.2rem',
+                      padding: '0.95rem 1.15rem',
+                      background: 'rgba(255, 255, 255, 0.025)',
+                      border: '1px solid rgba(255, 255, 255, 0.06)',
+                      borderRadius: '14px',
+                      position: 'relative'
+                    }}>
+                      {/* SVG Circular Progress Dial */}
+                      <div style={{ position: 'relative', width: '74px', height: '74px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                        <svg width="74" height="74" viewBox="0 0 74 74" style={{ transform: 'rotate(-90deg)' }}>
+                          <defs>
+                            <linearGradient id={`prog-grad-${subject.id}`} x1="0%" y1="0%" x2="100%" y2="100%">
+                              <stop offset="0%" stopColor="#38bdf8" />
+                              <stop offset="50%" stopColor="#818cf8" />
+                              <stop offset="100%" stopColor="#34d399" />
+                            </linearGradient>
+                            <filter id={`glow-${subject.id}`} x="-20%" y="-20%" width="140%" height="140%">
+                              <feDropShadow dx="0" dy="0" stdDeviation="3" floodColor="#38bdf8" floodOpacity="0.7" />
+                            </filter>
+                          </defs>
+                          
+                          {/* Outer delicate guide track */}
+                          <circle
+                            cx="37"
+                            cy="37"
+                            r="33"
+                            stroke="rgba(255, 255, 255, 0.04)"
+                            strokeWidth="1"
+                            strokeDasharray="2 3"
+                            fill="transparent"
+                          />
+
+                          {/* Background Base Ring */}
+                          <circle
+                            cx="37"
+                            cy="37"
+                            r="28"
+                            stroke="rgba(255, 255, 255, 0.08)"
+                            strokeWidth="5"
+                            fill="transparent"
+                          />
+
+                          {/* Active Progress or High-Contrast Zero-State Track */}
+                          {progressPercent === 0 ? (
+                            <>
+                              <circle
+                                cx="37"
+                                cy="37"
+                                r="28"
+                                stroke="rgba(148, 163, 184, 0.2)"
+                                strokeWidth="5"
+                                strokeDasharray="2 4"
+                                fill="transparent"
+                              />
+                              {/* Starter 12 o'clock indicator dot for visual feedback at 0% */}
+                              <circle
+                                cx="37"
+                                cy="9"
+                                r="3"
+                                fill="#38bdf8"
+                                filter={`url(#glow-${subject.id})`}
+                              />
+                            </>
+                          ) : (
+                            <circle
+                              cx="37"
+                              cy="37"
+                              r="28"
+                              stroke={progressPercent === 100 ? '#10b981' : `url(#prog-grad-${subject.id})`}
+                              strokeWidth="5"
+                              strokeDasharray={175.93}
+                              strokeDashoffset={175.93 - (175.93 * progressPercent) / 100}
+                              strokeLinecap="round"
+                              fill="transparent"
+                              style={{ transition: 'stroke-dashoffset 0.6s cubic-bezier(0.4, 0, 0.2, 1)' }}
+                            />
+                          )}
+                        </svg>
+
+                        {/* Center Dial Mastery Label */}
+                        <div style={{ position: 'absolute', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center' }}>
+                          <span style={{ 
+                            fontSize: '1.08rem', 
+                            fontWeight: 800, 
+                            color: progressPercent === 100 ? '#34d399' : progressPercent > 0 ? '#ffffff' : '#38bdf8', 
+                            lineHeight: 1,
+                            textShadow: progressPercent > 0 ? '0 0 10px rgba(56, 189, 248, 0.3)' : 'none'
+                          }}>
+                            {progressPercent}%
+                          </span>
+                          <span style={{ 
+                            fontSize: '0.52rem', 
+                            color: progressPercent === 0 ? '#38bdf8' : 'var(--text-secondary)', 
+                            fontWeight: 700,
+                            textTransform: 'uppercase', 
+                            letterSpacing: '0.5px', 
+                            marginTop: '3px' 
+                          }}>
+                            {progressPercent === 0 ? 'READY' : progressPercent === 100 ? 'DONE' : 'MASTERY'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Mastery Stats & Breakdown */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                          <span style={{
+                            fontSize: '0.68rem',
+                            padding: '0.16rem 0.55rem',
+                            borderRadius: '8px',
+                            fontWeight: 700,
+                            letterSpacing: '0.3px',
+                            textTransform: 'uppercase',
+                            background: progressPercent === 100 ? 'rgba(16, 185, 129, 0.15)' : progressPercent > 0 ? 'rgba(139, 92, 246, 0.15)' : 'rgba(56, 189, 248, 0.12)',
+                            color: progressPercent === 100 ? '#34d399' : progressPercent > 0 ? '#c084fc' : '#38bdf8',
+                            border: `1px solid ${progressPercent === 100 ? 'rgba(16, 185, 129, 0.3)' : progressPercent > 0 ? 'rgba(139, 92, 246, 0.3)' : 'rgba(56, 189, 248, 0.25)'}`
+                          }}>
+                            {progressPercent === 100 ? 'Mastered' : progressPercent > 0 ? 'In Progress' : totalChapters > 0 ? 'Curriculum Ready' : 'Setup Needed'}
+                          </span>
+                          <span style={{ fontSize: '0.78rem', color: '#e2e8f0', fontWeight: 600 }}>
+                            {completedChapters}/{totalChapters} Mastered
+                          </span>
+                        </div>
+
+                        {/* Chips */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', flexWrap: 'wrap', fontSize: '0.73rem', color: 'var(--text-secondary)' }}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: completedChapters > 0 ? '#34d399' : 'var(--text-secondary)' }}>
+                            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: completedChapters > 0 ? '#10b981' : 'rgba(255,255,255,0.2)' }}></span>
+                            {completedChapters} Done
+                          </span>
+                          <span style={{ color: 'rgba(255,255,255,0.2)' }}>•</span>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: remainingChapters > 0 ? '#f59e0b' : 'rgba(255,255,255,0.2)' }}></span>
+                            {remainingChapters} Remaining
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Immediate Next Exam Snapshot Capsule */}
+                    {nextUpExam ? (
+                      <div style={{
+                        padding: '0.75rem 0.95rem',
+                        background: 'rgba(245, 158, 11, 0.05)',
+                        border: '1px solid rgba(245, 158, 11, 0.22)',
+                        borderRadius: '12px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '0.75rem'
+                      }}>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.2rem' }}>
+                            <span style={{ fontSize: '0.64rem', fontWeight: 700, textTransform: 'uppercase', color: '#fbbf24', letterSpacing: '0.5px' }}>
+                              ⚡ Next Up Exam
+                            </span>
+                          </div>
+                          <span style={{ fontSize: '0.86rem', fontWeight: 600, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'block' }}>
+                            {nextUpExam.title}
+                          </span>
+                        </div>
+
+                        <Link
+                          href={`/kid/exam?id=${searchParams.get("id")}&subject=${subjectSlug}&examId=${nextUpExam.id}&subjectId=${subject.id}${parentIdQuery}`}
+                          style={{
+                            fontSize: '0.75rem',
+                            fontWeight: 600,
+                            color: '#fbbf24',
+                            background: 'rgba(245, 158, 11, 0.12)',
+                            border: '1px solid rgba(245, 158, 11, 0.25)',
+                            padding: '0.32rem 0.65rem',
+                            borderRadius: '8px',
+                            textDecoration: 'none',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.3rem',
+                            flexShrink: 0,
+                            transition: 'all 0.2s'
+                          }}
+                          onMouseOver={(e) => {
+                            e.currentTarget.style.background = 'rgba(245, 158, 11, 0.25)';
+                            e.currentTarget.style.transform = 'translateX(2px)';
+                          }}
+                          onMouseOut={(e) => {
+                            e.currentTarget.style.background = 'rgba(245, 158, 11, 0.12)';
+                            e.currentTarget.style.transform = 'translateX(0)';
+                          }}
+                        >
+                          <span>Workspace</span>
+                          <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                        </Link>
+                      </div>
+                    ) : isExpanded ? (
+                      <div style={{
+                        padding: '0.75rem 0.95rem',
+                        background: 'rgba(255, 255, 255, 0.025)',
+                        border: '1px solid rgba(255, 255, 255, 0.06)',
+                        borderRadius: '12px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '0.75rem'
+                      }}>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <span style={{ fontSize: '0.64rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-secondary)', letterSpacing: '0.5px', display: 'block', marginBottom: '0.2rem' }}>
+                            📅 Exam Schedule
+                          </span>
+                          <span style={{ fontSize: '0.86rem', fontWeight: 600, color: '#e2e8f0' }}>
+                            {activeExams.length > 0 ? `${activeExams.length} active exam tracks mapped` : 'No upcoming exams active'}
+                          </span>
+                        </div>
+                        <Link
+                          href={subjectHubHref}
+                          style={{
+                            fontSize: '0.75rem',
+                            fontWeight: 600,
+                            color: '#a5b4fc',
+                            background: 'rgba(99, 102, 241, 0.12)',
+                            border: '1px solid rgba(129, 140, 248, 0.25)',
+                            padding: '0.32rem 0.65rem',
+                            borderRadius: '8px',
+                            textDecoration: 'none',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.3rem',
+                            flexShrink: 0
+                          }}
+                        >
+                          <span>Subject Hub</span>
+                          <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                        </Link>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {/* Collapsible Drawer Toggle Button for Exam Tracks & Tests */}
+                  {subjectExams.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => toggleSubject(subject.id)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '0.65rem 1rem',
+                        background: isExpanded ? 'rgba(139, 92, 246, 0.16)' : 'rgba(255, 255, 255, 0.035)',
+                        border: `1px solid ${isExpanded ? 'rgba(139, 92, 246, 0.4)' : 'rgba(255, 255, 255, 0.07)'}`,
+                        borderRadius: '12px',
+                        color: isExpanded ? '#c4b5fd' : 'var(--text-secondary)',
+                        fontSize: '0.8rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        transition: 'all 0.25s cubic-bezier(0.16, 1, 0.3, 1)',
+                        width: '100%',
+                        boxShadow: isExpanded ? '0 4px 14px rgba(139, 92, 246, 0.15)' : 'none'
+                      }}
+                      onMouseOver={(e) => {
+                        e.currentTarget.style.background = isExpanded ? 'rgba(139, 92, 246, 0.26)' : 'rgba(255, 255, 255, 0.06)';
+                        e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.55)';
+                        e.currentTarget.style.color = '#fff';
+                      }}
+                      onMouseOut={(e) => {
+                        e.currentTarget.style.background = isExpanded ? 'rgba(139, 92, 246, 0.16)' : 'rgba(255, 255, 255, 0.035)';
+                        e.currentTarget.style.borderColor = isExpanded ? 'rgba(139, 92, 246, 0.4)' : 'rgba(255, 255, 255, 0.07)';
+                        e.currentTarget.style.color = isExpanded ? '#c4b5fd' : 'var(--text-secondary)';
+                      }}
+                      aria-expanded={isExpanded}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', flexWrap: 'wrap' }}>
+                        <span>📋</span>
+                        <span>
+                          {isExpanded 
+                            ? 'Collapse Full-Width Workspace' 
+                            : `View ${subjectExams.length} Exams & ${totalTests} Model Tests`}
+                        </span>
+                        {isExpanded && (
+                          <span style={{
+                            fontSize: '0.66rem',
+                            padding: '0.12rem 0.45rem',
+                            borderRadius: '6px',
+                            background: 'rgba(139, 92, 246, 0.28)',
+                            border: '1px solid rgba(139, 92, 246, 0.45)',
+                            color: '#ede9fe',
+                            fontWeight: 700
+                          }}>
+                            Full Width
+                          </span>
+                        )}
+                      </div>
+
+                      <div style={{
+                        width: '24px',
+                        height: '24px',
+                        borderRadius: '50%',
+                        background: isExpanded ? 'rgba(139, 92, 246, 0.3)' : 'rgba(255, 255, 255, 0.06)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        transition: 'transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+                        transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)'
+                      }}>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                      </div>
+                    </button>
+                  )}
+
+                  {/* Expandable Content Area: Detailed Exam Cards & Model Tests */}
+                  {isExpanded && subjectExams.length > 0 && (
+                    <div style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '1rem',
+                      padding: '1rem 0.2rem 0.4rem 0.2rem',
+                      borderTop: '1px dashed rgba(255, 255, 255, 0.08)'
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <span style={{ fontSize: '0.74rem', fontWeight: 700, color: '#f1f5f9', textTransform: 'uppercase', letterSpacing: '0.6px' }}>
+                            Exams & Workspaces
+                          </span>
+                          <span style={{
+                            fontSize: '0.68rem',
+                            padding: '0.12rem 0.5rem',
+                            borderRadius: '9999px',
+                            background: 'rgba(99, 102, 241, 0.15)',
+                            border: '1px solid rgba(129, 140, 248, 0.3)',
+                            color: '#c7d2fe',
+                            fontWeight: 600
+                          }}>
+                            {activeExams.length} Active
+                          </span>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                          {archivedExams.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setShowArchivedExamsMap(prev => ({ ...prev, [subject.id]: !prev[subject.id] }));
+                              }}
+                              style={{
+                                background: showArchivedExamsMap[subject.id] ? 'rgba(255, 255, 255, 0.1)' : 'rgba(255, 255, 255, 0.04)',
+                                border: '1px solid rgba(255, 255, 255, 0.08)',
+                                color: showArchivedExamsMap[subject.id] ? '#fff' : 'var(--text-secondary)',
+                                fontSize: '0.7rem',
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.35rem',
+                                padding: '0.22rem 0.55rem',
+                                borderRadius: '7px',
+                                transition: 'all 0.15s'
+                              }}
+                            >
+                              <span>📦 {showArchivedExamsMap[subject.id] ? 'Hide' : 'Show'} Archived ({archivedExams.length})</span>
+                              <span style={{ transform: showArchivedExamsMap[subject.id] ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s', display: 'inline-block' }}>▼</span>
+                            </button>
+                          )}
+                          <span style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)' }}>
+                            Click exam to enter study workspace
+                          </span>
+                        </div>
+                      </div>
+
+                      {activeExams.length === 0 ? (
+                        <div style={{
+                          padding: '1.5rem',
+                          background: 'rgba(255, 255, 255, 0.02)',
+                          border: '1px dashed rgba(255, 255, 255, 0.08)',
+                          borderRadius: '12px',
+                          textAlign: 'center',
+                          color: 'var(--text-secondary)',
+                          fontSize: '0.82rem'
+                        }}>
+                          <span style={{ display: 'block', fontSize: '1.25rem', marginBottom: '0.3rem' }}>🎉</span>
+                          All scheduled exams have been completed and archived. Click &quot;Show Archived&quot; to review past workspaces.
+                        </div>
+                      ) : (
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '0.75rem' }}>
+                          {activeExams.map(ex => {
+                            const examHref = `/kid/exam?id=${searchParams.get("id")}&subject=${subjectSlug}&examId=${ex.id}&subjectId=${subject.id}${parentIdQuery}`;
+                            const isNextUp = nextUpExam && ex.id === nextUpExam.id && ex.status !== 'Completed';
+                            const isMajorExam = /final|term|annual|board|midterm|semester/i.test(ex.title);
+
+                            return (
+                              <div
+                                key={ex.id}
+                                onClick={() => router.push(examHref)}
+                                style={{
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  justifyContent: 'space-between',
+                                  padding: '0.85rem 1rem',
+                                  background: isNextUp
+                                    ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.08), rgba(139, 92, 246, 0.08))'
+                                    : 'rgba(255, 255, 255, 0.025)',
+                                  border: isNextUp
+                                    ? '1px solid rgba(245, 158, 11, 0.5)'
+                                    : '1px solid rgba(255, 255, 255, 0.06)',
+                                  borderRadius: '12px',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                                  gap: '0.65rem',
+                                  position: 'relative',
+                                  boxShadow: isNextUp ? '0 4px 18px rgba(245, 158, 11, 0.12)' : 'none'
+                                }}
+                                onMouseOver={(e) => {
+                                  e.currentTarget.style.background = isNextUp
+                                    ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.13), rgba(139, 92, 246, 0.13))'
+                                    : 'rgba(255, 255, 255, 0.055)';
+                                  e.currentTarget.style.borderColor = isNextUp
+                                    ? 'rgba(245, 158, 11, 0.75)'
+                                    : 'rgba(139, 92, 246, 0.4)';
+                                  e.currentTarget.style.transform = 'translateY(-2px)';
+                                }}
+                                onMouseOut={(e) => {
+                                  e.currentTarget.style.background = isNextUp
+                                    ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.08), rgba(139, 92, 246, 0.08))'
+                                    : 'rgba(255, 255, 255, 0.025)';
+                                  e.currentTarget.style.borderColor = isNextUp
+                                    ? 'rgba(245, 158, 11, 0.5)'
+                                    : 'rgba(255, 255, 255, 0.06)';
+                                  e.currentTarget.style.transform = 'translateY(0)';
+                                }}
+                                title={`Open ${ex.title} Exam Workspace`}
+                              >
+                                {/* Top row: Badges, Status, and Manual End/Archive Action */}
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                                    {isNextUp && (
+                                      <span style={{
+                                        fontSize: '0.66rem',
+                                        fontWeight: 700,
+                                        letterSpacing: '0.4px',
+                                        padding: '0.16rem 0.5rem',
+                                        borderRadius: '8px',
+                                        background: 'linear-gradient(135deg, #f59e0b, #ef4444)',
+                                        color: '#ffffff',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '0.25rem',
+                                        boxShadow: '0 2px 8px rgba(245, 158, 11, 0.35)',
+                                        textTransform: 'uppercase'
+                                      }}>
+                                        <span>⚡</span>
+                                        <span>Next Up</span>
+                                      </span>
+                                    )}
+
+                                    {isMajorExam && (
+                                      <span style={{
+                                        fontSize: '0.66rem',
+                                        fontWeight: 600,
+                                        padding: '0.15rem 0.45rem',
+                                        borderRadius: '8px',
+                                        background: 'rgba(168, 85, 247, 0.15)',
+                                        border: '1px solid rgba(168, 85, 247, 0.3)',
+                                        color: '#d8b4fe',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '0.25rem'
+                                      }}>
+                                        <span>🏆</span>
+                                        <span>Major</span>
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                    <span style={{
+                                      fontSize: '0.67rem',
+                                      padding: '0.12rem 0.45rem',
+                                      borderRadius: '8px',
+                                      fontWeight: 600,
+                                      background:
+                                        ex.status === 'Completed' ? 'rgba(16, 185, 129, 0.15)' :
+                                        ex.status === 'In Progress' ? 'rgba(59, 130, 246, 0.15)' :
+                                        ex.status === 'Reviewing' ? 'rgba(168, 85, 247, 0.15)' :
+                                        'rgba(148, 163, 184, 0.1)',
+                                      color:
+                                        ex.status === 'Completed' ? '#34d399' :
+                                        ex.status === 'In Progress' ? '#60a5fa' :
+                                        ex.status === 'Reviewing' ? '#c084fc' :
+                                        '#94a3b8'
+                                    }}>
+                                      {ex.status}
+                                    </span>
+
+                                    {/* Manual End / Close / Archive Button */}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleArchiveExam(subject.id, ex.id, ex.title);
+                                      }}
+                                      style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '0.22rem',
+                                        padding: '0.12rem 0.48rem',
+                                        borderRadius: '7px',
+                                        background: ex.status === 'Completed' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(255, 255, 255, 0.05)',
+                                        border: ex.status === 'Completed' ? '1px solid rgba(52, 211, 153, 0.35)' : '1px solid rgba(255, 255, 255, 0.1)',
+                                        color: ex.status === 'Completed' ? '#34d399' : '#cbd5e1',
+                                        fontSize: '0.66rem',
+                                        fontWeight: 600,
+                                        cursor: 'pointer',
+                                        transition: 'all 0.15s ease'
+                                      }}
+                                      onMouseEnter={(e) => {
+                                        e.currentTarget.style.background = 'rgba(239, 68, 68, 0.18)';
+                                        e.currentTarget.style.borderColor = 'rgba(248, 113, 113, 0.45)';
+                                        e.currentTarget.style.color = '#f87171';
+                                      }}
+                                      onMouseLeave={(e) => {
+                                        e.currentTarget.style.background = ex.status === 'Completed' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(255, 255, 255, 0.05)';
+                                        e.currentTarget.style.borderColor = ex.status === 'Completed' ? 'rgba(52, 211, 153, 0.35)' : 'rgba(255, 255, 255, 0.1)';
+                                        e.currentTarget.style.color = ex.status === 'Completed' ? '#34d399' : '#cbd5e1';
+                                      }}
+                                      title="Manually end and archive this completed exam from the active list"
+                                    >
+                                      <span>📦</span>
+                                      <span>{ex.status === 'Completed' ? 'Archive' : 'End Exam'}</span>
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {/* Title & Meta */}
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                                  <span style={{ fontWeight: 600, fontSize: '0.92rem', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                    {ex.title}
+                                  </span>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.73rem', color: 'var(--text-secondary)' }}>
+                                    <span>{ex.completedChapters}/{ex.totalChapters} Chaps</span>
+                                    <span>•</span>
+                                    <span>{ex.testCount} {ex.testCount === 1 ? 'Test' : 'Tests'}</span>
+                                    {ex.avgTestScore !== null && (
+                                      <>
+                                        <span>•</span>
+                                        <span style={{ color: ex.avgTestScore >= 75 ? '#34d399' : '#fbbf24', fontWeight: 600 }}>
+                                          Avg: {ex.avgTestScore}%
+                                        </span>
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+
+                                {/* Mini progress bar */}
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.6rem', marginTop: '0.15rem' }}>
+                                  <div style={{ flex: 1, height: '4px', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '2px', overflow: 'hidden' }}>
+                                    <div style={{
+                                      height: '100%',
+                                      width: `${ex.progress}%`,
+                                      background: ex.progress === 100 ? '#10b981' : isNextUp ? '#f59e0b' : '#8b5cf6',
+                                      borderRadius: '2px'
+                                    }} />
+                                  </div>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', color: isNextUp ? '#fbbf24' : 'var(--text-secondary)', fontSize: '0.73rem', fontWeight: 600 }}>
+                                    <span>Workspace</span>
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                                  </div>
+                                </div>
                               </div>
-                            </Link>
-                          );
-                        })}
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Collapsible Archived Workspaces Section */}
+                      {showArchivedExamsMap[subject.id] && archivedExams.length > 0 && (
+                        <div style={{
+                          marginTop: '0.5rem',
+                          padding: '0.85rem 1rem',
+                          background: 'rgba(0, 0, 0, 0.28)',
+                          border: '1px dashed rgba(255, 255, 255, 0.12)',
+                          borderRadius: '14px',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.75rem'
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                              <span>📁</span>
+                              <span style={{ fontSize: '0.74rem', color: '#cbd5e1', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                                Archived & Closed Exam Workspaces ({archivedExams.length})
+                              </span>
+                            </div>
+                            <span style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>
+                              Removed from active list • Preserved for reference
+                            </span>
+                          </div>
+
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '0.65rem' }}>
+                            {archivedExams.map(ex => {
+                              const examHref = `/kid/exam?id=${searchParams.get("id")}&subject=${subjectSlug}&examId=${ex.id}&subjectId=${subject.id}${parentIdQuery}`;
+
+                              return (
+                                <div
+                                  key={ex.id}
+                                  style={{
+                                    padding: '0.75rem 0.95rem',
+                                    background: 'rgba(255, 255, 255, 0.025)',
+                                    border: '1px solid rgba(255, 255, 255, 0.06)',
+                                    borderRadius: '10px',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '0.55rem'
+                                  }}
+                                >
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.4rem' }}>
+                                    <span style={{ fontWeight: 600, fontSize: '0.88rem', color: '#e2e8f0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                      {ex.title}
+                                    </span>
+                                    <span style={{
+                                      fontSize: '0.66rem',
+                                      fontWeight: 600,
+                                      padding: '0.1rem 0.4rem',
+                                      borderRadius: '6px',
+                                      background: 'rgba(16, 185, 129, 0.12)',
+                                      color: '#34d399',
+                                      border: '1px solid rgba(52, 211, 153, 0.25)',
+                                      flexShrink: 0
+                                    }}>
+                                      Archived ✓
+                                    </span>
+                                  </div>
+
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                                    <span>{ex.completedChapters}/{ex.totalChapters} Chaps • {ex.testCount} Tests</span>
+                                    {ex.avgTestScore !== null && (
+                                      <span style={{ color: ex.avgTestScore >= 75 ? '#34d399' : '#fbbf24', fontWeight: 600 }}>
+                                        Avg: {ex.avgTestScore}%
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255, 255, 255, 0.05)', paddingTop: '0.45rem', marginTop: '0.1rem' }}>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRestoreExam(subject.id, ex.id)}
+                                      style={{
+                                        background: 'rgba(99, 102, 241, 0.15)',
+                                        border: '1px solid rgba(129, 140, 248, 0.3)',
+                                        color: '#c7d2fe',
+                                        fontSize: '0.68rem',
+                                        fontWeight: 600,
+                                        padding: '0.2rem 0.55rem',
+                                        borderRadius: '6px',
+                                        cursor: 'pointer',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '0.25rem',
+                                        transition: 'all 0.15s'
+                                      }}
+                                      onMouseEnter={(e) => {
+                                        e.currentTarget.style.background = 'rgba(99, 102, 241, 0.3)';
+                                        e.currentTarget.style.color = '#fff';
+                                      }}
+                                      onMouseLeave={(e) => {
+                                        e.currentTarget.style.background = 'rgba(99, 102, 241, 0.15)';
+                                        e.currentTarget.style.color = '#c7d2fe';
+                                      }}
+                                      title="Restore this exam workspace back to the active list"
+                                    >
+                                      <span>↺</span>
+                                      <span>Restore to Active</span>
+                                    </button>
+
+                                    <Link
+                                      href={examHref}
+                                      style={{
+                                        color: 'var(--accent-primary)',
+                                        fontSize: '0.72rem',
+                                        fontWeight: 600,
+                                        textDecoration: 'none',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '0.2rem'
+                                      }}
+                                    >
+                                      <span>View Records</span>
+                                      <span>→</span>
+                                    </Link>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Model Tests Mastery & Performance Overview (if tests exist) */}
+                      {examsWithModelTests.length > 0 && (
+                        <div style={{
+                          marginTop: '0.4rem',
+                          padding: '1rem 1.15rem',
+                          background: 'rgba(15, 23, 42, 0.45)',
+                          border: '1px solid rgba(139, 92, 246, 0.2)',
+                          borderRadius: '12px',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.85rem'
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                              <span style={{ fontSize: '1rem' }}>📊</span>
+                              <span style={{ fontSize: '0.86rem', color: '#fff', fontWeight: 600 }}>
+                                Model Test Performance
+                              </span>
+                            </div>
+                            <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.05)', padding: '0.18rem 0.5rem', borderRadius: '10px' }}>
+                              {examsWithModelTests.reduce((acc, e) => acc + e.testCount, 0)} Tests Recorded
+                            </span>
+                          </div>
+
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                            {examsWithModelTests.map(ex => (
+                              <div 
+                                key={ex.id}
+                                style={{
+                                  background: 'rgba(255, 255, 255, 0.02)',
+                                  border: '1px solid rgba(255, 255, 255, 0.06)',
+                                  borderRadius: '10px',
+                                  padding: '0.8rem 0.95rem',
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: '0.6rem'
+                                }}
+                              >
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem' }}>
+                                  <span style={{ fontSize: '0.84rem', fontWeight: 600, color: '#e2e8f0' }}>
+                                    {ex.title}
+                                  </span>
+                                  {ex.avgTestScore !== null ? (
+                                    <span style={{
+                                      fontSize: '0.72rem',
+                                      fontWeight: 600,
+                                      padding: '0.16rem 0.5rem',
+                                      borderRadius: '8px',
+                                      background: ex.avgTestScore >= 80 ? 'rgba(16, 185, 129, 0.15)' : ex.avgTestScore >= 60 ? 'rgba(59, 130, 246, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+                                      color: ex.avgTestScore >= 80 ? '#34d399' : ex.avgTestScore >= 60 ? '#60a5fa' : '#fbbf24',
+                                      border: `1px solid ${ex.avgTestScore >= 80 ? 'rgba(16, 185, 129, 0.3)' : ex.avgTestScore >= 60 ? 'rgba(59, 130, 246, 0.3)' : 'rgba(245, 158, 11, 0.3)'}`
+                                    }}>
+                                      Avg: {ex.avgTestScore}%
+                                    </span>
+                                  ) : (
+                                    <span style={{ fontSize: '0.7rem', color: '#94a3b8', fontStyle: 'italic' }}>
+                                      Pending Evaluation
+                                    </span>
+                                  )}
+                                </div>
+
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '0.5rem' }}>
+                                  {ex.tests.map(test => {
+                                    const hasScore = test.isGraded && test.percent !== null;
+                                    return (
+                                      <div
+                                        key={test.id}
+                                        style={{
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          justifyContent: 'space-between',
+                                          padding: '0.6rem 0.75rem',
+                                          background: 'rgba(255, 255, 255, 0.025)',
+                                          border: '1px solid rgba(255, 255, 255, 0.06)',
+                                          borderRadius: '8px',
+                                          gap: '0.5rem'
+                                        }}
+                                      >
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem', minWidth: 0 }}>
+                                          <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                            {test.title || `Test - ${test.date || 'Practice'}`}
+                                          </span>
+                                          <span style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>
+                                            {test.date ? `📅 ${test.date}` : 'Practice'}
+                                          </span>
+                                        </div>
+
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexShrink: 0 }}>
+                                          <span style={{
+                                            fontSize: '0.7rem',
+                                            fontWeight: 700,
+                                            padding: '0.18rem 0.45rem',
+                                            borderRadius: '6px',
+                                            background: hasScore 
+                                              ? (test.percent >= 80 ? 'rgba(16, 185, 129, 0.18)' : test.percent >= 60 ? 'rgba(59, 130, 246, 0.18)' : 'rgba(245, 158, 11, 0.18)')
+                                              : 'rgba(234, 179, 8, 0.12)',
+                                            color: hasScore 
+                                              ? (test.percent >= 80 ? '#34d399' : test.percent >= 60 ? '#60a5fa' : '#fbbf24')
+                                              : '#facc15'
+                                          }}>
+                                            {hasScore ? `${test.scoreDisplay}` : 'Pending'}
+                                          </span>
+
+                                          <button
+                                            type="button"
+                                            onClick={() => openTestViewer({ subjectId: subject.id, examId: ex.id, testId: test.id, ...test })}
+                                            style={{
+                                              background: 'rgba(139, 92, 246, 0.15)',
+                                              border: '1px solid rgba(139, 92, 246, 0.3)',
+                                              borderRadius: '6px',
+                                              color: 'var(--accent-primary)',
+                                              padding: '0.22rem 0.45rem',
+                                              fontSize: '0.7rem',
+                                              cursor: 'pointer',
+                                              fontWeight: 600,
+                                              transition: 'all 0.2s'
+                                            }}
+                                            onMouseOver={(e) => {
+                                              e.currentTarget.style.background = 'rgba(139, 92, 246, 0.3)';
+                                              e.currentTarget.style.color = '#fff';
+                                            }}
+                                            onMouseOut={(e) => {
+                                              e.currentTarget.style.background = 'rgba(139, 92, 246, 0.15)';
+                                              e.currentTarget.style.color = 'var(--accent-primary)';
+                                            }}
+                                            title="View Test Answers & Grading"
+                                          >
+                                            View
+                                          </button>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Bottom Collapse Bar for Full-Width Workspace */}
+                      <div style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        flexWrap: 'wrap',
+                        gap: '0.65rem',
+                        paddingTop: '0.95rem',
+                        marginTop: '0.4rem',
+                        borderTop: '1px solid rgba(255, 255, 255, 0.08)'
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+                          <span>✨</span>
+                          <span>Full-width reading & interaction canvas • {activeExams.length} active exam {activeExams.length === 1 ? 'track' : 'tracks'}</span>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => toggleSubject(subject.id)}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.35rem',
+                            padding: '0.38rem 0.85rem',
+                            borderRadius: '8px',
+                            background: 'rgba(255, 255, 255, 0.05)',
+                            border: '1px solid rgba(255, 255, 255, 0.12)',
+                            color: '#cbd5e1',
+                            fontSize: '0.76rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            transition: 'all 0.15s ease'
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.background = 'rgba(139, 92, 246, 0.22)';
+                            e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.5)';
+                            e.currentTarget.style.color = '#fff';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
+                            e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.12)';
+                            e.currentTarget.style.color = '#cbd5e1';
+                          }}
+                          title="Collapse this workspace back into the compact grid layout"
+                        >
+                          <span>▲</span>
+                          <span>Collapse Workspace</span>
+                        </button>
                       </div>
                     </div>
                   )}
+
+                  {/* Primary Link Button: Open Subject Hub */}
+                  <Link
+                    href={subjectHubHref}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '0.45rem',
+                      padding: '0.68rem 1.1rem',
+                      fontSize: '0.85rem',
+                      fontWeight: 600,
+                      background: 'var(--accent-gradient, linear-gradient(135deg, #6366f1, #8b5cf6))',
+                      color: '#ffffff',
+                      borderRadius: '12px',
+                      textDecoration: 'none',
+                      boxShadow: '0 4px 14px rgba(99, 102, 241, 0.25)',
+                      transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                      marginTop: 'auto'
+                    }}
+                    onMouseOver={(e) => {
+                      e.currentTarget.style.transform = 'translateY(-1px)';
+                      e.currentTarget.style.boxShadow = '0 6px 20px rgba(99, 102, 241, 0.38)';
+                    }}
+                    onMouseOut={(e) => {
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = '0 4px 14px rgba(99, 102, 241, 0.25)';
+                    }}
+                  >
+                    <span>Open {subject.title} Hub</span>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+                  </Link>
                 </div>
               );
             })}
@@ -1206,10 +2414,10 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
       {/* Model Test Generator Popover Modal */}
       {modelTestTarget && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 110, padding: '1rem' }}>
-          <div className="card" style={{ maxWidth: '640px', width: '100%', maxHeight: '90vh', overflowY: 'auto', position: 'relative', animation: 'fadeIn 0.25s ease-out', textAlign: 'left', padding: '1.8rem' }}>
+          <div className="card" style={{ maxWidth: '680px', width: '100%', height: '80vh', maxHeight: '80vh', display: 'flex', flexDirection: 'column', position: 'relative', animation: 'fadeIn 0.25s ease-out', textAlign: 'left', padding: '1.5rem', overflow: 'hidden' }}>
             
             {/* Modal Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem', borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.75rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem', borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.75rem', flexShrink: 0 }}>
               <div>
                 <h2 style={{ margin: '0 0 0.25rem 0', fontSize: '1.4rem' }}>Generate Model Test</h2>
                 <p style={{ margin: 0, fontSize: '0.9rem', color: 'var(--accent-primary)', fontWeight: 500 }}>
@@ -1218,25 +2426,32 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
               </div>
               <button 
                 onClick={() => setModelTestTarget(null)}
-                style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1.2rem', padding: '0.2rem 0.5rem' }}
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1.2rem', padding: '0.2rem 0.5rem', borderRadius: '4px' }}
               >
                 ✕
               </button>
             </div>
 
-            {generateError && (
-              <div style={{ background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#fca5a5', padding: '0.75rem', borderRadius: '8px', marginBottom: '1rem', fontSize: '0.88rem' }}>
-                {generateError}
-              </div>
-            )}
+            {/* Scrollable Content Body */}
+            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1.1rem', paddingRight: '0.35rem' }}>
+              {generateError && (
+                <div style={{ background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#fca5a5', padding: '0.75rem', borderRadius: '8px', fontSize: '0.88rem' }}>
+                  {generateError}
+                </div>
+              )}
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.2rem' }}>
-              
               {/* 1. Syllabus Chapters Selection */}
               <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                  <label style={{ fontSize: '0.88rem', fontWeight: 600, color: '#f1f5f9' }}>
-                    1. Syllabus Chapters ({selectedChaptersForTest.length} selected)
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.45rem' }}>
+                  <label style={{ fontSize: '0.88rem', fontWeight: 600, color: '#f1f5f9', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary, #6366f1)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+                      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+                    </svg>
+                    1. Syllabus Chapters
+                    <span style={{ fontSize: '0.7rem', padding: '0.1rem 0.45rem', borderRadius: '10px', background: 'rgba(99, 102, 241, 0.15)', border: '1px solid rgba(99, 102, 241, 0.3)', color: '#a5b4fc', fontWeight: 600 }}>
+                      {selectedChaptersForTest.length} selected
+                    </span>
                   </label>
                   {modelTestTarget.subject.chapters?.[modelTestTarget.exam.id] && (
                     <button 
@@ -1245,7 +2460,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                         const allKeys = Object.keys(modelTestTarget.subject.chapters[modelTestTarget.exam.id]);
                         setSelectedChaptersForTest(selectedChaptersForTest.length === allKeys.length ? [] : allKeys);
                       }}
-                      style={{ background: 'transparent', border: 'none', color: 'var(--accent-primary)', fontSize: '0.78rem', cursor: 'pointer', padding: 0 }}
+                      style={{ background: 'transparent', border: 'none', color: 'var(--accent-primary)', fontSize: '0.78rem', cursor: 'pointer', padding: 0, textDecoration: 'underline', textUnderlineOffset: '2px', fontWeight: 600 }}
                     >
                       {selectedChaptersForTest.length === Object.keys(modelTestTarget.subject.chapters[modelTestTarget.exam.id]).length ? 'Deselect All' : 'Select All'}
                     </button>
@@ -1253,7 +2468,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                 </div>
 
                 {modelTestTarget.subject.chapters?.[modelTestTarget.exam.id] && Object.keys(modelTestTarget.subject.chapters[modelTestTarget.exam.id]).length > 0 ? (
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '0.4rem', maxHeight: '130px', overflowY: 'auto', padding: '0.5rem', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', border: '1px solid var(--glass-border)' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: '0.45rem', maxHeight: '160px', overflowY: 'auto', padding: '0.6rem', background: 'rgba(10, 15, 28, 0.65)', borderRadius: '10px', border: '1px solid rgba(255, 255, 255, 0.08)', boxShadow: 'inset 0 1px 3px rgba(0, 0, 0, 0.4)' }}>
                     {Object.entries(modelTestTarget.subject.chapters[modelTestTarget.exam.id]).map(([cId, c]) => {
                       const isSelected = selectedChaptersForTest.includes(cId);
                       return (
@@ -1263,22 +2478,41 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                           style={{
                             display: 'flex',
                             alignItems: 'center',
-                            gap: '0.5rem',
-                            padding: '0.35rem 0.6rem',
-                            borderRadius: '6px',
+                            gap: '0.6rem',
+                            padding: '0.5rem 0.65rem',
+                            borderRadius: '8px',
                             cursor: 'pointer',
-                            background: isSelected ? 'rgba(139, 92, 246, 0.18)' : 'rgba(255,255,255,0.02)',
-                            border: `1px solid ${isSelected ? 'var(--accent-primary)' : 'rgba(255,255,255,0.05)'}`,
-                            transition: 'all 0.15s'
+                            userSelect: 'none',
+                            background: isSelected
+                              ? 'linear-gradient(135deg, rgba(99, 102, 241, 0.2) 0%, rgba(139, 92, 246, 0.14) 100%)'
+                              : 'rgba(255,255,255,0.025)',
+                            border: `1px solid ${isSelected ? 'rgba(129, 140, 248, 0.5)' : 'rgba(255,255,255,0.07)'}`,
+                            boxShadow: isSelected ? '0 2px 8px rgba(99, 102, 241, 0.15)' : 'none',
+                            transition: 'all 0.15s ease'
                           }}
                         >
-                          <input 
-                            type="checkbox" 
-                            checked={isSelected} 
-                            onChange={() => {}} 
-                            style={{ width: 'auto', margin: 0, cursor: 'pointer' }} 
-                          />
-                          <span style={{ fontSize: '0.85rem', color: isSelected ? '#fff' : 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          <div
+                            style={{
+                              width: '18px',
+                              height: '18px',
+                              borderRadius: '5px',
+                              flexShrink: 0,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              background: isSelected ? 'linear-gradient(135deg, #6366f1, #8b5cf6)' : 'rgba(0, 0, 0, 0.4)',
+                              border: `1px solid ${isSelected ? '#a5b4fc' : 'rgba(255, 255, 255, 0.22)'}`,
+                              boxShadow: isSelected ? '0 0 6px rgba(99, 102, 241, 0.5)' : 'none',
+                              transition: 'all 0.15s ease'
+                            }}
+                          >
+                            {isSelected && (
+                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round">
+                                <polyline points="20 6 9 17 4 12" />
+                              </svg>
+                            )}
+                          </div>
+                          <span style={{ fontSize: '0.84rem', fontWeight: isSelected ? 600 : 400, color: isSelected ? '#f8fafc' : '#cbd5e1', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={c.title}>
                             {c.title}
                           </span>
                         </div>
@@ -1291,33 +2525,12 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
               </div>
 
               {/* 2. Mark Distribution */}
-              <div>
-                <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.88rem', fontWeight: 600, color: '#f1f5f9' }}>
-                  2. Mark Distribution (Guides Question Breakdown)
-                </label>
-                <textarea 
-                  value={testMarkDistribution} 
-                  onChange={e => setTestMarkDistribution(e.target.value)} 
-                  placeholder={`e.g.\nMCQ: 20 marks\nShort Questions: 30 marks\nCreative Questions: 50 marks\nTotal: 100 marks`} 
-                  style={{ width: '100%', padding: '0.65rem', background: 'rgba(0,0,0,0.25)', border: '1px solid var(--glass-border)', borderRadius: '8px', color: '#fff', fontSize: '0.88rem', minHeight: '80px', resize: 'vertical' }} 
-                />
-                <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.3rem', flexWrap: 'wrap' }}>
-                  <button 
-                    type="button" 
-                    onClick={() => setTestMarkDistribution("MCQ: 20 marks\nShort Questions: 30 marks\nCreative/Descriptive: 50 marks\nTotal: 100 marks")}
-                    style={{ padding: '0.2rem 0.5rem', fontSize: '0.72rem', background: 'rgba(255,255,255,0.04)', border: '1px solid var(--glass-border)', borderRadius: '4px', color: 'var(--text-secondary)' }}
-                  >
-                    Preset: 100 Marks Standard
-                  </button>
-                  <button 
-                    type="button" 
-                    onClick={() => setTestMarkDistribution("MCQ: 15 marks\nShort Questions: 15 marks\nCreative Questions: 20 marks\nTotal: 50 marks")}
-                    style={{ padding: '0.2rem 0.5rem', fontSize: '0.72rem', background: 'rgba(255,255,255,0.04)', border: '1px solid var(--glass-border)', borderRadius: '4px', color: 'var(--text-secondary)' }}
-                  >
-                    Preset: 50 Marks CT
-                  </button>
-                </div>
-              </div>
+              <MarkDistributionField
+                value={testMarkDistribution}
+                onChange={setTestMarkDistribution}
+                label="2. Mark Distribution (Guides Question Breakdown)"
+                maxHeight="280px"
+              />
 
               {/* 3. Difficulty & Standard Guidelines */}
               <div>
@@ -1440,78 +2653,76 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                   />
                 </div>
               </div>
-
-              {/* Action Buttons */}
-              <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
-                <button
-                  type="button"
-                  onClick={handleGenerateModelTest}
-                  disabled={isGeneratingTest || countWords(customInstructions) > 200}
-                  className="primary"
-                  style={{
-                    flex: 2,
-                    padding: '0.75rem 1.2rem',
-                    borderRadius: '8px',
-                    border: 'none',
-                    fontWeight: 600,
-                    cursor: isGeneratingTest ? 'not-allowed' : 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '0.5rem'
-                  }}
-                >
-                  {isGeneratingTest ? (
-                    <>
-                      <span className="spinner" style={{ width: '16px', height: '16px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', borderRadius: '50%', display: 'inline-block', animation: 'spin 0.8s linear infinite' }}></span>
-                      <span>Generating with Gemini AI...</span>
-                    </>
-                  ) : (
-                    <>
-                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-                      <span>Generate Model Test</span>
-                    </>
-                  )}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleSaveManualModelTest}
-                  disabled={isGeneratingTest}
-                  style={{
-                    flex: 1,
-                    padding: '0.75rem 1rem',
-                    background: 'rgba(255,255,255,0.06)',
-                    color: '#fff',
-                    border: '1px solid var(--glass-border)',
-                    borderRadius: '8px',
-                    cursor: 'pointer',
-                    fontSize: '0.85rem'
-                  }}
-                  title="Save manual record with Title & Result 0"
-                >
-                  Save Entry Only
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setModelTestTarget(null)}
-                  disabled={isGeneratingTest}
-                  style={{
-                    padding: '0.75rem 1rem',
-                    background: 'transparent',
-                    color: 'var(--text-secondary)',
-                    border: 'none',
-                    borderRadius: '8px',
-                    cursor: 'pointer'
-                  }}
-                >
-                  Cancel
-                </button>
-              </div>
-
             </div>
 
+            {/* Action Buttons - Fixed at bottom */}
+            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px solid var(--glass-border)', flexWrap: 'wrap', flexShrink: 0 }}>
+              <button
+                type="button"
+                onClick={handleGenerateModelTest}
+                disabled={isGeneratingTest || countWords(customInstructions) > 200}
+                className="primary"
+                style={{
+                  flex: 2,
+                  padding: '0.75rem 1.2rem',
+                  borderRadius: '8px',
+                  border: 'none',
+                  fontWeight: 600,
+                  cursor: isGeneratingTest ? 'not-allowed' : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '0.5rem'
+                }}
+              >
+                {isGeneratingTest ? (
+                  <>
+                    <span className="spinner" style={{ width: '16px', height: '16px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', borderRadius: '50%', display: 'inline-block', animation: 'spin 0.8s linear infinite' }}></span>
+                    <span>Generating with Gemini AI...</span>
+                  </>
+                ) : (
+                  <>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+                    <span>Generate Model Test</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleSaveManualModelTest}
+                disabled={isGeneratingTest}
+                style={{
+                  flex: 1,
+                  padding: '0.75rem 1rem',
+                  background: 'rgba(255,255,255,0.06)',
+                  color: '#fff',
+                  border: '1px solid var(--glass-border)',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  fontSize: '0.85rem'
+                }}
+                title="Save manual record with Title & Result 0"
+              >
+                Save Entry Only
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setModelTestTarget(null)}
+                disabled={isGeneratingTest}
+                style={{
+                  padding: '0.75rem 1rem',
+                  background: 'transparent',
+                  color: 'var(--text-secondary)',
+                  border: 'none',
+                  borderRadius: '8px',
+                  cursor: 'pointer'
+                }}
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -2450,20 +3661,253 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
         </div>
       )}
 
-      {/* Subject Settings Modal */}
+      {/* Universal Subject Settings Modal */}
       {settingsSubject && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '1rem' }}>
-          <div className="card" style={{ maxWidth: '400px', width: '100%', position: 'relative', animation: 'fadeIn 0.2s ease-out', textAlign: 'left' }}>
-            <h2 style={{ marginTop: 0, marginBottom: '1rem' }}>{settingsSubject.title} Settings</h2>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        <div 
+          style={{ 
+            position: 'fixed', 
+            top: 0, 
+            left: 0, 
+            right: 0, 
+            bottom: 0, 
+            background: 'rgba(5, 8, 16, 0.75)', 
+            backdropFilter: 'blur(10px)', 
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'center', 
+            zIndex: 100, 
+            padding: '1.25rem' 
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSettingsSubject(null);
+          }}
+        >
+          <div 
+            className="card" 
+            style={{ 
+              maxWidth: '540px', 
+              width: '100%', 
+              position: 'relative', 
+              animation: 'fadeIn 0.2s ease-out', 
+              textAlign: 'left',
+              padding: '1.75rem',
+              borderRadius: '16px',
+              border: '1px solid rgba(255, 255, 255, 0.12)',
+              boxShadow: '0 24px 48px -12px rgba(0, 0, 0, 0.7)',
+              background: 'linear-gradient(145deg, rgba(23, 28, 44, 0.95), rgba(15, 18, 30, 0.98))'
+            }}
+          >
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '1.25rem', paddingBottom: '1rem', borderBottom: '1px solid rgba(255, 255, 255, 0.08)' }}>
               <div>
-                <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Book PDF URL</label>
-                <input type="url" value={subjectBookUrl} onChange={e => setSubjectBookUrl(e.target.value)} placeholder="https://drive.google.com/file/d/..." style={{ width: '100%', padding: '0.8rem', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--glass-border)', borderRadius: '8px', color: '#fff', fontSize: '1rem' }} />
-                <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.85rem', color: 'var(--text-secondary)', opacity: 0.8 }}>This book will be used for all chapters in this subject. You can set the starting page for each chapter individually in the syllabus manager.</p>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', padding: '0.2rem 0.6rem', borderRadius: '20px', background: 'rgba(99, 102, 241, 0.15)', color: '#a5b4fc', fontSize: '0.75rem', fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: '0.4rem' }}>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+                  Universal Subject Settings
+                </div>
+                <h2 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 700, color: '#fff', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  {settingsSubject.title}
+                </h2>
+                <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                  Applies to all exams, chapters, and resources for this subject
+                </p>
               </div>
-              <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem' }}>
-                <button onClick={handleSaveSubjectSettings} className="primary" style={{ padding: '0.6rem 1.2rem', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '500' }}>Save</button>
-                <button onClick={() => setSettingsSubject(null)} style={{ padding: '0.6rem 1.2rem', background: 'rgba(255,255,255,0.1)', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer' }}>Cancel</button>
+              <button 
+                onClick={() => setSettingsSubject(null)}
+                style={{ 
+                  background: 'rgba(255, 255, 255, 0.06)', 
+                  border: 'none', 
+                  color: 'var(--text-secondary)', 
+                  width: '32px', 
+                  height: '32px', 
+                  borderRadius: '50%', 
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '1.1rem',
+                  transition: 'all 0.15s ease'
+                }}
+                onMouseOver={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.12)'; e.currentTarget.style.color = '#fff'; }}
+                onMouseOut={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+                title="Close"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.35rem' }}>
+              {/* Setting 1: Online Textbook / PDF URL */}
+              <div style={{ background: 'rgba(255, 255, 255, 0.03)', borderRadius: '12px', padding: '1rem', border: '1px solid rgba(255, 255, 255, 0.05)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.4rem' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: '#fff', fontSize: '0.92rem', fontWeight: 600 }}>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: '#38bdf8' }}><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+                    Online Textbook / PDF Reader URL
+                  </label>
+                  {subjectBookUrl.trim() && (
+                    <a 
+                      href={subjectBookUrl.trim()} 
+                      target="_blank" 
+                      rel="noopener noreferrer" 
+                      style={{ fontSize: '0.78rem', color: '#38bdf8', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '0.2rem', padding: '0.15rem 0.5rem', borderRadius: '6px', background: 'rgba(56, 189, 248, 0.1)' }}
+                    >
+                      Test Link ↗
+                    </a>
+                  )}
+                </div>
+                <input 
+                  type="url" 
+                  value={subjectBookUrl} 
+                  onChange={e => setSubjectBookUrl(e.target.value)} 
+                  placeholder="https://drive.google.com/file/d/... or PDF link" 
+                  style={{ 
+                    width: '100%', 
+                    padding: '0.7rem 0.85rem', 
+                    background: 'rgba(0, 0, 0, 0.35)', 
+                    border: '1px solid rgba(255, 255, 255, 0.12)', 
+                    borderRadius: '8px', 
+                    color: '#fff', 
+                    fontSize: '0.92rem',
+                    outline: 'none',
+                    transition: 'border-color 0.2s'
+                  }}
+                  onFocus={(e) => e.target.style.borderColor = 'var(--accent-primary, #6366f1)'}
+                  onBlur={(e) => e.target.style.borderColor = 'rgba(255, 255, 255, 0.12)'}
+                />
+                <p style={{ margin: '0.45rem 0 0 0', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                  Universal textbook reference for all chapters. Chapter cards and study sessions link directly to their specific starting page numbers.
+                </p>
+              </div>
+
+              {/* Setting 2: Exam Post-Deadline Visibility / Retention Window */}
+              <div style={{ background: 'rgba(255, 255, 255, 0.03)', borderRadius: '12px', padding: '1rem', border: '1px solid rgba(255, 255, 255, 0.05)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: '#fff', fontSize: '0.92rem', fontWeight: 600 }}>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: '#f59e0b' }}><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                    Post-Deadline Exam Visibility
+                  </label>
+                  <span style={{ fontSize: '0.75rem', padding: '0.15rem 0.5rem', borderRadius: '6px', background: 'rgba(245, 158, 11, 0.12)', color: '#fbbf24', fontWeight: 500 }}>
+                    Parent & Teacher Policy
+                  </span>
+                </div>
+                <p style={{ margin: '0 0 0.75rem 0', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                  Duration an exam remains visible on the active dashboard after its deadline has passed before being automatically archived.
+                </p>
+
+                {/* Quick Presets */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '0.4rem', marginBottom: '0.85rem' }}>
+                  {[
+                    { label: '3 Days', value: '3' },
+                    { label: '7 Days', value: '7', badge: 'Default' },
+                    { label: '14 Days', value: '14' },
+                    { label: '30 Days', value: '30' },
+                    { label: 'Never', value: '0', badge: 'Keep' }
+                  ].map((preset) => {
+                    const isSelected = String(subjectExamRetentionDays) === preset.value;
+                    return (
+                      <button
+                        key={preset.value}
+                        type="button"
+                        onClick={() => setSubjectExamRetentionDays(preset.value)}
+                        style={{
+                          padding: '0.5rem 0.25rem',
+                          borderRadius: '8px',
+                          border: isSelected ? '1px solid #6366f1' : '1px solid rgba(255, 255, 255, 0.08)',
+                          background: isSelected ? 'rgba(99, 102, 241, 0.22)' : 'rgba(255, 255, 255, 0.04)',
+                          color: isSelected ? '#fff' : 'var(--text-secondary)',
+                          fontSize: '0.78rem',
+                          fontWeight: isSelected ? 600 : 500,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          gap: '0.15rem',
+                          transition: 'all 0.15s ease'
+                        }}
+                      >
+                        <span>{preset.label}</span>
+                        {preset.badge && (
+                          <span style={{ fontSize: '0.62rem', opacity: isSelected ? 1 : 0.6, color: isSelected ? '#a5b4fc' : 'inherit' }}>
+                            {preset.badge}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Custom input & feedback indicator */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', background: 'rgba(0, 0, 0, 0.25)', padding: '0.6rem 0.8rem', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>Custom Days:</span>
+                    <input 
+                      type="number" 
+                      min="0" 
+                      max="365"
+                      value={subjectExamRetentionDays} 
+                      onChange={(e) => setSubjectExamRetentionDays(e.target.value)} 
+                      style={{ 
+                        width: '72px', 
+                        padding: '0.35rem 0.5rem', 
+                        background: 'rgba(255, 255, 255, 0.06)', 
+                        border: '1px solid rgba(255, 255, 255, 0.15)', 
+                        borderRadius: '6px', 
+                        color: '#fff', 
+                        fontSize: '0.88rem', 
+                        fontWeight: 600, 
+                        textAlign: 'center' 
+                      }} 
+                    />
+                  </div>
+                  <div style={{ fontSize: '0.78rem', color: subjectExamRetentionDays === '0' || Number(subjectExamRetentionDays) === 0 ? '#34d399' : '#94a3b8', lineHeight: 1.3, flex: 1 }}>
+                    {subjectExamRetentionDays === '0' || Number(subjectExamRetentionDays) === 0 ? (
+                      <span>🛡️ <strong>Permanent</strong> — exams will never auto-archive and stay visible until manually removed.</span>
+                    ) : (
+                      <span>⏳ Retained for <strong>{subjectExamRetentionDays || 0} day{Number(subjectExamRetentionDays) === 1 ? '' : 's'}</strong> post-deadline for parent & kid review before auto-archival.</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '0.25rem' }}>
+                <button 
+                  type="button" 
+                  onClick={() => setSettingsSubject(null)} 
+                  style={{ 
+                    padding: '0.65rem 1.25rem', 
+                    background: 'rgba(255, 255, 255, 0.06)', 
+                    color: 'var(--text-secondary)', 
+                    border: '1px solid rgba(255, 255, 255, 0.1)', 
+                    borderRadius: '8px', 
+                    cursor: 'pointer',
+                    fontSize: '0.9rem',
+                    fontWeight: 500
+                  }}
+                  onMouseOver={(e) => e.currentTarget.style.color = '#fff'}
+                  onMouseOut={(e) => e.currentTarget.style.color = 'var(--text-secondary)'}
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="button" 
+                  onClick={handleSaveSubjectSettings} 
+                  className="primary" 
+                  style={{ 
+                    padding: '0.65rem 1.4rem', 
+                    border: 'none', 
+                    borderRadius: '8px', 
+                    cursor: 'pointer', 
+                    fontWeight: 600,
+                    fontSize: '0.9rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.4rem',
+                    boxShadow: '0 4px 14px rgba(99, 102, 241, 0.4)'
+                  }}
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                  Save Settings
+                </button>
               </div>
             </div>
           </div>
@@ -2487,6 +3931,83 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Archive / Close Floating Notification Toast */}
+      {archiveToast && (
+        <div style={{
+          position: 'fixed',
+          bottom: '24px',
+          right: '24px',
+          zIndex: 9999,
+          background: 'rgba(15, 23, 42, 0.95)',
+          border: '1px solid rgba(52, 211, 153, 0.4)',
+          boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.6), 0 0 15px rgba(16, 185, 129, 0.2)',
+          backdropFilter: 'blur(10px)',
+          borderRadius: '12px',
+          padding: '0.75rem 1.15rem',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.85rem',
+          color: '#f8fafc',
+          fontSize: '0.86rem',
+          animation: 'slideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1)'
+        }}>
+          <div style={{
+            width: '28px',
+            height: '28px',
+            borderRadius: '50%',
+            background: 'rgba(16, 185, 129, 0.2)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: '0.95rem'
+          }}>
+            📦
+          </div>
+          <span style={{ fontWeight: 500 }}>{archiveToast.message}</span>
+          <button
+            type="button"
+            onClick={() => handleRestoreExam(archiveToast.subjectId, archiveToast.examId)}
+            style={{
+              background: 'rgba(255, 255, 255, 0.1)',
+              border: '1px solid rgba(255, 255, 255, 0.2)',
+              color: '#34d399',
+              fontWeight: 700,
+              fontSize: '0.78rem',
+              padding: '0.3rem 0.65rem',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = 'rgba(52, 211, 153, 0.2)';
+              e.currentTarget.style.color = '#fff';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)';
+              e.currentTarget.style.color = '#34d399';
+            }}
+          >
+            Undo
+          </button>
+          <button
+            type="button"
+            onClick={() => setArchiveToast(null)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--text-secondary)',
+              cursor: 'pointer',
+              fontSize: '1rem',
+              lineHeight: 1,
+              padding: '0.2rem'
+            }}
+            aria-label="Dismiss"
+          >
+            ✕
+          </button>
         </div>
       )}
     </main>
