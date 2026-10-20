@@ -125,7 +125,8 @@ export default function MarkDistributionField({
   value = '',
   onChange,
   label = 'Mark Distribution Pattern',
-  compact = false
+  compact = false,
+  maxHeight = '280px'
 }) {
   const [isEditing, setIsEditing] = useState(false);
 
@@ -230,12 +231,13 @@ export default function MarkDistributionField({
             display: 'flex',
             flexDirection: 'column',
             gap: '0.45rem',
-            maxHeight: compact ? '150px' : '200px',
+            minHeight: '120px',
+            maxHeight: maxHeight || '280px',
             overflowY: 'auto',
             background: 'rgba(10, 15, 28, 0.65)',
             border: '1px solid rgba(255, 255, 255, 0.08)',
             borderRadius: '10px',
-            padding: '0.55rem',
+            padding: '0.6rem',
             boxShadow: 'inset 0 1px 3px rgba(0, 0, 0, 0.4)'
           }}
         >
@@ -407,11 +409,12 @@ export default function MarkDistributionField({
           <textarea
             value={value}
             onChange={(e) => onChange?.(e.target.value)}
-            rows={compact ? 3 : 4}
+            rows={5}
             placeholder={`e.g.\n1. Multiple Choice Questions: 20 × 1 = 20 Marks\n2. Competency-Based Questions: 8 × 7 = 56 Marks\n   – Chapters: 3, 6, 7, 8, 10\nTotal: 100 Marks`}
             style={{
               width: '100%',
-              padding: '0.55rem 0.65rem',
+              minHeight: '140px',
+              padding: '0.65rem 0.75rem',
               background: 'rgba(10, 15, 28, 0.85)',
               border: '1px solid rgba(99, 102, 241, 0.45)',
               borderRadius: '8px',

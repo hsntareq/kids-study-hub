@@ -2529,6 +2529,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                 value={testMarkDistribution}
                 onChange={setTestMarkDistribution}
                 label="2. Mark Distribution (Guides Question Breakdown)"
+                maxHeight="280px"
               />
 
               {/* 3. Difficulty & Standard Guidelines */}

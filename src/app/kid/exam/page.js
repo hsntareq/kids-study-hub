@@ -1311,7 +1311,7 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
                 value={testMarkDistribution}
                 onChange={setTestMarkDistribution}
                 label="Mark Distribution Pattern"
-                compact
+                maxHeight="280px"
               />
 
               {/* Difficulty & Guidelines */}
