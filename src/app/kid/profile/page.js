@@ -799,7 +799,12 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
   };
 
   const handleStudentAnswerChange = (qId, text, immediate = false) => {
-    const updated = { ...studentAnswers, [qId]: text };
+    const updated = { ...studentAnswers };
+    if (!text || !text.trim()) {
+      delete updated[qId];
+    } else {
+      updated[qId] = text;
+    }
     setStudentAnswers(updated);
     saveStudentAnswers(updated, immediate);
   };
@@ -3158,57 +3163,119 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
 
                     {/* Multiple Choice Options (if present) */}
                     {q.options && q.options.length > 0 && (
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.5rem', marginBottom: '0.9rem' }}>
-                        {q.options.map((opt, optIdx) => {
-                          const isPicked = studentAns === opt || studentAns.startsWith(opt.slice(0, 2));
-                          const isCorrectKey = hasKey && (q.answerKey.toLowerCase().includes(opt.slice(0, 2).toLowerCase()) || q.answerKey.toLowerCase().includes(opt.toLowerCase()));
+                      <div style={{ marginBottom: '0.9rem' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.5rem', marginBottom: '0.4rem' }}>
+                          {q.options.map((opt, optIdx) => {
+                            const isPicked = Boolean(studentAns?.trim()) && (
+                              studentAns.trim() === opt.trim() || 
+                              (opt.trim().length >= 2 && studentAns.trim().startsWith(opt.trim().slice(0, 2)))
+                            );
+                            const isCorrectKey = hasKey && (q.answerKey.toLowerCase().includes(opt.slice(0, 2).toLowerCase()) || q.answerKey.toLowerCase().includes(opt.toLowerCase()));
 
-                          return (
+                            return (
+                              <button
+                                key={optIdx}
+                                type="button"
+                                onClick={() => {
+                                  if (testViewMode === 'student') {
+                                    if (isPicked) {
+                                      handleStudentAnswerChange(q.id, '', true);
+                                    } else {
+                                      handleStudentAnswerChange(q.id, opt, true);
+                                    }
+                                  }
+                                }}
+                                disabled={testViewMode === 'examiner'}
+                                title={testViewMode === 'student' && isPicked ? 'Click again to unselect' : ''}
+                                style={{
+                                  padding: '0.55rem 0.85rem',
+                                  borderRadius: '8px',
+                                  textAlign: 'left',
+                                  justifyContent: 'flex-start',
+                                  fontSize: '0.88rem',
+                                  background: isPicked ? 'rgba(139, 92, 246, 0.25)' : 'rgba(255,255,255,0.03)',
+                                  border: `1px solid ${isPicked ? 'var(--accent-primary)' : 'rgba(255,255,255,0.08)'}`,
+                                  color: isPicked ? '#fff' : 'var(--text-secondary)',
+                                  cursor: testViewMode === 'student' ? 'pointer' : 'default',
+                                  transition: 'all 0.15s',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'space-between'
+                                }}
+                              >
+                                <span>{opt}</span>
+                                {testViewMode === 'student' && isPicked && (
+                                  <span style={{ fontSize: '0.75rem', color: '#c4b5fd', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+                                    <span>✓ Picked</span>
+                                  </span>
+                                )}
+                                {testViewMode === 'examiner' && isCorrectKey && (
+                                  <span style={{ fontSize: '0.7rem', color: '#34d399', background: 'rgba(16, 185, 129, 0.15)', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>Key ✓</span>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        {testViewMode === 'student' && Boolean(studentAns?.trim()) && (
+                          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.2rem' }}>
                             <button
-                              key={optIdx}
                               type="button"
-                              onClick={() => {
-                                if (testViewMode === 'student') {
-                                  handleStudentAnswerChange(q.id, opt, true);
-                                }
-                              }}
-                              disabled={testViewMode === 'examiner'}
+                              onClick={() => handleStudentAnswerChange(q.id, '', true)}
                               style={{
-                                padding: '0.55rem 0.85rem',
-                                borderRadius: '8px',
-                                textAlign: 'left',
-                                justifyContent: 'flex-start',
-                                fontSize: '0.88rem',
-                                background: isPicked ? 'rgba(139, 92, 246, 0.25)' : 'rgba(255,255,255,0.03)',
-                                border: `1px solid ${isPicked ? 'var(--accent-primary)' : 'rgba(255,255,255,0.08)'}`,
-                                color: isPicked ? '#fff' : 'var(--text-secondary)',
-                                cursor: testViewMode === 'student' ? 'pointer' : 'default',
-                                transition: 'all 0.15s',
-                                display: 'flex',
+                                background: 'transparent',
+                                border: 'none',
+                                color: '#f87171',
+                                fontSize: '0.75rem',
+                                cursor: 'pointer',
+                                display: 'inline-flex',
                                 alignItems: 'center',
-                                justifyContent: 'space-between'
+                                gap: '0.25rem',
+                                padding: '0.15rem 0.4rem',
+                                borderRadius: '4px'
                               }}
+                              title="Clear selection for this question"
                             >
-                              <span>{opt}</span>
-                              {testViewMode === 'student' && isPicked && <span style={{ color: '#a78bfa' }}>✓</span>}
-                              {testViewMode === 'examiner' && isCorrectKey && (
-                                <span style={{ fontSize: '0.7rem', color: '#34d399', background: 'rgba(16, 185, 129, 0.15)', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>Key ✓</span>
-                              )}
+                              ✕ Deselect / Unanswer
                             </button>
-                          );
-                        })}
+                          </div>
+                        )}
                       </div>
                     )}
 
                     {/* SPACE FOR STUDENT ANSWER & SAVING */}
                     <div style={{ marginTop: '0.65rem', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '8px', padding: '0.85rem' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem', flexWrap: 'wrap', gap: '0.4rem' }}>
                         <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
                           ✍️ Student's Answer / Solution:
                         </label>
-                        {studentAns && (
-                          <span style={{ fontSize: '0.72rem', color: '#34d399' }}>✓ Response entered & saved</span>
-                        )}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          {studentAns && (
+                            <span style={{ fontSize: '0.72rem', color: '#34d399' }}>✓ Response entered & saved</span>
+                          )}
+                          {testViewMode === 'student' && Boolean(studentAns?.trim()) && (
+                            <button
+                              type="button"
+                              onClick={() => handleStudentAnswerChange(q.id, '', true)}
+                              style={{
+                                padding: '0.2rem 0.5rem',
+                                fontSize: '0.72rem',
+                                fontWeight: 500,
+                                background: 'rgba(239, 68, 68, 0.12)',
+                                border: '1px solid rgba(239, 68, 68, 0.3)',
+                                color: '#f87171',
+                                borderRadius: '5px',
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.25rem',
+                                transition: 'all 0.15s ease'
+                              }}
+                              title="Unanswer this question"
+                            >
+                              ✕ Unanswer
+                            </button>
+                          )}
+                        </div>
                       </div>
 
                       {testViewMode === 'student' ? (
@@ -3230,7 +3297,24 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                               lineHeight: 1.5
                             }}
                           />
-                          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.4rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '0.5rem', marginTop: '0.4rem' }}>
+                            {Boolean(studentAns?.trim()) && (
+                              <button
+                                type="button"
+                                onClick={() => handleStudentAnswerChange(q.id, '', true)}
+                                style={{
+                                  padding: '0.3rem 0.75rem',
+                                  fontSize: '0.78rem',
+                                  background: 'rgba(239, 68, 68, 0.12)',
+                                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                                  color: '#f87171',
+                                  borderRadius: '6px',
+                                  cursor: 'pointer'
+                                }}
+                              >
+                                ✕ Clear Answer
+                              </button>
+                            )}
                             <button
                               type="button"
                               onClick={() => saveStudentAnswers(studentAnswers, true)}
