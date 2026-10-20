@@ -2414,10 +2414,10 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
       {/* Model Test Generator Popover Modal */}
       {modelTestTarget && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 110, padding: '1rem' }}>
-          <div className="card" style={{ maxWidth: '640px', width: '100%', maxHeight: '90vh', overflowY: 'auto', position: 'relative', animation: 'fadeIn 0.25s ease-out', textAlign: 'left', padding: '1.8rem' }}>
+          <div className="card" style={{ maxWidth: '680px', width: '100%', height: '80vh', maxHeight: '80vh', display: 'flex', flexDirection: 'column', position: 'relative', animation: 'fadeIn 0.25s ease-out', textAlign: 'left', padding: '1.5rem', overflow: 'hidden' }}>
             
             {/* Modal Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem', borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.75rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem', borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.75rem', flexShrink: 0 }}>
               <div>
                 <h2 style={{ margin: '0 0 0.25rem 0', fontSize: '1.4rem' }}>Generate Model Test</h2>
                 <p style={{ margin: 0, fontSize: '0.9rem', color: 'var(--accent-primary)', fontWeight: 500 }}>
@@ -2426,25 +2426,32 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
               </div>
               <button 
                 onClick={() => setModelTestTarget(null)}
-                style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1.2rem', padding: '0.2rem 0.5rem' }}
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1.2rem', padding: '0.2rem 0.5rem', borderRadius: '4px' }}
               >
                 ✕
               </button>
             </div>
 
-            {generateError && (
-              <div style={{ background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#fca5a5', padding: '0.75rem', borderRadius: '8px', marginBottom: '1rem', fontSize: '0.88rem' }}>
-                {generateError}
-              </div>
-            )}
+            {/* Scrollable Content Body */}
+            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1.1rem', paddingRight: '0.35rem' }}>
+              {generateError && (
+                <div style={{ background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#fca5a5', padding: '0.75rem', borderRadius: '8px', fontSize: '0.88rem' }}>
+                  {generateError}
+                </div>
+              )}
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.2rem' }}>
-              
               {/* 1. Syllabus Chapters Selection */}
               <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                  <label style={{ fontSize: '0.88rem', fontWeight: 600, color: '#f1f5f9' }}>
-                    1. Syllabus Chapters ({selectedChaptersForTest.length} selected)
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.45rem' }}>
+                  <label style={{ fontSize: '0.88rem', fontWeight: 600, color: '#f1f5f9', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary, #6366f1)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+                      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+                    </svg>
+                    1. Syllabus Chapters
+                    <span style={{ fontSize: '0.7rem', padding: '0.1rem 0.45rem', borderRadius: '10px', background: 'rgba(99, 102, 241, 0.15)', border: '1px solid rgba(99, 102, 241, 0.3)', color: '#a5b4fc', fontWeight: 600 }}>
+                      {selectedChaptersForTest.length} selected
+                    </span>
                   </label>
                   {modelTestTarget.subject.chapters?.[modelTestTarget.exam.id] && (
                     <button 
@@ -2453,7 +2460,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                         const allKeys = Object.keys(modelTestTarget.subject.chapters[modelTestTarget.exam.id]);
                         setSelectedChaptersForTest(selectedChaptersForTest.length === allKeys.length ? [] : allKeys);
                       }}
-                      style={{ background: 'transparent', border: 'none', color: 'var(--accent-primary)', fontSize: '0.78rem', cursor: 'pointer', padding: 0 }}
+                      style={{ background: 'transparent', border: 'none', color: 'var(--accent-primary)', fontSize: '0.78rem', cursor: 'pointer', padding: 0, textDecoration: 'underline', textUnderlineOffset: '2px', fontWeight: 600 }}
                     >
                       {selectedChaptersForTest.length === Object.keys(modelTestTarget.subject.chapters[modelTestTarget.exam.id]).length ? 'Deselect All' : 'Select All'}
                     </button>
@@ -2461,7 +2468,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                 </div>
 
                 {modelTestTarget.subject.chapters?.[modelTestTarget.exam.id] && Object.keys(modelTestTarget.subject.chapters[modelTestTarget.exam.id]).length > 0 ? (
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '0.4rem', maxHeight: '130px', overflowY: 'auto', padding: '0.5rem', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', border: '1px solid var(--glass-border)' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: '0.45rem', maxHeight: '160px', overflowY: 'auto', padding: '0.6rem', background: 'rgba(10, 15, 28, 0.65)', borderRadius: '10px', border: '1px solid rgba(255, 255, 255, 0.08)', boxShadow: 'inset 0 1px 3px rgba(0, 0, 0, 0.4)' }}>
                     {Object.entries(modelTestTarget.subject.chapters[modelTestTarget.exam.id]).map(([cId, c]) => {
                       const isSelected = selectedChaptersForTest.includes(cId);
                       return (
@@ -2471,22 +2478,41 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                           style={{
                             display: 'flex',
                             alignItems: 'center',
-                            gap: '0.5rem',
-                            padding: '0.35rem 0.6rem',
-                            borderRadius: '6px',
+                            gap: '0.6rem',
+                            padding: '0.5rem 0.65rem',
+                            borderRadius: '8px',
                             cursor: 'pointer',
-                            background: isSelected ? 'rgba(139, 92, 246, 0.18)' : 'rgba(255,255,255,0.02)',
-                            border: `1px solid ${isSelected ? 'var(--accent-primary)' : 'rgba(255,255,255,0.05)'}`,
-                            transition: 'all 0.15s'
+                            userSelect: 'none',
+                            background: isSelected
+                              ? 'linear-gradient(135deg, rgba(99, 102, 241, 0.2) 0%, rgba(139, 92, 246, 0.14) 100%)'
+                              : 'rgba(255,255,255,0.025)',
+                            border: `1px solid ${isSelected ? 'rgba(129, 140, 248, 0.5)' : 'rgba(255,255,255,0.07)'}`,
+                            boxShadow: isSelected ? '0 2px 8px rgba(99, 102, 241, 0.15)' : 'none',
+                            transition: 'all 0.15s ease'
                           }}
                         >
-                          <input 
-                            type="checkbox" 
-                            checked={isSelected} 
-                            onChange={() => {}} 
-                            style={{ width: 'auto', margin: 0, cursor: 'pointer' }} 
-                          />
-                          <span style={{ fontSize: '0.85rem', color: isSelected ? '#fff' : 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          <div
+                            style={{
+                              width: '18px',
+                              height: '18px',
+                              borderRadius: '5px',
+                              flexShrink: 0,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              background: isSelected ? 'linear-gradient(135deg, #6366f1, #8b5cf6)' : 'rgba(0, 0, 0, 0.4)',
+                              border: `1px solid ${isSelected ? '#a5b4fc' : 'rgba(255, 255, 255, 0.22)'}`,
+                              boxShadow: isSelected ? '0 0 6px rgba(99, 102, 241, 0.5)' : 'none',
+                              transition: 'all 0.15s ease'
+                            }}
+                          >
+                            {isSelected && (
+                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round">
+                                <polyline points="20 6 9 17 4 12" />
+                              </svg>
+                            )}
+                          </div>
+                          <span style={{ fontSize: '0.84rem', fontWeight: isSelected ? 600 : 400, color: isSelected ? '#f8fafc' : '#cbd5e1', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={c.title}>
                             {c.title}
                           </span>
                         </div>
@@ -2626,78 +2652,76 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                   />
                 </div>
               </div>
-
-              {/* Action Buttons */}
-              <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
-                <button
-                  type="button"
-                  onClick={handleGenerateModelTest}
-                  disabled={isGeneratingTest || countWords(customInstructions) > 200}
-                  className="primary"
-                  style={{
-                    flex: 2,
-                    padding: '0.75rem 1.2rem',
-                    borderRadius: '8px',
-                    border: 'none',
-                    fontWeight: 600,
-                    cursor: isGeneratingTest ? 'not-allowed' : 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '0.5rem'
-                  }}
-                >
-                  {isGeneratingTest ? (
-                    <>
-                      <span className="spinner" style={{ width: '16px', height: '16px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', borderRadius: '50%', display: 'inline-block', animation: 'spin 0.8s linear infinite' }}></span>
-                      <span>Generating with Gemini AI...</span>
-                    </>
-                  ) : (
-                    <>
-                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-                      <span>Generate Model Test</span>
-                    </>
-                  )}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleSaveManualModelTest}
-                  disabled={isGeneratingTest}
-                  style={{
-                    flex: 1,
-                    padding: '0.75rem 1rem',
-                    background: 'rgba(255,255,255,0.06)',
-                    color: '#fff',
-                    border: '1px solid var(--glass-border)',
-                    borderRadius: '8px',
-                    cursor: 'pointer',
-                    fontSize: '0.85rem'
-                  }}
-                  title="Save manual record with Title & Result 0"
-                >
-                  Save Entry Only
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setModelTestTarget(null)}
-                  disabled={isGeneratingTest}
-                  style={{
-                    padding: '0.75rem 1rem',
-                    background: 'transparent',
-                    color: 'var(--text-secondary)',
-                    border: 'none',
-                    borderRadius: '8px',
-                    cursor: 'pointer'
-                  }}
-                >
-                  Cancel
-                </button>
-              </div>
-
             </div>
 
+            {/* Action Buttons - Fixed at bottom */}
+            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px solid var(--glass-border)', flexWrap: 'wrap', flexShrink: 0 }}>
+              <button
+                type="button"
+                onClick={handleGenerateModelTest}
+                disabled={isGeneratingTest || countWords(customInstructions) > 200}
+                className="primary"
+                style={{
+                  flex: 2,
+                  padding: '0.75rem 1.2rem',
+                  borderRadius: '8px',
+                  border: 'none',
+                  fontWeight: 600,
+                  cursor: isGeneratingTest ? 'not-allowed' : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '0.5rem'
+                }}
+              >
+                {isGeneratingTest ? (
+                  <>
+                    <span className="spinner" style={{ width: '16px', height: '16px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', borderRadius: '50%', display: 'inline-block', animation: 'spin 0.8s linear infinite' }}></span>
+                    <span>Generating with Gemini AI...</span>
+                  </>
+                ) : (
+                  <>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+                    <span>Generate Model Test</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleSaveManualModelTest}
+                disabled={isGeneratingTest}
+                style={{
+                  flex: 1,
+                  padding: '0.75rem 1rem',
+                  background: 'rgba(255,255,255,0.06)',
+                  color: '#fff',
+                  border: '1px solid var(--glass-border)',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  fontSize: '0.85rem'
+                }}
+                title="Save manual record with Title & Result 0"
+              >
+                Save Entry Only
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setModelTestTarget(null)}
+                disabled={isGeneratingTest}
+                style={{
+                  padding: '0.75rem 1rem',
+                  background: 'transparent',
+                  color: 'var(--text-secondary)',
+                  border: 'none',
+                  borderRadius: '8px',
+                  cursor: 'pointer'
+                }}
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       )}

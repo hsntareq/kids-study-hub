@@ -1137,65 +1137,167 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
       {/* Model Test Generator Modal */}
       {showGeneratorModal && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 110, padding: '1rem' }}>
-          <div className="card" style={{ maxWidth: '640px', width: '100%', maxHeight: '90vh', overflowY: 'auto', textAlign: 'left', padding: '1.75rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.75rem' }}>
+          <div className="card" style={{ maxWidth: '680px', width: '100%', height: '80vh', maxHeight: '80vh', display: 'flex', flexDirection: 'column', textAlign: 'left', padding: '1.5rem', overflow: 'hidden' }}>
+            {/* Modal Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.75rem', flexShrink: 0 }}>
               <div>
                 <h2 style={{ margin: 0, fontSize: '1.35rem', color: '#fff' }}>Generate Model Test</h2>
-                <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{subject.title} • {exam.title}</span>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{subject?.title} • {exam?.title}</span>
               </div>
-              <button onClick={() => setShowGeneratorModal(false)} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', fontSize: '1.3rem', cursor: 'pointer' }}>✕</button>
+              <button
+                onClick={() => setShowGeneratorModal(false)}
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', fontSize: '1.3rem', cursor: 'pointer', padding: '0.2rem 0.5rem', borderRadius: '4px' }}
+              >
+                ✕
+              </button>
             </div>
 
-            {generateError && (
-              <div style={{ background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#f87171', padding: '0.75rem', borderRadius: '8px', marginBottom: '1rem', fontSize: '0.85rem' }}>
-                {generateError}
-              </div>
-            )}
+            {/* Scrollable Modal Content */}
+            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1.1rem', paddingRight: '0.35rem' }}>
+              {generateError && (
+                <div style={{ background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#f87171', padding: '0.75rem', borderRadius: '8px', fontSize: '0.85rem' }}>
+                  {generateError}
+                </div>
+              )}
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               {/* Title & Date */}
               <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '0.75rem' }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Test Title</label>
+                  <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.25rem', fontWeight: 500 }}>Test Title</label>
                   <input
                     type="text"
                     value={modelTestTitle}
                     onChange={(e) => setModelTestTitle(e.target.value)}
-                    style={{ width: '100%', padding: '0.5rem', background: 'rgba(0,0,0,0.35)', border: '1px solid var(--glass-border)', borderRadius: '6px', color: '#fff', fontSize: '0.85rem' }}
+                    style={{ width: '100%', padding: '0.55rem 0.65rem', background: 'rgba(0,0,0,0.35)', border: '1px solid var(--glass-border)', borderRadius: '8px', color: '#fff', fontSize: '0.85rem' }}
                   />
                 </div>
                 <div>
-                  <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Date</label>
+                  <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.25rem', fontWeight: 500 }}>Date</label>
                   <input
                     type="date"
                     value={modelTestDate}
                     onChange={(e) => setModelTestDate(e.target.value)}
-                    style={{ width: '100%', padding: '0.5rem', background: 'rgba(0,0,0,0.35)', border: '1px solid var(--glass-border)', borderRadius: '6px', color: '#fff', fontSize: '0.85rem' }}
+                    style={{ width: '100%', padding: '0.55rem 0.65rem', background: 'rgba(0,0,0,0.35)', border: '1px solid var(--glass-border)', borderRadius: '8px', color: '#fff', fontSize: '0.85rem' }}
                   />
                 </div>
               </div>
 
-              {/* Syllabus Chapters to Cover */}
+              {/* Syllabus Chapters to Cover with Modern Styled Checkboxes */}
               <div>
-                <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
-                  Chapters to Include ({selectedChaptersForTest.length} selected)
-                </label>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.45rem' }}>
+                  <label style={{ fontSize: '0.78rem', fontWeight: 600, color: '#e2e8f0', margin: 0, display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary, #6366f1)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+                      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+                    </svg>
+                    Chapters to Include
+                    <span style={{ fontSize: '0.7rem', padding: '0.1rem 0.45rem', borderRadius: '10px', background: 'rgba(99, 102, 241, 0.15)', border: '1px solid rgba(99, 102, 241, 0.3)', color: '#a5b4fc', fontWeight: 600 }}>
+                      {selectedChaptersForTest.length} of {chaptersList.length} selected
+                    </span>
+                  </label>
+                  {chaptersList.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (selectedChaptersForTest.length === chaptersList.length) {
+                          setSelectedChaptersForTest([]);
+                        } else {
+                          setSelectedChaptersForTest(chaptersList.map(c => c.id));
+                        }
+                      }}
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: 'var(--accent-primary, #818cf8)',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        padding: '0.1rem 0.3rem',
+                        textDecoration: 'underline',
+                        textUnderlineOffset: '2px'
+                      }}
+                    >
+                      {selectedChaptersForTest.length === chaptersList.length ? 'Deselect All' : 'Select All'}
+                    </button>
+                  )}
+                </div>
+
                 {chaptersList.length > 0 ? (
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '0.4rem', maxHeight: '140px', overflowY: 'auto', background: 'rgba(0,0,0,0.3)', padding: '0.5rem', borderRadius: '8px' }}>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+                      gap: '0.45rem',
+                      maxHeight: '170px',
+                      overflowY: 'auto',
+                      background: 'rgba(10, 15, 28, 0.65)',
+                      padding: '0.6rem',
+                      borderRadius: '10px',
+                      border: '1px solid rgba(255, 255, 255, 0.08)',
+                      boxShadow: 'inset 0 1px 3px rgba(0, 0, 0, 0.4)'
+                    }}
+                  >
                     {chaptersList.map(chap => {
                       const isSel = selectedChaptersForTest.includes(chap.id);
                       return (
-                        <label key={chap.id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem', color: '#cbd5e1', cursor: 'pointer', padding: '0.2rem' }}>
-                          <input
-                            type="checkbox"
-                            checked={isSel}
-                            onChange={(e) => {
-                              if (e.target.checked) setSelectedChaptersForTest(prev => [...prev, chap.id]);
-                              else setSelectedChaptersForTest(prev => prev.filter(id => id !== chap.id));
+                        <div
+                          key={chap.id}
+                          onClick={() => {
+                            if (isSel) setSelectedChaptersForTest(prev => prev.filter(id => id !== chap.id));
+                            else setSelectedChaptersForTest(prev => [...prev, chap.id]);
+                          }}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.6rem',
+                            padding: '0.5rem 0.65rem',
+                            borderRadius: '8px',
+                            cursor: 'pointer',
+                            userSelect: 'none',
+                            background: isSel
+                              ? 'linear-gradient(135deg, rgba(99, 102, 241, 0.2) 0%, rgba(139, 92, 246, 0.14) 100%)'
+                              : 'rgba(255, 255, 255, 0.025)',
+                            border: `1px solid ${isSel ? 'rgba(129, 140, 248, 0.5)' : 'rgba(255, 255, 255, 0.07)'}`,
+                            boxShadow: isSel ? '0 2px 8px rgba(99, 102, 241, 0.15)' : 'none',
+                            transition: 'all 0.15s ease'
+                          }}
+                        >
+                          {/* Modern Custom Checkbox Box */}
+                          <div
+                            style={{
+                              width: '18px',
+                              height: '18px',
+                              borderRadius: '5px',
+                              flexShrink: 0,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              background: isSel ? 'linear-gradient(135deg, #6366f1, #8b5cf6)' : 'rgba(0, 0, 0, 0.4)',
+                              border: `1px solid ${isSel ? '#a5b4fc' : 'rgba(255, 255, 255, 0.22)'}`,
+                              boxShadow: isSel ? '0 0 6px rgba(99, 102, 241, 0.5)' : 'none',
+                              transition: 'all 0.15s ease'
                             }}
-                          />
-                          <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{chap.title}</span>
-                        </label>
+                          >
+                            {isSel && (
+                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round">
+                                <polyline points="20 6 9 17 4 12" />
+                              </svg>
+                            )}
+                          </div>
+                          <span
+                            style={{
+                              fontSize: '0.82rem',
+                              fontWeight: isSel ? 600 : 400,
+                              color: isSel ? '#f8fafc' : '#cbd5e1',
+                              whiteSpace: 'nowrap',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis'
+                            }}
+                            title={chap.title}
+                          >
+                            {chap.title}
+                          </span>
+                        </div>
                       );
                     })}
                   </div>
@@ -1215,11 +1317,11 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
               {/* Difficulty & Guidelines */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '0.75rem' }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Difficulty</label>
+                  <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.25rem', fontWeight: 500 }}>Difficulty</label>
                   <select
                     value={testDifficulty}
                     onChange={(e) => setTestDifficulty(e.target.value)}
-                    style={{ width: '100%', padding: '0.5rem', background: '#1e1b4b', border: '1px solid var(--glass-border)', borderRadius: '6px', color: '#fff', fontSize: '0.85rem' }}
+                    style={{ width: '100%', padding: '0.55rem 0.65rem', background: '#1e1b4b', border: '1px solid var(--glass-border)', borderRadius: '8px', color: '#fff', fontSize: '0.85rem' }}
                   >
                     <option value="Easy">Easy (Foundation)</option>
                     <option value="Standard">Standard (Board level)</option>
@@ -1228,36 +1330,36 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
                 </div>
 
                 <div>
-                  <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Custom Instruction (Max 200 words)</label>
+                  <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.25rem', fontWeight: 500 }}>Custom Instruction (Max 200 words)</label>
                   <input
                     type="text"
                     value={customInstructions}
                     onChange={(e) => setCustomInstructions(e.target.value)}
                     placeholder="e.g. Focus on word problems and LCM/HCF concepts"
-                    style={{ width: '100%', padding: '0.5rem', background: 'rgba(0,0,0,0.35)', border: '1px solid var(--glass-border)', borderRadius: '6px', color: '#fff', fontSize: '0.85rem' }}
+                    style={{ width: '100%', padding: '0.55rem 0.65rem', background: 'rgba(0,0,0,0.35)', border: '1px solid var(--glass-border)', borderRadius: '8px', color: '#fff', fontSize: '0.85rem' }}
                   />
                 </div>
               </div>
+            </div>
 
-              {/* Actions */}
-              <div style={{ display: 'flex', gap: '0.65rem', marginTop: '0.5rem' }}>
-                <button
-                  type="button"
-                  onClick={handleGenerateModelTest}
-                  disabled={isGeneratingTest}
-                  className="primary"
-                  style={{ flex: 1, padding: '0.7rem', borderRadius: '8px', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem', cursor: isGeneratingTest ? 'not-allowed' : 'pointer' }}
-                >
-                  {isGeneratingTest ? 'Generating with Gemini AI...' : '✨ Generate Model Test'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowGeneratorModal(false)}
-                  style={{ padding: '0.7rem 1.2rem', background: 'rgba(255,255,255,0.06)', border: 'none', borderRadius: '8px', color: '#fff', cursor: 'pointer' }}
-                >
-                  Cancel
-                </button>
-              </div>
+            {/* Actions Footer - Fixed at bottom */}
+            <div style={{ display: 'flex', gap: '0.65rem', marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px solid var(--glass-border)', flexShrink: 0 }}>
+              <button
+                type="button"
+                onClick={handleGenerateModelTest}
+                disabled={isGeneratingTest}
+                className="primary"
+                style={{ flex: 1, padding: '0.75rem', borderRadius: '8px', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem', cursor: isGeneratingTest ? 'not-allowed' : 'pointer' }}
+              >
+                {isGeneratingTest ? 'Generating with Gemini AI...' : '✨ Generate Model Test'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowGeneratorModal(false)}
+                style={{ padding: '0.75rem 1.4rem', background: 'rgba(255,255,255,0.06)', border: '1px solid var(--glass-border)', borderRadius: '8px', color: '#fff', cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
             </div>
           </div>
         </div>
