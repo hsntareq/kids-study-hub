@@ -10,11 +10,10 @@ export async function generateGeminiContent(prompt) {
   
   // Prioritized list of active, supported Gemini models
   const candidateModels = [
-    'gemini-3.5-flash-lite',
-    'gemini-3-flash-preview',
+    'gemini-flash-latest',
     'gemini-3.8-flash',
-    'gemini-3.1-flash-lite',
-    'gemini-flash-latest'
+    'gemini-flash-lite-latest',
+    'gemini-3.5-flash-lite'
   ];
 
   let lastError = null;
@@ -47,7 +46,6 @@ export async function generateGeminiContent(prompt) {
         const cleanName = m.name ? m.name.replace(/^models\//, '') : '';
         if (!cleanName || candidateModels.includes(cleanName)) continue;
         
-        // Prioritize lightweight flash or text models
         if (cleanName.includes('flash') || cleanName.includes('lite') || cleanName.includes('pro')) {
           try {
             const fallbackRes = await ai.models.generateContent({
