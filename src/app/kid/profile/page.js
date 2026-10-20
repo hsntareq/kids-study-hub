@@ -88,6 +88,10 @@ function KidProfileContent() {
   const [examStartedAt, setExamStartedAt] = useState(null);
   const [examSubmittedAt, setExamSubmittedAt] = useState(null);
   const [timerSeconds, setTimerSeconds] = useState(0);
+  const [modelTestDuration, setModelTestDuration] = useState(60);
+  const [examDurationMinutes, setExamDurationMinutes] = useState(null);
+  const [editingDurationModal, setEditingDurationModal] = useState(null);
+  const [tempDurationValue, setTempDurationValue] = useState(60);
 
   // Question Navigator State (Scroller vs Collapsible by Question Type)
   const [navigatorViewMode, setNavigatorViewMode] = useState('collapsible'); // 'collapsible' or 'scroller'
@@ -707,7 +711,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
 {
   "title": "${modelTestTitle.trim() || `${subject.title} - ${exam.title} Model Test`}",
   "fullMarks": 100,
-  "timeAllowed": "2 Hours",
+  "timeAllowed": "${modelTestDuration || 60} Minutes",
   "questions": [
     {
       "id": 1,
@@ -742,6 +746,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
         title: modelTestTitle.trim() || `Model Test - ${modelTestDate}`,
         date: modelTestDate,
         result: modelTestResult.trim() || '0',
+        duration: Number(modelTestDuration) || 60,
         difficulty: testDifficulty,
         guidelines: testGuidelines,
         chapters: selectedChapterTitles,
@@ -808,6 +813,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
         title: modelTestTitle.trim() || `Model Test - ${modelTestDate}`,
         date: modelTestDate,
         result: modelTestResult.trim() || '0',
+        duration: Number(modelTestDuration) || 60,
         difficulty: testDifficulty,
         guidelines: testGuidelines,
         chapters: selectedChapterTitles,
@@ -861,6 +867,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
 
   const openTestViewer = (test) => {
     setViewingModelTest(test);
+    setExamDurationMinutes(test.duration ? Number(test.duration) : null);
     setTestViewMode('student');
     setCurrentSlideIndex(0);
     setQuestionDisplayMode('slide');
@@ -880,17 +887,50 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
     setExamSubmittedAt(test.submittedAt || null);
   };
 
+  const handleUpdateExamDuration = async (newMinutes) => {
+    const mins = Math.max(1, Math.min(360, Number(newMinutes) || 60));
+    setExamDurationMinutes(mins);
+    setViewingModelTest(prev => prev ? ({ ...prev, duration: mins }) : prev);
+    if (viewingModelTest && user && kid) {
+      try {
+        const path = `users/${user.uid}/kids/${kid.id}/subjects/${viewingModelTest.subjectId}/modelTests/${viewingModelTest.examId}/${viewingModelTest.testId || viewingModelTest.id}`;
+        await set(ref(database, `${path}/duration`), mins);
+      } catch (err) {
+        console.error('Error saving exam duration:', err);
+      }
+    }
+  };
+
+  const handleSaveSpecificTestDuration = async () => {
+    if (!editingDurationModal || !user || !kid) return;
+    const mins = Math.max(1, Math.min(360, Number(tempDurationValue) || 60));
+    try {
+      const path = `users/${user.uid}/kids/${kid.id}/subjects/${editingDurationModal.subjectId}/modelTests/${editingDurationModal.examId}/${editingDurationModal.testId}/duration`;
+      await set(ref(database, path), mins);
+      if (viewingModelTest && (viewingModelTest.id === editingDurationModal.testId || viewingModelTest.testId === editingDurationModal.testId)) {
+        setViewingModelTest(prev => ({ ...prev, duration: mins }));
+        setExamDurationMinutes(mins);
+      }
+      setEditingDurationModal(null);
+    } catch (err) {
+      console.error('Error saving test duration:', err);
+      alert('Failed to save duration: ' + (err.message || 'Unknown error'));
+    }
+  };
+
   const handleStartExam = async () => {
     if (!viewingModelTest || !user || !kid) return;
     const now = Date.now();
     setExamStartedAt(now);
     setIsExamStarted(true);
     try {
-      const path = `users/${user.uid}/kids/${kid.id}/subjects/${viewingModelTest.subjectId}/modelTests/${viewingModelTest.examId}/${viewingModelTest.testId}`;
+      const path = `users/${user.uid}/kids/${kid.id}/subjects/${viewingModelTest.subjectId}/modelTests/${viewingModelTest.examId}/${viewingModelTest.testId || viewingModelTest.id}`;
       await set(ref(database, `${path}/startedAt`), now);
+      await set(ref(database, `${path}/duration`), defaultDurationMinutes);
       setViewingModelTest(prev => ({
         ...prev,
-        startedAt: now
+        startedAt: now,
+        duration: defaultDurationMinutes
       }));
     } catch (err) {
       console.error('Error starting exam timer:', err);
@@ -1221,9 +1261,11 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
             ? viewingModelTest.result
             : `0/${totalMaxMarks}`));
 
-  const defaultDurationMinutes = viewingModelTest?.duration 
-    ? Number(viewingModelTest.duration) 
-    : (totalMaxMarks <= 20 ? 30 : totalMaxMarks <= 50 ? 60 : totalMaxMarks <= 100 ? 90 : 120);
+  const defaultDurationMinutes = (examDurationMinutes !== null && !isNaN(examDurationMinutes))
+    ? Number(examDurationMinutes)
+    : (viewingModelTest?.duration 
+        ? Number(viewingModelTest.duration) 
+        : (totalMaxMarks <= 20 ? 30 : totalMaxMarks <= 50 ? 60 : totalMaxMarks <= 100 ? 90 : 120));
   const totalDurationSeconds = defaultDurationMinutes * 60;
   const elapsedSeconds = isExamFinished && viewingModelTest?.timeSpentSeconds 
     ? Number(viewingModelTest.timeSpentSeconds) 
@@ -2562,11 +2604,44 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                                             {test.title || `Test - ${test.date || 'Practice'}`}
                                           </span>
                                           <span style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>
-                                            {test.date ? `📅 ${test.date}` : 'Practice'}
+                                            {test.date ? `📅 ${test.date}` : 'Practice'} • <strong style={{ color: '#38bdf8' }}>⏱️ {test.duration ? `${test.duration}m` : '60m'}</strong>
                                           </span>
                                         </div>
 
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexShrink: 0 }}>
+                                          {/* Quick Set Time Button */}
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setEditingDurationModal({
+                                                testId: test.id,
+                                                subjectId: subject.id,
+                                                examId: ex.id,
+                                                title: test.title || `Model Test - ${test.date || 'Practice'}`,
+                                                currentDuration: test.duration || 60
+                                              });
+                                              setTempDurationValue(test.duration || 60);
+                                            }}
+                                            style={{
+                                              background: 'rgba(56, 189, 248, 0.12)',
+                                              border: '1px solid rgba(56, 189, 248, 0.35)',
+                                              borderRadius: '6px',
+                                              color: '#38bdf8',
+                                              padding: '0.22rem 0.45rem',
+                                              fontSize: '0.7rem',
+                                              cursor: 'pointer',
+                                              fontWeight: 600,
+                                              display: 'flex',
+                                              alignItems: 'center',
+                                              gap: '0.2rem',
+                                              transition: 'all 0.15s ease'
+                                            }}
+                                            title="Set or customize time limit for this exam"
+                                          >
+                                            <span>⏱️</span>
+                                            <span>{test.duration ? `${test.duration}m` : 'Time'}</span>
+                                            <span style={{ fontSize: '0.65rem', opacity: 0.8 }}>✏️</span>
+                                          </button>
                                           <span style={{
                                             fontSize: '0.7rem',
                                             fontWeight: 700,
@@ -2942,6 +3017,18 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                   />
                 </div>
                 <div>
+                  <label style={{ display: 'block', fontSize: '0.78rem', color: '#38bdf8', marginBottom: '0.2rem', fontWeight: 600 }}>⏱️ Exam Time (Mins)</label>
+                  <input
+                    type="number"
+                    min={5}
+                    max={360}
+                    value={modelTestDuration}
+                    onChange={e => setModelTestDuration(Math.max(1, Number(e.target.value) || 0))}
+                    placeholder="60"
+                    style={{ padding: '0.45rem', fontSize: '0.85rem', color: '#38bdf8', fontWeight: 700, border: '1px solid rgba(56, 189, 248, 0.4)' }}
+                  />
+                </div>
+                <div>
                   <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.2rem' }}>Initial Result</label>
                   <input
                     type="text"
@@ -2951,6 +3038,30 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                     style={{ padding: '0.45rem', fontSize: '0.85rem' }}
                   />
                 </div>
+              </div>
+
+              {/* Quick Preset Pills for Duration */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', marginTop: '-0.35rem' }}>
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>Quick Time:</span>
+                {[15, 30, 45, 60, 90, 120].map(mins => (
+                  <button
+                    key={mins}
+                    type="button"
+                    onClick={() => setModelTestDuration(mins)}
+                    style={{
+                      padding: '0.2rem 0.5rem',
+                      fontSize: '0.72rem',
+                      borderRadius: '6px',
+                      background: Number(modelTestDuration) === mins ? '#38bdf8' : 'rgba(255,255,255,0.05)',
+                      color: Number(modelTestDuration) === mins ? '#0f172a' : '#cbd5e1',
+                      border: `1px solid ${Number(modelTestDuration) === mins ? '#38bdf8' : 'rgba(255,255,255,0.1)'}`,
+                      cursor: 'pointer',
+                      fontWeight: 600
+                    }}
+                  >
+                    {mins}m
+                  </button>
+                ))}
               </div>
             </div>
 
@@ -3120,6 +3231,54 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                     {isExamFinished ? 'Time Taken' : (isExamStarted ? 'Time Left' : 'Duration')}
                   </div>
                 </div>
+
+                {/* Adjust or extend timer */}
+                {!isExamFinished && (
+                  <div style={{ display: 'flex', gap: '0.25rem', marginLeft: '0.25rem' }}>
+                    {isExamStarted ? (
+                      <button
+                        type="button"
+                        onClick={() => handleUpdateExamDuration(defaultDurationMinutes + 5)}
+                        title="Add +5 minutes extra time"
+                        style={{
+                          padding: '0.2rem 0.45rem',
+                          fontSize: '0.7rem',
+                          fontWeight: 700,
+                          borderRadius: '4px',
+                          background: 'rgba(56, 189, 248, 0.15)',
+                          border: '1px solid rgba(56, 189, 248, 0.35)',
+                          color: '#38bdf8',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        +5m
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const val = window.prompt("Set exam duration in minutes:", String(defaultDurationMinutes));
+                          if (val !== null) {
+                            const parsed = parseInt(val, 10);
+                            if (!isNaN(parsed) && parsed > 0) handleUpdateExamDuration(parsed);
+                          }
+                        }}
+                        title="Click to change exam time limit"
+                        style={{
+                          padding: '0.2rem 0.45rem',
+                          fontSize: '0.7rem',
+                          borderRadius: '4px',
+                          background: 'rgba(255, 255, 255, 0.08)',
+                          border: '1px solid rgba(255, 255, 255, 0.15)',
+                          color: '#cbd5e1',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        ⚙️ Set
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Mode Switcher */}
@@ -3274,6 +3433,78 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                   <div style={{ background: 'rgba(255,255,255,0.04)', padding: '0.75rem', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.08)' }}>
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Time Limit</div>
                     <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#38bdf8' }}>{defaultDurationMinutes} Min</div>
+                  </div>
+                </div>
+
+                {/* Interactive Exam Duration / Time Limit Selector */}
+                <div style={{
+                  background: 'rgba(56, 189, 248, 0.08)',
+                  border: '1px solid rgba(56, 189, 248, 0.3)',
+                  borderRadius: '12px',
+                  padding: '1.2rem',
+                  marginBottom: '1.6rem',
+                  textAlign: 'left'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <label style={{ fontSize: '0.9rem', fontWeight: 700, color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      <span>⏱️</span>
+                      <span>Set Exam Duration / Time Limit:</span>
+                    </label>
+                    <span style={{ fontSize: '0.8rem', color: '#cbd5e1' }}>
+                      Selected: <strong style={{ color: '#fff', fontSize: '0.95rem' }}>{defaultDurationMinutes} Minutes</strong>
+                    </span>
+                  </div>
+
+                  {/* Preset Pills */}
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem', marginBottom: '0.75rem' }}>
+                    {[15, 20, 30, 45, 60, 90, 120, 180].map(mins => (
+                      <button
+                        key={mins}
+                        type="button"
+                        onClick={() => handleUpdateExamDuration(mins)}
+                        style={{
+                          padding: '0.35rem 0.75rem',
+                          borderRadius: '8px',
+                          fontSize: '0.8rem',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          background: defaultDurationMinutes === mins ? '#38bdf8' : 'rgba(255,255,255,0.06)',
+                          color: defaultDurationMinutes === mins ? '#0f172a' : '#cbd5e1',
+                          border: `1px solid ${defaultDurationMinutes === mins ? '#38bdf8' : 'rgba(255,255,255,0.12)'}`,
+                          boxShadow: defaultDurationMinutes === mins ? '0 0 10px rgba(56, 189, 248, 0.4)' : 'none',
+                          transition: 'all 0.15s ease'
+                        }}
+                      >
+                        {mins < 60 ? `${mins}m` : `${mins / 60}h${mins % 60 ? ` ${mins % 60}m` : ''}`}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Custom minute input */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Custom time:</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={360}
+                      value={defaultDurationMinutes}
+                      onChange={(e) => handleUpdateExamDuration(e.target.value)}
+                      style={{
+                        width: '80px',
+                        padding: '0.35rem 0.65rem',
+                        background: 'rgba(0,0,0,0.5)',
+                        border: '1px solid rgba(56, 189, 248, 0.45)',
+                        borderRadius: '6px',
+                        color: '#38bdf8',
+                        fontSize: '0.9rem',
+                        fontWeight: 700,
+                        textAlign: 'center'
+                      }}
+                    />
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>minutes</span>
+                    <span style={{ fontSize: '0.74rem', color: '#94a3b8', marginLeft: 'auto' }}>
+                      (You can also adjust during exam or add +5m anytime)
+                    </span>
                   </div>
                 </div>
 
@@ -5107,6 +5338,154 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
           >
             ✕
           </button>
+        </div>
+      )}
+
+      {/* Modal to Set/Edit Exam Duration */}
+      {editingDurationModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.75)',
+          backdropFilter: 'blur(6px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+          padding: '1rem'
+        }}>
+          <div style={{
+            background: 'linear-gradient(145deg, #1e1b4b 0%, #0f172a 100%)',
+            border: '1px solid rgba(56, 189, 248, 0.35)',
+            borderRadius: '16px',
+            padding: '1.75rem',
+            width: '100%',
+            maxWidth: '480px',
+            boxShadow: '0 20px 50px rgba(0,0,0,0.6)',
+            textAlign: 'left'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
+              <div>
+                <h3 style={{ margin: '0 0 0.35rem 0', fontSize: '1.25rem', color: '#fff', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span>⏱️</span>
+                  <span>Set Exam Time Limit</span>
+                </h3>
+                <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                  {editingDurationModal.title}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingDurationModal(null)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-secondary)',
+                  fontSize: '1.5rem',
+                  lineHeight: 1,
+                  cursor: 'pointer',
+                  padding: '0.2rem'
+                }}
+              >
+                &times;
+              </button>
+            </div>
+
+            <div style={{ marginBottom: '1.25rem' }}>
+              <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#e2e8f0', marginBottom: '0.5rem' }}>
+                Quick Presets:
+              </label>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
+                {[15, 20, 30, 45, 60, 90, 120, 180].map(mins => (
+                  <button
+                    key={mins}
+                    type="button"
+                    onClick={() => setTempDurationValue(mins)}
+                    style={{
+                      padding: '0.4rem 0.8rem',
+                      borderRadius: '8px',
+                      fontSize: '0.82rem',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      background: Number(tempDurationValue) === mins ? '#38bdf8' : 'rgba(255,255,255,0.06)',
+                      color: Number(tempDurationValue) === mins ? '#0f172a' : '#cbd5e1',
+                      border: `1px solid ${Number(tempDurationValue) === mins ? '#38bdf8' : 'rgba(255,255,255,0.12)'}`,
+                      boxShadow: Number(tempDurationValue) === mins ? '0 0 10px rgba(56, 189, 248, 0.4)' : 'none',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    {mins < 60 ? `${mins}m` : `${mins / 60}h${mins % 60 ? ` ${mins % 60}m` : ''}`}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ marginBottom: '1.5rem' }}>
+              <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#e2e8f0', marginBottom: '0.45rem' }}>
+                Custom Duration (Minutes):
+              </label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                <input
+                  type="number"
+                  min={1}
+                  max={360}
+                  value={tempDurationValue}
+                  onChange={(e) => setTempDurationValue(Math.max(1, Number(e.target.value) || 0))}
+                  style={{
+                    width: '120px',
+                    padding: '0.55rem 0.8rem',
+                    background: 'rgba(0,0,0,0.4)',
+                    border: '1px solid rgba(56, 189, 248, 0.45)',
+                    borderRadius: '8px',
+                    color: '#38bdf8',
+                    fontSize: '1.1rem',
+                    fontWeight: 700,
+                    textAlign: 'center'
+                  }}
+                />
+                <span style={{ fontSize: '0.9rem', color: '#cbd5e1', fontWeight: 500 }}>minutes</span>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => setEditingDurationModal(null)}
+                style={{
+                  padding: '0.6rem 1.2rem',
+                  borderRadius: '8px',
+                  border: '1px solid rgba(255,255,255,0.15)',
+                  background: 'rgba(255,255,255,0.05)',
+                  color: '#cbd5e1',
+                  fontSize: '0.88rem',
+                  fontWeight: 600,
+                  cursor: 'pointer'
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveSpecificTestDuration}
+                style={{
+                  padding: '0.6rem 1.4rem',
+                  borderRadius: '8px',
+                  border: 'none',
+                  background: 'var(--accent-gradient, linear-gradient(135deg, #6366f1 0%, #a855f7 100%))',
+                  color: '#fff',
+                  fontSize: '0.88rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  boxShadow: '0 4px 15px rgba(99, 102, 241, 0.4)'
+                }}
+              >
+                Save Time Limit
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </main>
