@@ -53,6 +53,14 @@ function SubjectPageContent() {
   const [newTopicName, setNewTopicName] = useState('');
   const [newTopicMarks, setNewTopicMarks] = useState('');
 
+  // Centralized Exam-Level Mark Allocation states
+  const [showCentralExamMarksModal, setShowCentralExamMarksModal] = useState(false);
+  const [centralConfigExamId, setCentralConfigExamId] = useState(null);
+  const [targetExamMarks, setTargetExamMarks] = useState(100);
+  const [examChapterDrafts, setExamChapterDrafts] = useState([]);
+  const [isSavingExamMarks, setIsSavingExamMarks] = useState(false);
+  const [examMarksToast, setExamMarksToast] = useState('');
+
   // Auth and data listener
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
@@ -449,13 +457,173 @@ function SubjectPageContent() {
     if (!user || !kid || !subject || !editingChapterForMarks) return;
     const { examId, id: chapId } = editingChapterForMarks;
     const marksNum = Number(tempChapterMarks) || 0;
-    const chapPath = `users/${user.uid}/kids/${kid.id}/subjects/${subject.id}/chapters/${examId}/${chapId}`;
+    const dataOwnerUid = searchParams.get('parentId') || user.uid;
+    const chapPath = `users/${dataOwnerUid}/kids/${kid.id}/subjects/${subject.id}/chapters/${examId}/${chapId}`;
 
     await set(ref(database, `${chapPath}/marks`), marksNum);
     await set(ref(database, `${chapPath}/topics`), tempChapterTopics);
 
     setShowMarksModal(false);
     setEditingChapterForMarks(null);
+  };
+
+  // Helper to open centralized exam-level marks configuration
+  const handleOpenCentralizedExamMarks = (targetExamId = null) => {
+    let examIdToUse = targetExamId;
+    if (!examIdToUse) {
+      if (selectedExamForDistribution !== 'all') {
+        examIdToUse = selectedExamForDistribution;
+      } else if (exams.length > 0) {
+        examIdToUse = exams[0].id;
+      }
+    }
+    if (!examIdToUse) return;
+
+    setCentralConfigExamId(examIdToUse);
+
+    const chaptersForThisExam = allSubjectChapters.filter(c => c.examId === examIdToUse);
+    const count = chaptersForThisExam.length;
+    const defaultPerChap = count > 0 ? Math.max(5, Math.round(100 / count)) : 25;
+
+    let sumMarks = 0;
+    const drafts = chaptersForThisExam.map((c, idx) => {
+      const marks = (c.marks !== undefined && !isNaN(Number(c.marks)) && Number(c.marks) > 0)
+        ? Number(c.marks)
+        : defaultPerChap;
+      sumMarks += marks;
+      return {
+        id: c.id,
+        examId: c.examId,
+        title: c.title,
+        marks,
+        color: WEIGHTAGE_COLORS[idx % WEIGHTAGE_COLORS.length],
+        topics: c.topics || [],
+        isCompleted: c.isCompleted,
+        status: c.status,
+        pdfPage: c.pdfPage || null
+      };
+    });
+
+    setTargetExamMarks(sumMarks > 0 ? sumMarks : 100);
+    setExamChapterDrafts(drafts);
+    setShowCentralExamMarksModal(true);
+  };
+
+  // Switch active exam inside centralized modal
+  const handleSwitchCentralExam = (newExamId) => {
+    setCentralConfigExamId(newExamId);
+    const chaptersForThisExam = allSubjectChapters.filter(c => c.examId === newExamId);
+    const count = chaptersForThisExam.length;
+    const defaultPerChap = count > 0 ? Math.max(5, Math.round(100 / count)) : 25;
+
+    let sumMarks = 0;
+    const drafts = chaptersForThisExam.map((c, idx) => {
+      const marks = (c.marks !== undefined && !isNaN(Number(c.marks)) && Number(c.marks) > 0)
+        ? Number(c.marks)
+        : defaultPerChap;
+      sumMarks += marks;
+      return {
+        id: c.id,
+        examId: c.examId,
+        title: c.title,
+        marks,
+        color: WEIGHTAGE_COLORS[idx % WEIGHTAGE_COLORS.length],
+        topics: c.topics || [],
+        isCompleted: c.isCompleted,
+        status: c.status,
+        pdfPage: c.pdfPage || null
+      };
+    });
+
+    setTargetExamMarks(sumMarks > 0 ? sumMarks : 100);
+    setExamChapterDrafts(drafts);
+  };
+
+  // Update single chapter marks in drafts
+  const handleUpdateChapterDraftMarks = (chapId, val) => {
+    const num = Math.max(0, parseInt(val, 10) || 0);
+    setExamChapterDrafts(prev => prev.map(c => c.id === chapId ? { ...c, marks: num } : c));
+  };
+
+  // Adjust single chapter marks by delta (+5 or -5)
+  const handleStepChapterDraftMarks = (chapId, delta) => {
+    setExamChapterDrafts(prev => prev.map(c => {
+      if (c.id === chapId) {
+        const nextMarks = Math.max(0, (c.marks || 0) + delta);
+        return { ...c, marks: nextMarks };
+      }
+      return c;
+    }));
+  };
+
+  // Auto-distribute target exam marks evenly across all chapters in drafts
+  const handleDistributeExamMarksEvenly = (customTotal = null) => {
+    const total = customTotal !== null ? customTotal : (Number(targetExamMarks) || 100);
+    if (examChapterDrafts.length === 0) return;
+    const count = examChapterDrafts.length;
+    const perChap = Math.floor(total / count);
+    const remainder = total - (perChap * count);
+
+    setExamChapterDrafts(prev => prev.map((c, idx) => ({
+      ...c,
+      marks: idx === 0 ? perChap + remainder : perChap
+    })));
+  };
+
+  // Auto-balance remainder to reach target total marks exactly
+  const handleAutoBalanceRemainder = () => {
+    const total = Number(targetExamMarks) || 100;
+    const currentSum = examChapterDrafts.reduce((acc, c) => acc + (Number(c.marks) || 0), 0);
+    const diff = total - currentSum;
+    if (diff === 0 || examChapterDrafts.length === 0) return;
+
+    setExamChapterDrafts(prev => {
+      const first = prev[0];
+      const newMarks = Math.max(0, (Number(first.marks) || 0) + diff);
+      return prev.map((c, idx) => idx === 0 ? { ...c, marks: newMarks } : c);
+    });
+  };
+
+  // Save centralized exam-level marks to Firebase
+  const handleSaveCentralExamMarks = async () => {
+    if (!user || !kid || !subject || !centralConfigExamId) return;
+    setIsSavingExamMarks(true);
+    try {
+      const dataOwnerUid = searchParams.get('parentId') || user.uid;
+      const updates = [];
+
+      examChapterDrafts.forEach(chap => {
+        const chapPath = `users/${dataOwnerUid}/kids/${kid.id}/subjects/${subject.id}/chapters/${centralConfigExamId}/${chap.id}`;
+        updates.push(set(ref(database, `${chapPath}/marks`), chap.marks));
+
+        // If chapter already had topics, rebalance topics to match new chapter marks
+        if (chap.topics && chap.topics.length > 0) {
+          const topicCount = chap.topics.length;
+          const perTopic = Math.floor(chap.marks / topicCount);
+          const remainder = chap.marks - (perTopic * topicCount);
+          const balancedTopics = chap.topics.map((t, tIdx) => ({
+            ...t,
+            marks: tIdx === 0 ? perTopic + remainder : perTopic
+          }));
+          updates.push(set(ref(database, `${chapPath}/topics`), balancedTopics));
+        }
+      });
+
+      // Save configured total marks under examSettings
+      const examSettingsPath = `users/${dataOwnerUid}/kids/${kid.id}/subjects/${subject.id}/examSettings/${centralConfigExamId}/totalMarks`;
+      updates.push(set(ref(database, examSettingsPath), Number(targetExamMarks) || 100));
+
+      await Promise.all(updates);
+
+      setShowCentralExamMarksModal(false);
+      const exTitle = exams.find(e => e.id === centralConfigExamId)?.title || 'Exam';
+      setExamMarksToast(`✓ Exam-level mark distribution saved successfully for ${exTitle}!`);
+      setTimeout(() => setExamMarksToast(''), 4500);
+    } catch (err) {
+      console.error('Error saving exam marks:', err);
+    } finally {
+      setIsSavingExamMarks(false);
+    }
   };
 
   if (loading) {
@@ -1134,7 +1302,7 @@ function SubjectPageContent() {
         }} />
 
         {/* Section Header Row */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1.25rem', marginBottom: '1.5rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1.25rem', marginBottom: '1.25rem' }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.3rem' }}>
               <span style={{ fontSize: '1.35rem' }}>📊</span>
@@ -1154,77 +1322,155 @@ function SubjectPageContent() {
               </span>
             </div>
             <p style={{ margin: 0, fontSize: '0.86rem', color: 'var(--text-secondary)' }}>
-              Marks allocation and topic weightage breakdown across all active syllabus chapters for students and parents.
+              Centralized marks allocation and topic weightage breakdown across examination tracks for students and parents.
             </p>
           </div>
 
-          {/* Exam Track Filter Tabs */}
-          {exams.length > 0 && (
-            <div style={{
-              display: 'flex',
-              background: 'rgba(0, 0, 0, 0.35)',
-              padding: '0.25rem',
-              borderRadius: '12px',
-              border: '1px solid rgba(255, 255, 255, 0.08)',
-              gap: '0.25rem',
-              flexWrap: 'wrap'
-            }}>
-              <button
-                type="button"
-                onClick={() => setSelectedExamForDistribution('all')}
-                style={{
-                  padding: '0.38rem 0.85rem',
-                  borderRadius: '8px',
-                  border: 'none',
-                  background: selectedExamForDistribution === 'all' ? 'var(--accent-gradient, linear-gradient(135deg, #6366f1, #8b5cf6))' : 'transparent',
-                  color: selectedExamForDistribution === 'all' ? '#fff' : 'var(--text-secondary)',
-                  fontSize: '0.78rem',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  transition: 'all 0.15s'
-                }}
-              >
-                All Examination Tracks ({allSubjectChapters.length})
-              </button>
+          {/* Action CTAs & Exam Filter Tabs */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+            {/* Primary Centralized Mark Allocation CTA */}
+            <button
+              type="button"
+              onClick={() => handleOpenCentralizedExamMarks()}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.55rem',
+                padding: '0.55rem 1.15rem',
+                borderRadius: '12px',
+                background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.28) 0%, rgba(168, 85, 247, 0.28) 100%)',
+                border: '1px solid rgba(129, 140, 248, 0.45)',
+                color: '#ffffff',
+                fontSize: '0.82rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                boxShadow: '0 4px 16px rgba(99, 102, 241, 0.25)',
+                transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.transform = 'translateY(-1.5px)';
+                e.currentTarget.style.boxShadow = '0 8px 24px rgba(99, 102, 241, 0.45)';
+                e.currentTarget.style.background = 'linear-gradient(135deg, rgba(99, 102, 241, 0.42) 0%, rgba(168, 85, 247, 0.42) 100%)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.transform = 'translateY(0)';
+                e.currentTarget.style.boxShadow = '0 4px 16px rgba(99, 102, 241, 0.25)';
+                e.currentTarget.style.background = 'linear-gradient(135deg, rgba(99, 102, 241, 0.28) 0%, rgba(168, 85, 247, 0.28) 100%)';
+              }}
+              title="Centralize mark configuration: set marks for all chapters under this exam track"
+            >
+              <span style={{ fontSize: '0.95rem' }}>⚖️</span>
+              <span>Centralized Mark Allocation</span>
+              <span style={{
+                fontSize: '0.68rem',
+                padding: '0.12rem 0.45rem',
+                borderRadius: '9999px',
+                background: 'rgba(255, 255, 255, 0.18)',
+                color: '#fff',
+                fontWeight: 700
+              }}>
+                Exam-Level
+              </span>
+            </button>
 
-              {exams.map(ex => {
-                const count = allSubjectChapters.filter(c => c.examId === ex.id).length;
-                const isSelected = selectedExamForDistribution === ex.id;
-                return (
-                  <button
-                    key={ex.id}
-                    type="button"
-                    onClick={() => setSelectedExamForDistribution(ex.id)}
-                    style={{
-                      padding: '0.38rem 0.85rem',
-                      borderRadius: '8px',
-                      border: 'none',
-                      background: isSelected ? 'var(--accent-gradient, linear-gradient(135deg, #6366f1, #8b5cf6))' : 'transparent',
-                      color: isSelected ? '#fff' : 'var(--text-secondary)',
-                      fontSize: '0.78rem',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      transition: 'all 0.15s',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '0.35rem'
-                    }}
-                  >
-                    <span>{ex.title}</span>
-                    <span style={{
-                      fontSize: '0.66rem',
-                      background: isSelected ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.08)',
-                      padding: '0.05rem 0.35rem',
-                      borderRadius: '5px'
-                    }}>
-                      {count}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
+            {/* Exam Track Filter Tabs */}
+            {exams.length > 0 && (
+              <div style={{
+                display: 'flex',
+                background: 'rgba(0, 0, 0, 0.35)',
+                padding: '0.25rem',
+                borderRadius: '12px',
+                border: '1px solid rgba(255, 255, 255, 0.08)',
+                gap: '0.25rem',
+                flexWrap: 'wrap'
+              }}>
+                <button
+                  type="button"
+                  onClick={() => setSelectedExamForDistribution('all')}
+                  style={{
+                    padding: '0.38rem 0.85rem',
+                    borderRadius: '8px',
+                    border: 'none',
+                    background: selectedExamForDistribution === 'all' ? 'var(--accent-gradient, linear-gradient(135deg, #6366f1, #8b5cf6))' : 'transparent',
+                    color: selectedExamForDistribution === 'all' ? '#fff' : 'var(--text-secondary)',
+                    fontSize: '0.78rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    transition: 'all 0.15s'
+                  }}
+                >
+                  All Tracks ({allSubjectChapters.length})
+                </button>
+
+                {exams.map(ex => {
+                  const count = allSubjectChapters.filter(c => c.examId === ex.id).length;
+                  const isSelected = selectedExamForDistribution === ex.id;
+                  return (
+                    <button
+                      key={ex.id}
+                      type="button"
+                      onClick={() => setSelectedExamForDistribution(ex.id)}
+                      style={{
+                        padding: '0.38rem 0.85rem',
+                        borderRadius: '8px',
+                        border: 'none',
+                        background: isSelected ? 'var(--accent-gradient, linear-gradient(135deg, #6366f1, #8b5cf6))' : 'transparent',
+                        color: isSelected ? '#fff' : 'var(--text-secondary)',
+                        fontSize: '0.78rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        transition: 'all 0.15s',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.35rem'
+                      }}
+                    >
+                      <span>{ex.title}</span>
+                      <span style={{
+                        fontSize: '0.66rem',
+                        background: isSelected ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.08)',
+                        padding: '0.05rem 0.35rem',
+                        borderRadius: '5px'
+                      }}>
+                        {count}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
+
+        {/* Success Toast Banner */}
+        {examMarksToast && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '0.75rem 1.15rem',
+            borderRadius: '12px',
+            background: 'rgba(16, 185, 129, 0.15)',
+            border: '1px solid rgba(52, 211, 153, 0.4)',
+            color: '#34d399',
+            fontSize: '0.86rem',
+            fontWeight: 600,
+            marginBottom: '1.25rem',
+            boxShadow: '0 4px 14px rgba(16, 185, 129, 0.2)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span style={{ fontSize: '1.1rem' }}>✓</span>
+              <span>{examMarksToast}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setExamMarksToast('')}
+              style={{ background: 'transparent', border: 'none', color: '#34d399', cursor: 'pointer', fontSize: '1rem', padding: '0 0.25rem' }}
+            >
+              ✕
+            </button>
+          </div>
+        )}
 
         {/* VISUAL WEIGHTAGE BAR CARD */}
         <div style={{
@@ -1481,14 +1727,44 @@ function SubjectPageContent() {
 
         {/* DETAILED CHAPTER & TOPIC ALLOCATION CARDS */}
         <div style={{ marginBottom: '0.5rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-            <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: '#fff', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <span>📑</span>
-              <span>Chapter & Topic Marks Breakdown</span>
-            </h3>
-            <span style={{ fontSize: '0.76rem', color: 'var(--text-secondary)' }}>
-              Click &quot;Configure Marks &amp; Topics&quot; on any chapter to customize allocations
-            </span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.15rem', flexWrap: 'wrap', gap: '0.65rem' }}>
+            <div>
+              <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: '#fff', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span>📑</span>
+                <span>Chapter & Topic Marks Breakdown</span>
+              </h3>
+              <span style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+                Chapter allocations are centralized at the exam level for optimal curriculum balance.
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => handleOpenCentralizedExamMarks()}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.45rem',
+                padding: '0.45rem 0.95rem',
+                borderRadius: '10px',
+                background: 'rgba(99, 102, 241, 0.18)',
+                border: '1px solid rgba(129, 140, 248, 0.35)',
+                color: '#c7d2fe',
+                fontSize: '0.78rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                transition: 'all 0.15s'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = 'rgba(99, 102, 241, 0.28)';
+                e.currentTarget.style.color = '#fff';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'rgba(99, 102, 241, 0.18)';
+                e.currentTarget.style.color = '#c7d2fe';
+              }}
+            >
+              <span>⚙️ Configure Exam Mark Distribution</span>
+            </button>
           </div>
 
           {distributionData.chapters.length === 0 ? (
@@ -1679,35 +1955,68 @@ function SubjectPageContent() {
                     </div>
 
                     {/* Card Actions Footer */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', borderTop: '1px solid rgba(255, 255, 255, 0.06)', paddingTop: '0.75rem', marginTop: 'auto' }}>
-                      <button
-                        type="button"
-                        onClick={() => handleOpenMarksModal(chap)}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '0.35rem',
-                          padding: '0.35rem 0.75rem',
-                          borderRadius: '8px',
-                          background: 'rgba(255, 255, 255, 0.05)',
-                          border: '1px solid rgba(255, 255, 255, 0.1)',
-                          color: '#e2e8f0',
-                          fontSize: '0.74rem',
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                          transition: 'all 0.15s'
-                        }}
-                        onMouseOver={(e) => {
-                          e.currentTarget.style.background = 'rgba(255, 255, 255, 0.12)';
-                          e.currentTarget.style.color = '#fff';
-                        }}
-                        onMouseOut={(e) => {
-                          e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
-                          e.currentTarget.style.color = '#e2e8f0';
-                        }}
-                      >
-                        <span>✏️ Configure Marks &amp; Topics</span>
-                      </button>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', borderTop: '1px solid rgba(255, 255, 255, 0.06)', paddingTop: '0.75rem', marginTop: 'auto', flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenCentralizedExamMarks(chap.examId)}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.35rem',
+                            padding: '0.35rem 0.75rem',
+                            borderRadius: '8px',
+                            background: 'rgba(99, 102, 241, 0.18)',
+                            border: '1px solid rgba(129, 140, 248, 0.35)',
+                            color: '#c7d2fe',
+                            fontSize: '0.74rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            transition: 'all 0.15s'
+                          }}
+                          onMouseOver={(e) => {
+                            e.currentTarget.style.background = 'rgba(99, 102, 241, 0.3)';
+                            e.currentTarget.style.color = '#fff';
+                          }}
+                          onMouseOut={(e) => {
+                            e.currentTarget.style.background = 'rgba(99, 102, 241, 0.18)';
+                            e.currentTarget.style.color = '#c7d2fe';
+                          }}
+                          title="Open Centralized Exam Mark Allocation for this exam"
+                        >
+                          <span>⚖️ Exam Mark Allocation</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleOpenMarksModal(chap)}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.3rem',
+                            padding: '0.35rem 0.65rem',
+                            borderRadius: '8px',
+                            background: 'rgba(255, 255, 255, 0.05)',
+                            border: '1px solid rgba(255, 255, 255, 0.1)',
+                            color: 'var(--text-secondary)',
+                            fontSize: '0.74rem',
+                            fontWeight: 500,
+                            cursor: 'pointer',
+                            transition: 'all 0.15s'
+                          }}
+                          onMouseOver={(e) => {
+                            e.currentTarget.style.background = 'rgba(255, 255, 255, 0.12)';
+                            e.currentTarget.style.color = '#fff';
+                          }}
+                          onMouseOut={(e) => {
+                            e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
+                            e.currentTarget.style.color = 'var(--text-secondary)';
+                          }}
+                          title="Fine-tune individual topics"
+                        >
+                          <span>📑 Topics ({chap.topics ? chap.topics.length : 0})</span>
+                        </button>
+                      </div>
 
                       <Link
                         href={chapterHref}
@@ -3350,6 +3659,665 @@ function SubjectPageContent() {
               <button type="submit" className="primary" style={{ padding: '0.55rem 1.25rem', borderRadius: '8px', cursor: 'pointer' }}>Save Chapter</button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* 9.5. MODAL: Centralized Exam-Level Mark Allocation */}
+      {showCentralExamMarksModal && centralConfigExamId && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(5, 7, 15, 0.82)',
+          backdropFilter: 'blur(12px)',
+          WebkitBackdropFilter: 'blur(12px)',
+          zIndex: 9999,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '1.25rem'
+        }}>
+          <div style={{
+            background: 'linear-gradient(145deg, rgba(23, 28, 48, 0.98), rgba(15, 18, 34, 0.99))',
+            border: '1px solid rgba(129, 140, 248, 0.35)',
+            borderRadius: '24px',
+            width: '100%',
+            maxWidth: '880px',
+            maxHeight: '90vh',
+            display: 'flex',
+            flexDirection: 'column',
+            boxShadow: '0 24px 60px -12px rgba(0, 0, 0, 0.75), 0 0 35px rgba(99, 102, 241, 0.25)',
+            position: 'relative',
+            overflow: 'hidden'
+          }}>
+            {/* Top decorative ambient glow */}
+            <div style={{
+              position: 'absolute',
+              top: '-80px',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              width: '380px',
+              height: '180px',
+              background: 'radial-gradient(circle, rgba(99, 102, 241, 0.3) 0%, transparent 70%)',
+              pointerEvents: 'none'
+            }} />
+
+            {/* Modal Header */}
+            <div style={{
+              padding: '1.5rem 1.75rem 1rem 1.75rem',
+              borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'flex-start',
+              gap: '1rem',
+              position: 'relative'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.85rem' }}>
+                <div style={{
+                  width: '44px',
+                  height: '44px',
+                  borderRadius: '12px',
+                  background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.25), rgba(168, 85, 247, 0.25))',
+                  border: '1px solid rgba(129, 140, 248, 0.4)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '1.35rem',
+                  flexShrink: 0
+                }}>
+                  ⚖️
+                </div>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 800, color: '#fff' }}>
+                      Centralized Exam Mark Allocation
+                    </h3>
+                    <span style={{
+                      fontSize: '0.72rem',
+                      padding: '0.15rem 0.55rem',
+                      borderRadius: '9999px',
+                      background: 'rgba(56, 189, 248, 0.15)',
+                      border: '1px solid rgba(56, 189, 248, 0.35)',
+                      color: '#38bdf8',
+                      fontWeight: 700
+                    }}>
+                      Exam-Level Management
+                    </span>
+                  </div>
+                  <p style={{ margin: '0.3rem 0 0 0', fontSize: '0.84rem', color: 'var(--text-secondary)' }}>
+                    Configure and balance syllabus marks for all chapters under this examination track simultaneously.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowCentralExamMarksModal(false)}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.06)',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  color: 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  fontSize: '1.1rem',
+                  borderRadius: '10px',
+                  width: '34px',
+                  height: '34px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transition: 'all 0.15s'
+                }}
+                onMouseOver={(e) => {
+                  e.currentTarget.style.color = '#fff';
+                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.15)';
+                }}
+                onMouseOut={(e) => {
+                  e.currentTarget.style.color = 'var(--text-secondary)';
+                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.06)';
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Body (Scrollable) */}
+            <div style={{ padding: '1.25rem 1.75rem', overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+
+              {/* Exam Track Switcher Tabs (if multiple exams) */}
+              {exams.length > 1 && (
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.76rem', color: 'var(--text-secondary)', fontWeight: 600, marginBottom: '0.45rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    Select Examination Track:
+                  </label>
+                  <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', background: 'rgba(0,0,0,0.3)', padding: '0.35rem', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.06)' }}>
+                    {exams.map(ex => {
+                      const isActive = centralConfigExamId === ex.id;
+                      const exChapsCount = allSubjectChapters.filter(c => c.examId === ex.id).length;
+                      return (
+                        <button
+                          key={ex.id}
+                          type="button"
+                          onClick={() => handleSwitchCentralExam(ex.id)}
+                          style={{
+                            padding: '0.45rem 0.95rem',
+                            borderRadius: '8px',
+                            border: 'none',
+                            background: isActive ? 'var(--accent-gradient, linear-gradient(135deg, #6366f1, #8b5cf6))' : 'transparent',
+                            color: isActive ? '#fff' : 'var(--text-secondary)',
+                            fontSize: '0.82rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.45rem',
+                            transition: 'all 0.15s'
+                          }}
+                        >
+                          <span>{ex.title}</span>
+                          <span style={{
+                            fontSize: '0.68rem',
+                            padding: '0.05rem 0.4rem',
+                            borderRadius: '9999px',
+                            background: isActive ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.08)'
+                          }}>
+                            {exChapsCount} Chapters
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Target Exam Total & Smart Balance Controls Card */}
+              <div style={{
+                background: 'rgba(0, 0, 0, 0.28)',
+                border: '1px solid rgba(255, 255, 255, 0.08)',
+                borderRadius: '16px',
+                padding: '1.15rem 1.35rem',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '1rem'
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+                  {/* Target Total Marks Input & Presets */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', flexWrap: 'wrap' }}>
+                    <div>
+                      <span style={{ fontSize: '0.74rem', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', display: 'block', marginBottom: '0.3rem' }}>
+                        Target Total Exam Marks
+                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        <input
+                          type="number"
+                          min="10"
+                          max="500"
+                          value={targetExamMarks}
+                          onChange={(e) => setTargetExamMarks(Math.max(1, parseInt(e.target.value, 10) || 0))}
+                          style={{
+                            width: '85px',
+                            padding: '0.45rem 0.65rem',
+                            background: 'rgba(255, 255, 255, 0.06)',
+                            border: '1px solid rgba(129, 140, 248, 0.4)',
+                            borderRadius: '8px',
+                            color: '#fff',
+                            fontSize: '1.05rem',
+                            fontWeight: 800,
+                            textAlign: 'center',
+                            outline: 'none'
+                          }}
+                        />
+                        <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#c7d2fe' }}>Marks</span>
+                      </div>
+                    </div>
+
+                    {/* Quick Preset Buttons */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', marginTop: '1.1rem' }}>
+                      {[50, 75, 100, 150].map(preset => (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => {
+                            setTargetExamMarks(preset);
+                            handleDistributeExamMarksEvenly(preset);
+                          }}
+                          style={{
+                            padding: '0.32rem 0.6rem',
+                            borderRadius: '7px',
+                            background: targetExamMarks === preset ? 'rgba(99, 102, 241, 0.35)' : 'rgba(255, 255, 255, 0.05)',
+                            border: targetExamMarks === preset ? '1px solid rgba(129, 140, 248, 0.6)' : '1px solid rgba(255, 255, 255, 0.08)',
+                            color: targetExamMarks === preset ? '#ffffff' : 'var(--text-secondary)',
+                            fontSize: '0.74rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            transition: 'all 0.15s'
+                          }}
+                        >
+                          {preset}M
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Smart Distribution Actions */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      onClick={() => handleDistributeExamMarksEvenly()}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.35rem',
+                        padding: '0.48rem 0.85rem',
+                        borderRadius: '9px',
+                        background: 'rgba(99, 102, 241, 0.2)',
+                        border: '1px solid rgba(129, 140, 248, 0.4)',
+                        color: '#c7d2fe',
+                        fontSize: '0.78rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        transition: 'all 0.15s'
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = 'rgba(99, 102, 241, 0.35)';
+                        e.currentTarget.style.color = '#fff';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = 'rgba(99, 102, 241, 0.2)';
+                        e.currentTarget.style.color = '#c7d2fe';
+                      }}
+                      title="Evenly divides the target total marks across all chapters"
+                    >
+                      <span>⚡ Auto-Distribute Evenly</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleAutoBalanceRemainder}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.35rem',
+                        padding: '0.48rem 0.85rem',
+                        borderRadius: '9px',
+                        background: 'rgba(255, 255, 255, 0.05)',
+                        border: '1px solid rgba(255, 255, 255, 0.12)',
+                        color: '#cbd5e1',
+                        fontSize: '0.78rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        transition: 'all 0.15s'
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = 'rgba(255, 255, 255, 0.12)';
+                        e.currentTarget.style.color = '#fff';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
+                        e.currentTarget.style.color = '#cbd5e1';
+                      }}
+                      title="Adjusts first chapter to absorb any remainder gap"
+                    >
+                      <span>⚖️ Auto-Balance Gap</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Live Balance Status Indicator */}
+                {(() => {
+                  const currentSum = examChapterDrafts.reduce((acc, c) => acc + (Number(c.marks) || 0), 0);
+                  const target = Number(targetExamMarks) || 100;
+                  const diff = target - currentSum;
+                  const isBalanced = diff === 0;
+                  const isUnder = diff > 0;
+
+                  return (
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '0.75rem 1rem',
+                      borderRadius: '10px',
+                      background: isBalanced
+                        ? 'rgba(16, 185, 129, 0.12)'
+                        : isUnder
+                          ? 'rgba(245, 158, 11, 0.12)'
+                          : 'rgba(239, 68, 68, 0.12)',
+                      border: `1px solid ${
+                        isBalanced
+                          ? 'rgba(52, 211, 153, 0.35)'
+                          : isUnder
+                            ? 'rgba(251, 191, 36, 0.35)'
+                            : 'rgba(248, 113, 113, 0.35)'
+                      }`,
+                      color: isBalanced ? '#34d399' : isUnder ? '#fbbf24' : '#f87171',
+                      fontSize: '0.82rem',
+                      fontWeight: 600,
+                      gap: '0.75rem',
+                      flexWrap: 'wrap'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span>{isBalanced ? '✅' : isUnder ? '⚠️' : '🛑'}</span>
+                        <span>
+                          {isBalanced
+                            ? `Perfect Balance: All ${target} marks are fully allocated across ${examChapterDrafts.length} chapters (100%).`
+                            : isUnder
+                              ? `Under-allocated: ${diff} marks remaining to reach target of ${target} marks.`
+                              : `Over-allocated: Exceeds target by ${Math.abs(diff)} marks (${currentSum}/${target} marks).`}
+                        </span>
+                      </div>
+
+                      <div style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.4rem',
+                        background: 'rgba(0,0,0,0.25)',
+                        padding: '0.2rem 0.6rem',
+                        borderRadius: '6px'
+                      }}>
+                        <span style={{ fontSize: '0.9rem', fontWeight: 800 }}>
+                          {currentSum} / {target}
+                        </span>
+                        <span style={{ fontSize: '0.72rem', opacity: 0.85 }}>Marks</span>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Live Proportional Weightage Preview Bar */}
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: '#94a3b8', marginBottom: '0.35rem' }}>
+                    <span>Live Proportional Weightage Bar:</span>
+                    <span>{examChapterDrafts.length} Chapters</span>
+                  </div>
+                  <div style={{
+                    height: '18px',
+                    borderRadius: '8px',
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    overflow: 'hidden',
+                    display: 'flex',
+                    border: '1px solid rgba(255, 255, 255, 0.08)'
+                  }}>
+                    {(() => {
+                      const sum = examChapterDrafts.reduce((acc, c) => acc + (Number(c.marks) || 0), 0) || 1;
+                      return examChapterDrafts.map((c, idx) => {
+                        const pct = (c.marks / sum) * 100;
+                        return (
+                          <div
+                            key={c.id}
+                            style={{
+                              width: `${pct}%`,
+                              height: '100%',
+                              background: c.color,
+                              borderRight: idx < examChapterDrafts.length - 1 ? '1px solid rgba(15, 18, 30, 0.8)' : 'none',
+                              transition: 'width 0.2s',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              overflow: 'hidden'
+                            }}
+                            title={`${c.title}: ${c.marks} Marks (${Math.round(pct)}%)`}
+                          >
+                            {pct >= 10 && (
+                              <span style={{ fontSize: '0.66rem', fontWeight: 800, color: '#fff', textShadow: '0 1px 2px rgba(0,0,0,0.8)' }}>
+                                Ch.{idx + 1}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                </div>
+
+              </div>
+
+              {/* Chapters Allocation Matrix / Table */}
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                  <h4 style={{ margin: 0, fontSize: '0.92rem', fontWeight: 700, color: '#fff', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    Chapter Marks Distribution Matrix ({examChapterDrafts.length} Chapters)
+                  </h4>
+                  <span style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+                    Type marks or use -5 / +5 quick steppers
+                  </span>
+                </div>
+
+                {examChapterDrafts.length === 0 ? (
+                  <div style={{ padding: '2.5rem', background: 'rgba(0,0,0,0.2)', borderRadius: '12px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.88rem' }}>
+                    No syllabus chapters found under this exam track. Add chapters to set exam mark distribution.
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+                    {examChapterDrafts.map((chap, idx) => {
+                      const currentTotal = Number(targetExamMarks) || 100;
+                      const weightagePct = currentTotal > 0 ? Math.round(((chap.marks || 0) / currentTotal) * 100) : 0;
+
+                      return (
+                        <div
+                          key={chap.id}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            background: 'rgba(255, 255, 255, 0.03)',
+                            border: '1px solid rgba(255, 255, 255, 0.07)',
+                            borderRadius: '12px',
+                            padding: '0.75rem 1rem',
+                            gap: '1rem',
+                            flexWrap: 'wrap',
+                            transition: 'all 0.15s'
+                          }}
+                        >
+                          {/* Left: Chapter Index Badge & Title */}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', minWidth: '220px', flex: 1 }}>
+                            <div style={{
+                              width: '32px',
+                              height: '32px',
+                              borderRadius: '8px',
+                              background: `${chap.color}25`,
+                              border: `1px solid ${chap.color}65`,
+                              color: chap.color,
+                              fontSize: '0.82rem',
+                              fontWeight: 800,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              flexShrink: 0
+                            }}>
+                              {idx + 1}
+                            </div>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                {chap.title}
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                                {chap.pdfPage && <span>Page {chap.pdfPage} •</span>}
+                                <span>{chap.topics ? chap.topics.length : 0} Topics Mapped</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Middle: Steppers and Marks Input */}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                            <button
+                              type="button"
+                              onClick={() => handleStepChapterDraftMarks(chap.id, -5)}
+                              style={{
+                                width: '28px',
+                                height: '28px',
+                                borderRadius: '6px',
+                                background: 'rgba(255,255,255,0.06)',
+                                border: '1px solid rgba(255,255,255,0.1)',
+                                color: '#e2e8f0',
+                                fontSize: '0.78rem',
+                                fontWeight: 700,
+                                cursor: 'pointer'
+                              }}
+                              title="Decrease 5 marks"
+                            >
+                              -5
+                            </button>
+
+                            <input
+                              type="number"
+                              min="0"
+                              max="200"
+                              value={chap.marks}
+                              onChange={(e) => handleUpdateChapterDraftMarks(chap.id, e.target.value)}
+                              style={{
+                                width: '68px',
+                                padding: '0.4rem 0.5rem',
+                                background: 'rgba(0,0,0,0.4)',
+                                border: `1px solid ${chap.color}75`,
+                                borderRadius: '8px',
+                                color: '#ffffff',
+                                fontSize: '0.95rem',
+                                fontWeight: 800,
+                                textAlign: 'center',
+                                outline: 'none'
+                              }}
+                            />
+
+                            <button
+                              type="button"
+                              onClick={() => handleStepChapterDraftMarks(chap.id, 5)}
+                              style={{
+                                width: '28px',
+                                height: '28px',
+                                borderRadius: '6px',
+                                background: 'rgba(255,255,255,0.06)',
+                                border: '1px solid rgba(255,255,255,0.1)',
+                                color: '#e2e8f0',
+                                fontSize: '0.78rem',
+                                fontWeight: 700,
+                                cursor: 'pointer'
+                              }}
+                              title="Increase 5 marks"
+                            >
+                              +5
+                            </button>
+                            <span style={{ fontSize: '0.78rem', color: '#cbd5e1', fontWeight: 600, marginLeft: '0.2rem' }}>Marks</span>
+                          </div>
+
+                          {/* Right: Calculated Weightage & Mini Progress */}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', minWidth: '130px', justifyContent: 'flex-end' }}>
+                            <div style={{ textAlign: 'right' }}>
+                              <div style={{ fontSize: '0.92rem', fontWeight: 800, color: chap.color }}>
+                                {weightagePct}%
+                              </div>
+                              <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>
+                                Weightage
+                              </div>
+                            </div>
+                            <div style={{ width: '45px', height: '6px', borderRadius: '3px', background: 'rgba(255,255,255,0.1)', overflow: 'hidden' }}>
+                              <div style={{ width: `${Math.min(100, weightagePct)}%`, height: '100%', background: chap.color }} />
+                            </div>
+                          </div>
+
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+            </div>
+
+            {/* Modal Footer Actions */}
+            <div style={{
+              padding: '1.15rem 1.75rem',
+              borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+              background: 'rgba(0, 0, 0, 0.25)',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: '1rem'
+            }}>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                <span>🎯 Target: {targetExamMarks} Marks</span>
+                <span style={{ margin: '0 0.4rem' }}>•</span>
+                <span>Configuring {examChapterDrafts.length} chapters</span>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowCentralExamMarksModal(false)}
+                  disabled={isSavingExamMarks}
+                  style={{
+                    padding: '0.6rem 1.25rem',
+                    borderRadius: '10px',
+                    background: 'rgba(255, 255, 255, 0.06)',
+                    border: '1px solid rgba(255, 255, 255, 0.12)',
+                    color: '#e2e8f0',
+                    fontSize: '0.85rem',
+                    fontWeight: 600,
+                    cursor: isSavingExamMarks ? 'not-allowed' : 'pointer'
+                  }}
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleSaveCentralExamMarks}
+                  disabled={isSavingExamMarks || examChapterDrafts.length === 0}
+                  style={{
+                    padding: '0.65rem 1.65rem',
+                    borderRadius: '10px',
+                    background: isSavingExamMarks
+                      ? 'rgba(99, 102, 241, 0.4)'
+                      : 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 50%, #db2777 100%)',
+                    border: '1px solid rgba(255, 255, 255, 0.2)',
+                    color: '#fff',
+                    fontSize: '0.88rem',
+                    fontWeight: 700,
+                    cursor: (isSavingExamMarks || examChapterDrafts.length === 0) ? 'not-allowed' : 'pointer',
+                    boxShadow: '0 6px 20px -2px rgba(99, 102, 241, 0.5), 0 0 15px rgba(219, 39, 119, 0.3)',
+                    transition: 'all 0.2s',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.5rem'
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!isSavingExamMarks) {
+                      e.currentTarget.style.transform = 'translateY(-1px)';
+                      e.currentTarget.style.filter = 'brightness(1.08)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!isSavingExamMarks) {
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.filter = 'brightness(1)';
+                    }
+                  }}
+                >
+                  {isSavingExamMarks ? (
+                    <>
+                      <span>Saving Allocations...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>💾 Save Exam Mark Allocation</span>
+                      <span style={{
+                        fontSize: '0.72rem',
+                        padding: '0.1rem 0.45rem',
+                        borderRadius: '9999px',
+                        background: 'rgba(255, 255, 255, 0.25)',
+                        fontWeight: 700
+                      }}>
+                        {examChapterDrafts.reduce((acc, c) => acc + (Number(c.marks) || 0), 0)}M
+                      </span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
+          </div>
         </div>
       )}
 
