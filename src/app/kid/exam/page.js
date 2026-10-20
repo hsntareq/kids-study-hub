@@ -7,6 +7,7 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { ref, onValue, set, push, remove } from 'firebase/database';
 import { generateGeminiContent } from '../../../lib/gemini';
 import Link from 'next/link';
+import MarkDistributionField from '../../../components/MarkDistributionField';
 
 function ExamPageContent() {
   const router = useRouter();
@@ -1204,15 +1205,12 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
               </div>
 
               {/* Mark Distribution Preview */}
-              <div>
-                <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Mark Distribution Pattern</label>
-                <textarea
-                  value={testMarkDistribution}
-                  onChange={(e) => setTestMarkDistribution(e.target.value)}
-                  rows={3}
-                  style={{ width: '100%', padding: '0.5rem', background: 'rgba(0,0,0,0.35)', border: '1px solid var(--glass-border)', borderRadius: '6px', color: '#fff', fontSize: '0.82rem' }}
-                />
-              </div>
+              <MarkDistributionField
+                value={testMarkDistribution}
+                onChange={setTestMarkDistribution}
+                label="Mark Distribution Pattern"
+                compact
+              />
 
               {/* Difficulty & Guidelines */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '0.75rem' }}>

@@ -7,6 +7,7 @@ import { generateGeminiContent } from '../../../lib/gemini';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { ref, get, push, set, onValue, remove } from 'firebase/database';
 import Link from 'next/link';
+import MarkDistributionField from '../../../components/MarkDistributionField';
 
 function KidProfileContent() {
   const router = useRouter();
@@ -2498,33 +2499,11 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
               </div>
 
               {/* 2. Mark Distribution */}
-              <div>
-                <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.88rem', fontWeight: 600, color: '#f1f5f9' }}>
-                  2. Mark Distribution (Guides Question Breakdown)
-                </label>
-                <textarea 
-                  value={testMarkDistribution} 
-                  onChange={e => setTestMarkDistribution(e.target.value)} 
-                  placeholder={`e.g.\nMCQ: 20 marks\nShort Questions: 30 marks\nCreative Questions: 50 marks\nTotal: 100 marks`} 
-                  style={{ width: '100%', padding: '0.65rem', background: 'rgba(0,0,0,0.25)', border: '1px solid var(--glass-border)', borderRadius: '8px', color: '#fff', fontSize: '0.88rem', minHeight: '80px', resize: 'vertical' }} 
-                />
-                <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.3rem', flexWrap: 'wrap' }}>
-                  <button 
-                    type="button" 
-                    onClick={() => setTestMarkDistribution("MCQ: 20 marks\nShort Questions: 30 marks\nCreative/Descriptive: 50 marks\nTotal: 100 marks")}
-                    style={{ padding: '0.2rem 0.5rem', fontSize: '0.72rem', background: 'rgba(255,255,255,0.04)', border: '1px solid var(--glass-border)', borderRadius: '4px', color: 'var(--text-secondary)' }}
-                  >
-                    Preset: 100 Marks Standard
-                  </button>
-                  <button 
-                    type="button" 
-                    onClick={() => setTestMarkDistribution("MCQ: 15 marks\nShort Questions: 15 marks\nCreative Questions: 20 marks\nTotal: 50 marks")}
-                    style={{ padding: '0.2rem 0.5rem', fontSize: '0.72rem', background: 'rgba(255,255,255,0.04)', border: '1px solid var(--glass-border)', borderRadius: '4px', color: 'var(--text-secondary)' }}
-                  >
-                    Preset: 50 Marks CT
-                  </button>
-                </div>
-              </div>
+              <MarkDistributionField
+                value={testMarkDistribution}
+                onChange={setTestMarkDistribution}
+                label="2. Mark Distribution (Guides Question Breakdown)"
+              />
 
               {/* 3. Difficulty & Standard Guidelines */}
               <div>
