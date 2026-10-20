@@ -39,6 +39,8 @@ function ExamPageContent() {
   const [customInstructions, setCustomInstructions] = useState('');
   const [isGeneratingTest, setIsGeneratingTest] = useState(false);
   const [generateError, setGenerateError] = useState('');
+  const [modelTestDuration, setModelTestDuration] = useState(60);
+  const [examDurationMinutes, setExamDurationMinutes] = useState(null);
 
   // Model test viewer, sliding & grading state
   const [viewingModelTest, setViewingModelTest] = useState(null);
@@ -582,7 +584,7 @@ CRITICAL RULES FOR GENERATION:
 {
   "title": "${modelTestTitle.trim() || `${subject.title} - ${exam.title} Model Test`}",
   "fullMarks": 100,
-  "timeAllowed": "2 Hours",
+  "timeAllowed": "${modelTestDuration || 60} Minutes",
   "questions": [
     {
       "id": 1,
@@ -603,6 +605,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
       const testData = {
         title: modelTestTitle.trim() || `Model Test - ${modelTestDate}`,
         date: modelTestDate,
+        duration: Number(modelTestDuration) || 60,
         result: modelTestResult.trim() || '0',
         difficulty: testDifficulty,
         guidelines: testGuidelines,
@@ -668,6 +671,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
   // Open test viewer modal
   const openTestViewer = (test) => {
     setViewingModelTest(test);
+    setExamDurationMinutes(test.duration ? Number(test.duration) : null);
     setTestViewMode('student');
     setCurrentSlideIndex(0);
     setQuestionDisplayMode('slide');
@@ -687,6 +691,20 @@ Ensure the "questions" array contains ALL the individual generated questions cov
     setExamSubmittedAt(test.submittedAt || null);
   };
 
+  const handleUpdateExamDuration = async (newMinutes) => {
+    const mins = Math.max(1, Math.min(360, Number(newMinutes) || 60));
+    setExamDurationMinutes(mins);
+    setViewingModelTest(prev => prev ? ({ ...prev, duration: mins }) : prev);
+    if (viewingModelTest && user && kid && subject && exam) {
+      try {
+        const path = `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${subject.id}/modelTests/${exam.id}/${viewingModelTest.testId || viewingModelTest.id}`;
+        await set(ref(database, `${path}/duration`), mins);
+      } catch (err) {
+        console.error('Error saving exam duration:', err);
+      }
+    }
+  };
+
   const handleStartExam = async () => {
     if (!viewingModelTest || !user || !kid || !subject || !exam) return;
     const now = Date.now();
@@ -695,9 +713,11 @@ Ensure the "questions" array contains ALL the individual generated questions cov
     try {
       const path = `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${subject.id}/modelTests/${exam.id}/${viewingModelTest.testId || viewingModelTest.id}`;
       await set(ref(database, `${path}/startedAt`), now);
+      await set(ref(database, `${path}/duration`), defaultDurationMinutes);
       setViewingModelTest(prev => ({
         ...prev,
-        startedAt: now
+        startedAt: now,
+        duration: defaultDurationMinutes
       }));
     } catch (err) {
       console.error('Error starting exam timer:', err);
@@ -950,9 +970,9 @@ Ensure the "questions" array contains ALL the individual generated questions cov
             ? viewingModelTest.result
             : `0/${modalTotalMax}`));
 
-  const defaultDurationMinutes = viewingModelTest?.duration 
+  const defaultDurationMinutes = examDurationMinutes || (viewingModelTest?.duration 
     ? Number(viewingModelTest.duration) 
-    : (modalTotalMax <= 20 ? 30 : modalTotalMax <= 50 ? 60 : modalTotalMax <= 100 ? 90 : 120);
+    : (modalTotalMax <= 20 ? 30 : modalTotalMax <= 50 ? 60 : modalTotalMax <= 100 ? 90 : 120));
   const totalDurationSeconds = defaultDurationMinutes * 60;
   const elapsedSeconds = isExamFinished && viewingModelTest?.timeSpentSeconds 
     ? Number(viewingModelTest.timeSpentSeconds) 
@@ -1525,15 +1545,15 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                 </div>
               )}
 
-              {/* Title & Date */}
-              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '0.75rem' }}>
-                <div>
+              {/* Title, Date & Time Limit */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.75rem' }}>
+                <div style={{ gridColumn: 'span 2' }}>
                   <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.25rem', fontWeight: 500 }}>Test Title</label>
                   <input
                     type="text"
                     value={modelTestTitle}
                     onChange={(e) => setModelTestTitle(e.target.value)}
-                    style={{ width: '100%', padding: '0.55rem 0.65rem', background: 'rgba(0,0,0,0.35)', border: '1px solid var(--glass-border)', borderRadius: '8px', color: '#fff', fontSize: '0.85rem' }}
+                    style={{ width: '100%', boxSizing: 'border-box', padding: '0.55rem 0.65rem', background: 'rgba(0,0,0,0.35)', border: '1px solid var(--glass-border)', borderRadius: '8px', color: '#fff', fontSize: '0.85rem' }}
                   />
                 </div>
                 <div>
@@ -1542,9 +1562,45 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                     type="date"
                     value={modelTestDate}
                     onChange={(e) => setModelTestDate(e.target.value)}
-                    style={{ width: '100%', padding: '0.55rem 0.65rem', background: 'rgba(0,0,0,0.35)', border: '1px solid var(--glass-border)', borderRadius: '8px', color: '#fff', fontSize: '0.85rem' }}
+                    style={{ width: '100%', boxSizing: 'border-box', padding: '0.55rem 0.65rem', background: 'rgba(0,0,0,0.35)', border: '1px solid var(--glass-border)', borderRadius: '8px', color: '#fff', fontSize: '0.85rem' }}
                   />
                 </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.78rem', color: '#38bdf8', marginBottom: '0.25rem', fontWeight: 600 }}>⏱️ Exam Time (Mins)</label>
+                  <input
+                    type="number"
+                    min={5}
+                    max={360}
+                    value={modelTestDuration}
+                    onChange={(e) => setModelTestDuration(Math.max(1, Number(e.target.value) || 0))}
+                    placeholder="60"
+                    style={{ width: '100%', boxSizing: 'border-box', padding: '0.55rem 0.65rem', background: 'rgba(0,0,0,0.35)', border: '1px solid rgba(56, 189, 248, 0.4)', borderRadius: '8px', color: '#38bdf8', fontSize: '0.88rem', fontWeight: 700 }}
+                  />
+                </div>
+              </div>
+
+              {/* Quick Preset Pills for Duration */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', marginTop: '-0.35rem' }}>
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>Quick Time:</span>
+                {[15, 30, 45, 60, 90, 120].map(mins => (
+                  <button
+                    key={mins}
+                    type="button"
+                    onClick={() => setModelTestDuration(mins)}
+                    style={{
+                      padding: '0.2rem 0.5rem',
+                      fontSize: '0.72rem',
+                      borderRadius: '6px',
+                      background: Number(modelTestDuration) === mins ? '#38bdf8' : 'rgba(255,255,255,0.05)',
+                      color: Number(modelTestDuration) === mins ? '#0f172a' : '#cbd5e1',
+                      border: `1px solid ${Number(modelTestDuration) === mins ? '#38bdf8' : 'rgba(255,255,255,0.1)'}`,
+                      cursor: 'pointer',
+                      fontWeight: 600
+                    }}
+                  >
+                    {mins}m
+                  </button>
+                ))}
               </div>
 
               {/* Syllabus Chapters to Cover with Modern Styled Checkboxes */}
@@ -1843,6 +1899,54 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                     {isExamFinished ? 'Time Taken' : (isExamStarted ? 'Time Left' : 'Duration')}
                   </div>
                 </div>
+
+                {/* Adjust or extend timer */}
+                {!isExamFinished && (
+                  <div style={{ display: 'flex', gap: '0.25rem', marginLeft: '0.25rem' }}>
+                    {isExamStarted ? (
+                      <button
+                        type="button"
+                        onClick={() => handleUpdateExamDuration(defaultDurationMinutes + 5)}
+                        title="Add +5 minutes extra time"
+                        style={{
+                          padding: '0.2rem 0.45rem',
+                          fontSize: '0.7rem',
+                          fontWeight: 700,
+                          borderRadius: '4px',
+                          background: 'rgba(56, 189, 248, 0.15)',
+                          border: '1px solid rgba(56, 189, 248, 0.35)',
+                          color: '#38bdf8',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        +5m
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const val = window.prompt("Set exam duration in minutes:", String(defaultDurationMinutes));
+                          if (val !== null) {
+                            const parsed = parseInt(val, 10);
+                            if (!isNaN(parsed) && parsed > 0) handleUpdateExamDuration(parsed);
+                          }
+                        }}
+                        title="Click to change exam time limit"
+                        style={{
+                          padding: '0.2rem 0.45rem',
+                          fontSize: '0.7rem',
+                          borderRadius: '4px',
+                          background: 'rgba(255, 255, 255, 0.08)',
+                          border: '1px solid rgba(255, 255, 255, 0.15)',
+                          color: '#cbd5e1',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        ⚙️ Set
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Mode Switcher */}
@@ -1977,7 +2081,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                   This exam contains <strong>{modalQuestions.length} Questions</strong> with a total of <strong>{modalTotalMax} Marks</strong>.
                 </p>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.8rem', marginBottom: '1.8rem', textAlign: 'center' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.8rem', marginBottom: '1.4rem', textAlign: 'center' }}>
                   <div style={{ background: 'rgba(255,255,255,0.04)', padding: '0.75rem', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.08)' }}>
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Questions</div>
                     <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#fff' }}>{modalQuestions.length}</div>
@@ -1986,9 +2090,81 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Total Marks</div>
                     <div style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--accent-primary)' }}>{modalTotalMax}</div>
                   </div>
-                  <div style={{ background: 'rgba(255,255,255,0.04)', padding: '0.75rem', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.08)' }}>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Time Limit</div>
-                    <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#38bdf8' }}>{defaultDurationMinutes} Min</div>
+                  <div style={{ background: 'rgba(56, 189, 248, 0.1)', padding: '0.75rem', borderRadius: '10px', border: '1px solid rgba(56, 189, 248, 0.35)' }}>
+                    <div style={{ fontSize: '0.75rem', color: '#7dd3fc', fontWeight: 600 }}>Time Limit</div>
+                    <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#38bdf8' }}>{defaultDurationMinutes} Min</div>
+                  </div>
+                </div>
+
+                {/* Interactive Exam Time Limit Configuration */}
+                <div style={{
+                  background: 'linear-gradient(135deg, rgba(56, 189, 248, 0.08) 0%, rgba(139, 92, 246, 0.08) 100%)',
+                  border: '1px solid rgba(56, 189, 248, 0.28)',
+                  borderRadius: '12px',
+                  padding: '1.1rem',
+                  marginBottom: '1.6rem',
+                  textAlign: 'left'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.65rem', flexWrap: 'wrap', gap: '0.4rem' }}>
+                    <label style={{ fontSize: '0.9rem', fontWeight: 700, color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                      <span>⏱️</span>
+                      <span>Set Exam Duration / Time Limit:</span>
+                    </label>
+                    <span style={{ fontSize: '0.8rem', color: '#cbd5e1' }}>
+                      Selected: <strong style={{ color: '#fff', fontSize: '0.95rem' }}>{defaultDurationMinutes} Minutes</strong>
+                    </span>
+                  </div>
+
+                  {/* Preset Pills */}
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem', marginBottom: '0.75rem' }}>
+                    {[15, 20, 30, 45, 60, 90, 120, 180].map(mins => (
+                      <button
+                        key={mins}
+                        type="button"
+                        onClick={() => handleUpdateExamDuration(mins)}
+                        style={{
+                          padding: '0.35rem 0.75rem',
+                          borderRadius: '8px',
+                          fontSize: '0.8rem',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          background: defaultDurationMinutes === mins ? '#38bdf8' : 'rgba(255,255,255,0.06)',
+                          color: defaultDurationMinutes === mins ? '#0f172a' : '#cbd5e1',
+                          border: `1px solid ${defaultDurationMinutes === mins ? '#38bdf8' : 'rgba(255,255,255,0.12)'}`,
+                          boxShadow: defaultDurationMinutes === mins ? '0 0 10px rgba(56, 189, 248, 0.4)' : 'none',
+                          transition: 'all 0.15s ease'
+                        }}
+                      >
+                        {mins < 60 ? `${mins}m` : `${mins / 60}h${mins % 60 ? ` ${mins % 60}m` : ''}`}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Custom minute input */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Custom time:</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={360}
+                      value={defaultDurationMinutes}
+                      onChange={(e) => handleUpdateExamDuration(e.target.value)}
+                      style={{
+                        width: '80px',
+                        padding: '0.35rem 0.65rem',
+                        background: 'rgba(0,0,0,0.5)',
+                        border: '1px solid rgba(56, 189, 248, 0.45)',
+                        borderRadius: '6px',
+                        color: '#38bdf8',
+                        fontSize: '0.9rem',
+                        fontWeight: 700,
+                        textAlign: 'center'
+                      }}
+                    />
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>minutes</span>
+                    <span style={{ fontSize: '0.74rem', color: '#94a3b8', marginLeft: 'auto' }}>
+                      💡 You can also adjust time or add +5m during exam.
+                    </span>
                   </div>
                 </div>
 
