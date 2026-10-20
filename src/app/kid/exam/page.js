@@ -131,51 +131,119 @@ function ExamPageContent() {
   // Parser for questions
   const parseQuestionsData = (raw) => {
     if (!raw) return [];
-    if (Array.isArray(raw)) {
-      return raw.map((q, i) => ({
-        ...q,
-        id: q.id || i + 1,
-        section: cleanText(q.section || 'General Section'),
-        question: cleanText(q.question),
-        options: (q.options || []).map(opt => cleanText(opt)),
-        answerKey: cleanText(q.answerKey || q.correctAnswer || q.solution || '')
-      }));
-    }
-    if (typeof raw === 'object' && Array.isArray(raw.questions)) {
-      return raw.questions.map((q, i) => ({
-        ...q,
-        id: q.id || i + 1,
-        section: cleanText(q.section || 'General Section'),
-        question: cleanText(q.question),
-        options: (q.options || []).map(opt => cleanText(opt)),
-        answerKey: cleanText(q.answerKey || q.correctAnswer || q.solution || '')
-      }));
-    }
+
+    const normalize = (q, i, defaultSec = 'General Section') => ({
+      ...q,
+      id: q.id || i + 1,
+      section: cleanText(q.section || q.category || q.type || defaultSec),
+      question: cleanText(q.question || q.prompt || q.text || q.questionText || ''),
+      options: (q.options || q.choices || []).map(opt => cleanText(opt)),
+      answerKey: cleanText(q.answerKey || q.correctAnswer || q.solution || q.answer || ''),
+      marks: q.marks !== undefined ? Number(q.marks) : undefined
+    });
+
+    const extractArray = (data) => {
+      if (!data) return [];
+      if (Array.isArray(data)) return data.map((q, i) => normalize(q, i));
+      if (typeof data !== 'object') return [];
+
+      if (Array.isArray(data.questions)) {
+        return data.questions.map((q, i) => normalize(q, i));
+      }
+      if (data.modelTest && Array.isArray(data.modelTest.questions)) {
+        return data.modelTest.questions.map((q, i) => normalize(q, i));
+      }
+      if (data.model_test && Array.isArray(data.model_test.questions)) {
+        return data.model_test.questions.map((q, i) => normalize(q, i));
+      }
+      if (data.exam && Array.isArray(data.exam.questions)) {
+        return data.exam.questions.map((q, i) => normalize(q, i));
+      }
+      if (Array.isArray(data.sections)) {
+        const collected = [];
+        data.sections.forEach((sec, sIdx) => {
+          const secQuestions = sec.questions || sec.items || [];
+          if (Array.isArray(secQuestions)) {
+            secQuestions.forEach(q => {
+              collected.push(normalize(q, collected.length, sec.title || sec.name || `Section ${sIdx + 1}`));
+            });
+          }
+        });
+        if (collected.length > 0) return collected;
+      }
+      for (const key of Object.keys(data)) {
+        if (Array.isArray(data[key]) && data[key].length > 0 && typeof data[key][0] === 'object') {
+          if (data[key][0].question || data[key][0].prompt || data[key][0].text) {
+            return data[key].map((q, i) => normalize(q, i, key));
+          }
+        }
+      }
+      return [];
+    };
+
+    if (Array.isArray(raw)) return extractArray(raw);
+    if (typeof raw === 'object') return extractArray(raw);
     if (typeof raw === 'string') {
       try {
         const clean = raw.replace(/```json\s*/gi, '').replace(/```\s*$/gi, '').trim();
         const parsed = JSON.parse(clean);
-        if (Array.isArray(parsed)) {
-          return parsed.map((q, i) => ({
-            ...q,
-            id: q.id || i + 1,
-            section: cleanText(q.section || 'General Section'),
-            question: cleanText(q.question),
-            options: (q.options || []).map(opt => cleanText(opt)),
-            answerKey: cleanText(q.answerKey || q.correctAnswer || q.solution || '')
-          }));
-        }
-        if (parsed && Array.isArray(parsed.questions)) {
-          return parsed.questions.map((q, i) => ({
-            ...q,
-            id: q.id || i + 1,
-            section: cleanText(q.section || 'General Section'),
-            question: cleanText(q.question),
-            options: (q.options || []).map(opt => cleanText(opt)),
-            answerKey: cleanText(q.answerKey || q.correctAnswer || q.solution || '')
-          }));
-        }
+        const result = extractArray(parsed);
+        if (result.length > 0) return result;
       } catch (_) {}
+
+      // Fallback robust line-by-line parser (handles text/markdown-formatted responses)
+      const lines = raw.split('\n');
+      const questions = [];
+      let currentQ = null;
+      let currentSection = 'General Section';
+
+      for (let line of lines) {
+        let trimmed = line.trim();
+        if (!trimmed) continue;
+
+        if (trimmed.match(/^(?:#+\s*)?(?:\*\*)?(?:section|part)\s+[a-z0-9]/i)) {
+          currentSection = cleanText(trimmed);
+          continue;
+        }
+
+        const qMatch = trimmed.match(/^(?:[\*\-]\s*)?(?:\*\*)?(?:question\s*(\d+)|q(\d+)|(\d+))(?:\*\*)?(?:[:.)]|(?:\*\*:))\s*(.*)/i);
+        if (qMatch) {
+          if (currentQ) questions.push(currentQ);
+          const qNum = qMatch[1] || qMatch[2] || qMatch[3];
+          const rest = qMatch[4] || '';
+          const markMatch = rest.match(/\[(\d+)\s*(?:marks?|pts?)\]/i) || rest.match(/\((\d+)\s*(?:marks?|pts?)\)/i);
+          const marks = markMatch ? parseInt(markMatch[1], 10) : 5;
+          const cleanContent = cleanText(rest.replace(/\[\d+\s*(?:marks?|pts?)\]/gi, '').replace(/\(\d+\s*(?:marks?|pts?)\)/gi, ''));
+
+          currentQ = {
+            id: questions.length + 1,
+            number: qNum,
+            section: currentSection,
+            question: cleanContent || `Question ${qNum}`,
+            marks: marks,
+            options: [],
+            answerKey: ''
+          };
+          continue;
+        }
+
+        const optMatch = trimmed.match(/^(?:[\*\-]\s*)?(?:\()?\s*([a-d])(?:\)|\.)\s+(.*)/i);
+        if (currentQ && optMatch) {
+          currentQ.options.push(optMatch[1].toUpperCase() + ') ' + cleanText(optMatch[2]));
+          continue;
+        }
+
+        if (currentQ && (trimmed.toLowerCase().startsWith('answer:') || trimmed.toLowerCase().startsWith('ans:') || trimmed.toLowerCase().startsWith('**answer:'))) {
+          currentQ.answerKey = cleanText(trimmed.replace(/^(?:\*\*answer:\*\*|answer:|ans:?)\s*/i, ''));
+          continue;
+        }
+
+        if (currentQ && !currentQ.options.length) {
+          currentQ.question += ' ' + cleanText(trimmed);
+        }
+      }
+      if (currentQ) questions.push(currentQ);
+      if (questions.length > 0) return questions;
     }
     return [];
   };
@@ -372,14 +440,45 @@ function ExamPageContent() {
 
     try {
       const selectedChapterTitles = selectedChaptersForTest.map(id => chaptersMap[id]?.title).filter(Boolean);
-      const promptText = `Generate a comprehensive Model Test for student: ${kid.name || 'Student'}.
+      const promptText = `You are an expert school examiner creating a realistic, high quality Model Test for student: ${kid.name || 'Student'}.
+Generate a comprehensive Model Test with structured questions strictly formatted according to the syllabus and mark distribution.
+
 Subject: ${subject.title}
-Exam: ${exam.title}
-Difficulty: ${testDifficulty}
-Guidelines to strictly follow: ${testGuidelines.join(', ')}
-${testMarkDistribution ? `Mark Distribution Structure:\n${testMarkDistribution}\n` : ''}
-${selectedChapterTitles.length > 0 ? `Syllabus Chapters to cover:\n${selectedChapterTitles.join(', ')}\n` : ''}
-${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n` : ''}`;
+Exam Type: ${exam.title}
+Model Test Date: ${modelTestDate || 'Today'}
+
+Syllabus Chapters to cover:
+${selectedChapterTitles.length > 0 ? selectedChapterTitles.map(t => `- ${t}`).join('\n') : '- Entire course curriculum'}
+
+Mark Distribution Pattern (STRICT REQUIREMENT - ALLOCATE MARKS AND GENERATE QUESTIONS EXACTLY AS SPECIFIED IN EACH PART):
+${testMarkDistribution ? testMarkDistribution : '100 Marks Standard: Section A: 20 MCQs (20 Marks), Section B: Short Questions (30 Marks), Section C: Descriptive / Creative Questions (50 Marks)'}
+
+Difficulty Level: ${testDifficulty}
+Guidelines to strictly follow:
+${testGuidelines.length > 0 ? testGuidelines.map(g => `- ${g}`).join('\n') : '- Standard school examination best practices'}
+
+${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n` : ''}
+
+CRITICAL RULES FOR GENERATION:
+1. STRICT ADHERENCE TO MARK DISTRIBUTION: You MUST generate individual question items for EVERY section and question count specified in the Mark Distribution above. For instance, if a section specifies "8 questions × 7 marks = 56 Marks from chapters 3, 6, 7, 8, 10", generate all individual questions covering those specific chapters with 7 marks each!
+2. ZERO MARKDOWN AND ZERO LATEX: DO NOT use markdown bold (**), headers (###), backticks (\`), or LaTeX ($). Use standard plain keyboard symbols: "x", "÷", "+", "-", "/", "%". Every question and answer must be clean, readable text.
+3. Return STRICTLY a valid JSON object matching this schema:
+{
+  "title": "${modelTestTitle.trim() || `${subject.title} - ${exam.title} Model Test`}",
+  "fullMarks": 100,
+  "timeAllowed": "2 Hours",
+  "questions": [
+    {
+      "id": 1,
+      "section": "Section name / Question type (e.g. Competency-Based Questions / Section A: MCQ)",
+      "question": "Clear, complete question text without asterisks or markdown",
+      "marks": 7,
+      "options": ["A) option 1", "B) option 2", "C) option 3", "D) option 4"],
+      "answerKey": "Accurate step-by-step solution or answer key"
+    }
+  ]
+}
+Ensure the "questions" array contains ALL the individual generated questions covering the required mark distribution.`;
 
       const questionsText = await generateGeminiContent(promptText);
 

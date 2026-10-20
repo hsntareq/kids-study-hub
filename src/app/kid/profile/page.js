@@ -233,6 +233,35 @@ function KidProfileContent() {
             answerKey: cleanText(q.answerKey || q.correctAnswer || q.solution || '')
           }));
         }
+        if (parsed && parsed.modelTest && Array.isArray(parsed.modelTest.questions)) {
+          return parsed.modelTest.questions.map((q, i) => ({
+            ...q,
+            id: q.id || i + 1,
+            section: cleanText(q.section || 'General Section'),
+            question: cleanText(q.question),
+            options: (q.options || []).map(opt => cleanText(opt)),
+            answerKey: cleanText(q.answerKey || q.correctAnswer || q.solution || '')
+          }));
+        }
+        if (parsed && Array.isArray(parsed.sections)) {
+          const collected = [];
+          parsed.sections.forEach((sec, sIdx) => {
+            const secQuestions = sec.questions || sec.items || [];
+            if (Array.isArray(secQuestions)) {
+              secQuestions.forEach(q => {
+                collected.push({
+                  ...q,
+                  id: q.id || collected.length + 1,
+                  section: cleanText(sec.title || sec.name || q.section || `Section ${sIdx + 1}`),
+                  question: cleanText(q.question || q.prompt || q.text || ''),
+                  options: (q.options || q.choices || []).map(opt => cleanText(opt)),
+                  answerKey: cleanText(q.answerKey || q.correctAnswer || q.solution || '')
+                });
+              });
+            }
+          });
+          if (collected.length > 0) return collected;
+        }
       } catch (_) {}
 
       // Fallback robust line-by-line parser (handles markdown-formatted text from past tests)
