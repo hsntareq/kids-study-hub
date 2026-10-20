@@ -703,11 +703,12 @@ ${testGuidelines.length > 0 ? testGuidelines.map(g => `- ${g}`).join('\n') : '- 
 
 ${customInstructions.trim() ? `Specific Custom Instructions from Teacher:\n${customInstructions.trim()}\n` : ''}
 
-CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
-1. DO NOT use ANY markdown formatting (NO asterisks like **, NO headers like ####, NO bullet asterisks *, NO backticks).
-2. DO NOT use LaTeX formatting (NO dollar signs $, NO \\times, NO \\frac, NO \\div). Use standard plain keyboard symbols: "x", "÷", "+", "-", "/", "%".
-3. Every question must be clean, readable plain text for a school student without any code or markdown artifacts.
-4. Return strictly a valid JSON object matching this schema:
+CRITICAL INSTRUCTION - ZERO MARKDOWN, ZERO LATEX, AND MUST GENERATE ALL PARTS:
+1. MANDATORY - INCLUDE ALL PARTS & SECTIONS: You MUST generate questions for EVERY SINGLE PART / SECTION described in the Mark Distribution above (e.g., Part 1: MCQ, Part 2: Short Questions, Part 3: Short-Answer, Part 4: Competency-Based). NEVER skip or omit Part 1 or Part 2. The output "questions" array MUST include questions for all parts starting from Part 1 to the final part!
+2. DO NOT use ANY markdown formatting (NO asterisks like **, NO headers like ####, NO bullet asterisks *, NO backticks).
+3. DO NOT use LaTeX formatting (NO dollar signs $, NO \times, NO \frac, NO \div). Use standard plain keyboard symbols: "x", "÷", "+", "-", "/", "%".
+4. Every question must be clean, readable plain text for a school student without any code or markdown artifacts.
+5. Return strictly a valid JSON object matching this schema:
 {
   "title": "${modelTestTitle.trim() || `${subject.title} - ${exam.title} Model Test`}",
   "fullMarks": 100,
@@ -715,22 +716,31 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
   "questions": [
     {
       "id": 1,
-      "section": "Section A: Multiple Choice Questions",
+      "section": "1. Multiple Choice Questions (MCQ)",
       "question": "Clear question text without asterisks or markdown",
-      "marks": 5,
+      "marks": 1,
       "options": ["A) option 1", "B) option 2", "C) option 3", "D) option 4"],
       "answerKey": "Correct option and short explanation"
     },
     {
       "id": 2,
-      "section": "Section B: Short / Creative Questions",
-      "question": "Question requiring calculation or written steps",
-      "marks": 10,
+      "section": "2. Short-Answer Questions",
+      "question": "Clear question text",
+      "marks": 2,
       "options": [],
       "answerKey": "Step-by-step solution"
+    },
+    {
+      "id": 3,
+      "section": "3. Competency-Based Questions",
+      "question": "Structured problem question",
+      "marks": 7,
+      "options": [],
+      "answerKey": "Detailed solution rubric"
     }
   ]
-}`;
+}
+Ensure the "questions" array contains ALL questions across EVERY section described in the Mark Distribution.`;
 
       const questionsText = await generateGeminiContent(prompt);
 

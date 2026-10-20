@@ -580,9 +580,10 @@ ${testGuidelines.length > 0 ? testGuidelines.map(g => `- ${g}`).join('\n') : '- 
 ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n` : ''}
 
 CRITICAL RULES FOR GENERATION:
-1. STRICT ADHERENCE TO MARK DISTRIBUTION: You MUST generate individual question items for EVERY section and question count specified in the Mark Distribution above. For instance, if a section specifies "8 questions × 7 marks = 56 Marks from chapters 3, 6, 7, 8, 10", generate all individual questions covering those specific chapters with 7 marks each!
-2. ZERO MARKDOWN AND ZERO LATEX: DO NOT use markdown bold (**), headers (###), backticks (\`), or LaTeX ($). Use standard plain keyboard symbols: "x", "÷", "+", "-", "/", "%". Every question and answer must be clean, readable text.
-3. Return STRICTLY a valid JSON object matching this schema:
+1. MANDATORY - INCLUDE ALL PARTS & SECTIONS: You MUST generate individual question items for EVERY section and question count specified in the Mark Distribution above (e.g. Part 1: MCQ, Part 2: Short Questions, Part 3: Short-Answer, Part 4: Competency-Based / Creative). DO NOT skip or omit Part 1 or Part 2. The output "questions" array MUST include questions for all parts starting from Part 1 to the final part!
+2. STRICT ADHERENCE TO MARK DISTRIBUTION: For instance, if a section specifies "8 questions x 7 marks = 56 Marks from chapters 3, 6, 7, 8, 10", generate all individual questions covering those specific chapters with 7 marks each!
+3. ZERO MARKDOWN AND ZERO LATEX: DO NOT use markdown bold (**), headers (###), backticks (\`), or LaTeX ($). Use standard plain keyboard symbols: "x", "÷", "+", "-", "/", "%". Every question and answer must be clean, readable text.
+4. Return STRICTLY a valid JSON object matching this schema:
 {
   "title": "${modelTestTitle.trim() || `${subject.title} - ${exam.title} Model Test`}",
   "fullMarks": 100,
@@ -590,15 +591,31 @@ CRITICAL RULES FOR GENERATION:
   "questions": [
     {
       "id": 1,
-      "section": "Section name / Question type (e.g. Competency-Based Questions / Section A: MCQ)",
+      "section": "1. Multiple Choice Questions (MCQ)",
       "question": "Clear, complete question text without asterisks or markdown",
-      "marks": 7,
+      "marks": 1,
       "options": ["A) option 1", "B) option 2", "C) option 3", "D) option 4"],
       "answerKey": "Accurate step-by-step solution or answer key"
+    },
+    {
+      "id": 2,
+      "section": "2. Short-Answer Questions",
+      "question": "Clear question text",
+      "marks": 2,
+      "options": [],
+      "answerKey": "Step-by-step solution"
+    },
+    {
+      "id": 3,
+      "section": "3. Competency-Based Questions",
+      "question": "Structured problem question",
+      "marks": 7,
+      "options": [],
+      "answerKey": "Detailed solution rubric"
     }
   ]
 }
-Ensure the "questions" array contains ALL the individual generated questions covering the required mark distribution.`;
+Ensure the "questions" array contains ALL the individual generated questions covering the required mark distribution without skipping any section.`;
 
       const questionsText = await generateGeminiContent(promptText);
 

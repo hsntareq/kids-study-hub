@@ -25,7 +25,8 @@ export async function generateGeminiContent(prompt) {
         model,
         contents: prompt,
         config: {
-          responseMimeType: 'application/json'
+          responseMimeType: 'application/json',
+          maxOutputTokens: 8192
         }
       });
       if (response && response.text) {
@@ -52,7 +53,8 @@ export async function generateGeminiContent(prompt) {
               model: cleanName,
               contents: prompt,
               config: {
-                responseMimeType: 'application/json'
+                responseMimeType: 'application/json',
+                maxOutputTokens: 8192
               }
             });
             if (fallbackRes && fallbackRes.text) {
