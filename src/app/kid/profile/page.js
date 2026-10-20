@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState, useRef, useMemo } from 'react';
+import { Suspense, useEffect, useState, useRef } from 'react';
 import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { auth, database } from '../../../lib/firebase';
 import { generateGeminiContent } from '../../../lib/gemini';
@@ -967,6 +967,15 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [viewingModelTest, questionDisplayMode]);
 
+  // Auto-scroll active question pill into center view
+  useEffect(() => {
+    if (!viewingModelTest || questionDisplayMode !== 'slide') return;
+    const activeBtn = document.getElementById(`q-pill-${currentSlideIndex}`);
+    if (activeBtn) {
+      activeBtn.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+    }
+  }, [viewingModelTest, currentSlideIndex, questionDisplayMode, navigatorViewMode]);
+
   const handleUpdateTestResult = async (subjectId, examId, testId, newResult) => {
     if (!user || !kid) return;
     await set(ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${subjectId}/modelTests/${examId}/${testId}/result`), newResult);
@@ -1224,7 +1233,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
   const isTimeUp = isExamStarted && !isExamFinished && remainingSeconds === 0;
 
   // Group questions by set / question type for contained collapsible & filtered navigation
-  const questionSets = useMemo(() => {
+  const questionSets = (() => {
     const map = new Map();
     parsedQuestions.forEach((q, idx) => {
       const setNum = q.setNumber || 1;
@@ -1238,7 +1247,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
       map.get(setNum).questions.push({ ...q, globalIndex: idx });
     });
     return Array.from(map.values());
-  }, [parsedQuestions]);
+  })();
 
   const toggleSetCollapse = (setNum) => {
     setCollapsedSets(prev => ({
@@ -1252,14 +1261,6 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
     const distance = direction === 'left' ? -260 : 260;
     pillsScrollRef.current.scrollBy({ left: distance, behavior: 'smooth' });
   };
-
-  useEffect(() => {
-    if (questionDisplayMode !== 'slide') return;
-    const activeBtn = document.getElementById(`q-pill-${currentSlideIndex}`);
-    if (activeBtn) {
-      activeBtn.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
-    }
-  }, [currentSlideIndex, questionDisplayMode, navigatorViewMode]);
 
   return (
     <main className="view-container">
