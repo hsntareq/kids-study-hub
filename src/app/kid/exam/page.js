@@ -128,6 +128,97 @@ function ExamPageContent() {
     return s.trim();
   };
 
+  // Enrich questions with set numbers (MCQ is Set 1 -> 1.1, 1.2..., Set 2 -> 2.1, 2.2...)
+  const enrichWithSetNumbers = (questions) => {
+    if (!questions || !Array.isArray(questions) || questions.length === 0) return [];
+
+    const sectionOrder = [];
+    const sectionInfo = new Map();
+
+    questions.forEach((q, i) => {
+      let rawSec = (q.section || '').trim();
+      const hasOpts = q.options && q.options.length > 0;
+      const isMcq = hasOpts || /mcq|multiple choice/i.test(rawSec);
+
+      let secKey = rawSec;
+      if (!secKey) {
+        secKey = isMcq ? '1. Multiple Choice Questions (MCQ)' : 'Descriptive Questions';
+      }
+
+      if (!sectionInfo.has(secKey)) {
+        sectionInfo.set(secKey, {
+          name: secKey,
+          isMcq,
+          firstIndex: i
+        });
+        sectionOrder.push(secKey);
+      }
+    });
+
+    const sectionToSetNum = new Map();
+    const usedNumbers = new Set();
+
+    // 1. Any section with explicit leading number like "1. MCQ" or "2. Short Questions"
+    sectionOrder.forEach(secKey => {
+      const numMatch = secKey.match(/^(\d+)[.):\s]/);
+      if (numMatch) {
+        const num = parseInt(numMatch[1], 10);
+        sectionToSetNum.set(secKey, num);
+        usedNumbers.add(num);
+      }
+    });
+
+    // 2. If MCQ section exists and doesn't have an explicit number, assign 1
+    const mcqSec = sectionOrder.find(sec => sectionInfo.get(sec)?.isMcq);
+    if (mcqSec && !sectionToSetNum.has(mcqSec)) {
+      if (!usedNumbers.has(1)) {
+        sectionToSetNum.set(mcqSec, 1);
+        usedNumbers.add(1);
+      }
+    }
+
+    // 3. Assign sequential numbers (1, 2, 3...) to remaining sections
+    let currentCounter = 1;
+    sectionOrder.forEach(secKey => {
+      if (!sectionToSetNum.has(secKey)) {
+        while (usedNumbers.has(currentCounter)) {
+          currentCounter++;
+        }
+        sectionToSetNum.set(secKey, currentCounter);
+        usedNumbers.add(currentCounter);
+      }
+    });
+
+    const setCounters = {};
+
+    return questions.map((q) => {
+      let rawSec = (q.section || '').trim();
+      const hasOpts = q.options && q.options.length > 0;
+      const isMcq = hasOpts || /mcq|multiple choice/i.test(rawSec);
+
+      let secKey = rawSec;
+      if (!secKey) {
+        secKey = isMcq ? '1. Multiple Choice Questions (MCQ)' : 'Descriptive Questions';
+      }
+
+      const setNum = sectionToSetNum.get(secKey) || 1;
+      setCounters[setNum] = (setCounters[setNum] || 0) + 1;
+      const subNum = setCounters[setNum];
+      const displayNumber = `${setNum}.${subNum}`;
+
+      let cleanSecTitle = secKey.replace(/^(?:section|part)?\s*\d+[:.)\s-]*/i, '').trim();
+      if (!cleanSecTitle) cleanSecTitle = secKey;
+
+      return {
+        ...q,
+        setNumber: setNum,
+        subNumber: subNum,
+        displayNumber,
+        cleanSectionTitle: cleanSecTitle
+      };
+    });
+  };
+
   // Parser for questions
   const parseQuestionsData = (raw) => {
     if (!raw) return [];
@@ -181,71 +272,74 @@ function ExamPageContent() {
       return [];
     };
 
-    if (Array.isArray(raw)) return extractArray(raw);
-    if (typeof raw === 'object') return extractArray(raw);
-    if (typeof raw === 'string') {
+    let result = [];
+    if (Array.isArray(raw)) result = extractArray(raw);
+    else if (typeof raw === 'object') result = extractArray(raw);
+    else if (typeof raw === 'string') {
       try {
         const clean = raw.replace(/```json\s*/gi, '').replace(/```\s*$/gi, '').trim();
         const parsed = JSON.parse(clean);
-        const result = extractArray(parsed);
-        if (result.length > 0) return result;
+        result = extractArray(parsed);
       } catch (_) {}
 
-      // Fallback robust line-by-line parser (handles text/markdown-formatted responses)
-      const lines = raw.split('\n');
-      const questions = [];
-      let currentQ = null;
-      let currentSection = 'General Section';
+      if (!result || result.length === 0) {
+        // Fallback robust line-by-line parser (handles text/markdown-formatted responses)
+        const lines = raw.split('\n');
+        const questions = [];
+        let currentQ = null;
+        let currentSection = 'General Section';
 
-      for (let line of lines) {
-        let trimmed = line.trim();
-        if (!trimmed) continue;
+        for (let line of lines) {
+          let trimmed = line.trim();
+          if (!trimmed) continue;
 
-        if (trimmed.match(/^(?:#+\s*)?(?:\*\*)?(?:section|part)\s+[a-z0-9]/i)) {
-          currentSection = cleanText(trimmed);
-          continue;
+          if (trimmed.match(/^(?:#+\s*)?(?:\*\*)?(?:section|part)\s+[a-z0-9]/i)) {
+            currentSection = cleanText(trimmed);
+            continue;
+          }
+
+          const qMatch = trimmed.match(/^(?:[\*\-]\s*)?(?:\*\*)?(?:question\s*(\d+)|q(\d+)|(\d+))(?:\*\*)?(?:[:.)]|(?:\*\*:))\s*(.*)/i);
+          if (qMatch) {
+            if (currentQ) questions.push(currentQ);
+            const qNum = qMatch[1] || qMatch[2] || qMatch[3];
+            const rest = qMatch[4] || '';
+            const markMatch = rest.match(/\[(\d+)\s*(?:marks?|pts?)\]/i) || rest.match(/\((\d+)\s*(?:marks?|pts?)\)/i);
+            const marks = markMatch ? parseInt(markMatch[1], 10) : 5;
+            const cleanContent = cleanText(rest.replace(/\[\d+\s*(?:marks?|pts?)\]/gi, '').replace(/\(\d+\s*(?:marks?|pts?)\)/gi, ''));
+
+            currentQ = {
+              id: questions.length + 1,
+              number: qNum,
+              section: currentSection,
+              question: cleanContent || `Question ${qNum}`,
+              marks: marks,
+              options: [],
+              answerKey: ''
+            };
+            continue;
+          }
+
+          const optMatch = trimmed.match(/^(?:[\*\-]\s*)?(?:\()?\s*([a-d])(?:\)|\.)\s+(.*)/i);
+          if (currentQ && optMatch) {
+            currentQ.options.push(optMatch[1].toUpperCase() + ') ' + cleanText(optMatch[2]));
+            continue;
+          }
+
+          if (currentQ && (trimmed.toLowerCase().startsWith('answer:') || trimmed.toLowerCase().startsWith('ans:') || trimmed.toLowerCase().startsWith('**answer:'))) {
+            currentQ.answerKey = cleanText(trimmed.replace(/^(?:\*\*answer:\*\*|answer:|ans:?)\s*/i, ''));
+            continue;
+          }
+
+          if (currentQ && !currentQ.options.length) {
+            currentQ.question += ' ' + cleanText(trimmed);
+          }
         }
-
-        const qMatch = trimmed.match(/^(?:[\*\-]\s*)?(?:\*\*)?(?:question\s*(\d+)|q(\d+)|(\d+))(?:\*\*)?(?:[:.)]|(?:\*\*:))\s*(.*)/i);
-        if (qMatch) {
-          if (currentQ) questions.push(currentQ);
-          const qNum = qMatch[1] || qMatch[2] || qMatch[3];
-          const rest = qMatch[4] || '';
-          const markMatch = rest.match(/\[(\d+)\s*(?:marks?|pts?)\]/i) || rest.match(/\((\d+)\s*(?:marks?|pts?)\)/i);
-          const marks = markMatch ? parseInt(markMatch[1], 10) : 5;
-          const cleanContent = cleanText(rest.replace(/\[\d+\s*(?:marks?|pts?)\]/gi, '').replace(/\(\d+\s*(?:marks?|pts?)\)/gi, ''));
-
-          currentQ = {
-            id: questions.length + 1,
-            number: qNum,
-            section: currentSection,
-            question: cleanContent || `Question ${qNum}`,
-            marks: marks,
-            options: [],
-            answerKey: ''
-          };
-          continue;
-        }
-
-        const optMatch = trimmed.match(/^(?:[\*\-]\s*)?(?:\()?\s*([a-d])(?:\)|\.)\s+(.*)/i);
-        if (currentQ && optMatch) {
-          currentQ.options.push(optMatch[1].toUpperCase() + ') ' + cleanText(optMatch[2]));
-          continue;
-        }
-
-        if (currentQ && (trimmed.toLowerCase().startsWith('answer:') || trimmed.toLowerCase().startsWith('ans:') || trimmed.toLowerCase().startsWith('**answer:'))) {
-          currentQ.answerKey = cleanText(trimmed.replace(/^(?:\*\*answer:\*\*|answer:|ans:?)\s*/i, ''));
-          continue;
-        }
-
-        if (currentQ && !currentQ.options.length) {
-          currentQ.question += ' ' + cleanText(trimmed);
-        }
+        if (currentQ) questions.push(currentQ);
+        result = questions;
       }
-      if (currentQ) questions.push(currentQ);
-      if (questions.length > 0) return questions;
     }
-    return [];
+
+    return enrichWithSetNumbers(result);
   };
 
   // Keyboard navigation for question slides
@@ -1465,35 +1559,143 @@ Ensure the "questions" array contains ALL the individual generated questions cov
         </div>
       )}
 
-      {/* Model Test Question Paper, Answer Sheet & Grading Modal */}
+      {/* Model Test Question Paper, Answer Sheet & Grading - FULL PAGE VIEW */}
       {viewingModelTest && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 120, padding: '1rem' }}>
-          <div className="card" style={{ maxWidth: '840px', width: '100%', maxHeight: '94vh', overflowY: 'auto', position: 'relative', textAlign: 'left', padding: '1.8rem' }}>
-            
-            {/* Viewer Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem', borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.8rem' }}>
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          width: '100vw',
+          height: '100vh',
+          background: '#090d16',
+          zIndex: 9999,
+          overflowY: 'auto',
+          display: 'flex',
+          flexDirection: 'column'
+        }}>
+          {/* Top Sticky Header */}
+          <header style={{
+            position: 'sticky',
+            top: 0,
+            zIndex: 40,
+            background: 'rgba(15, 23, 42, 0.96)',
+            backdropFilter: 'blur(12px)',
+            borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+            padding: '0.8rem 1.75rem',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: '0.8rem'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+              <button
+                type="button"
+                onClick={() => setViewingModelTest(null)}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.35rem',
+                  padding: '0.45rem 0.85rem',
+                  borderRadius: '8px',
+                  background: 'rgba(255, 255, 255, 0.08)',
+                  border: '1px solid rgba(255, 255, 255, 0.12)',
+                  color: '#fff',
+                  fontSize: '0.83rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                <span>←</span>
+                <span>Exit Exam</span>
+              </button>
+
               <div>
-                <h2 style={{ margin: '0 0 0.25rem 0', fontSize: '1.45rem', color: '#fff' }}>
-                  {viewingModelTest.title || 'Model Test'}
-                </h2>
-                <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-                  <span>📅 {viewingModelTest.date || 'Today'}</span>
-                  <span>• Total Marks: {modalTotalMax}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <h1 style={{ margin: 0, fontSize: '1.2rem', color: '#fff', fontWeight: 700 }}>
+                    {viewingModelTest.title || 'Model Test'}
+                  </h1>
                   {viewingModelTest.difficulty && (
-                    <span style={{ padding: '0.1rem 0.5rem', borderRadius: '10px', background: 'rgba(139, 92, 246, 0.2)', color: 'var(--accent-primary)', fontWeight: 600, fontSize: '0.72rem' }}>
+                    <span style={{ padding: '0.1rem 0.5rem', borderRadius: '10px', background: 'rgba(139, 92, 246, 0.2)', border: '1px solid rgba(139, 92, 246, 0.3)', color: '#c4b5fd', fontWeight: 600, fontSize: '0.72rem' }}>
                       {viewingModelTest.difficulty}
                     </span>
                   )}
                 </div>
+                <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
+                  <span>📅 {viewingModelTest.date || 'Today'}</span>
+                  <span>•</span>
+                  <span>Total Marks: <strong style={{ color: '#fff' }}>{modalTotalMax}</strong></span>
+                  <span>•</span>
+                  <span style={{ color: '#34d399', fontWeight: 600 }}>Result {currentModalDisplayResult}</span>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', background: 'rgba(0,0,0,0.4)', padding: '0.2rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                <button
+                  type="button"
+                  onClick={() => setTestViewMode('student')}
+                  style={{
+                    padding: '0.35rem 0.8rem',
+                    borderRadius: '6px',
+                    border: 'none',
+                    fontSize: '0.8rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    background: testViewMode === 'student' ? 'var(--accent-gradient)' : 'transparent',
+                    color: testViewMode === 'student' ? '#fff' : 'var(--text-secondary)'
+                  }}
+                >
+                  👨‍🎓 Student
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTestViewMode('examiner')}
+                  style={{
+                    padding: '0.35rem 0.8rem',
+                    borderRadius: '6px',
+                    border: 'none',
+                    fontSize: '0.8rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    background: testViewMode === 'examiner' ? 'var(--accent-gradient)' : 'transparent',
+                    color: testViewMode === 'examiner' ? '#fff' : 'var(--text-secondary)'
+                  }}
+                >
+                  📝 Examiner
+                </button>
               </div>
 
-              <button 
-                onClick={() => setViewingModelTest(null)}
-                style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1.4rem', padding: '0.2rem 0.5rem' }}
+              <button
+                type="button"
+                onClick={() => copyToClipboard(viewingModelTest.questions)}
+                style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '6px', color: '#cbd5e1', cursor: 'pointer' }}
               >
-                ✕
+                {copiedSuccess ? '✓ Copied' : '📋 Copy'}
+              </button>
+              <button
+                type="button"
+                onClick={() => window.print()}
+                style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '6px', color: '#cbd5e1', cursor: 'pointer' }}
+              >
+                🖨️ Print
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewingModelTest(null)}
+                style={{ padding: '0.4rem 0.8rem', background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#f87171', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
+              >
+                ✕ Exit
               </button>
             </div>
+          </header>
+
+          {/* Full Page Body */}
+          <main style={{ flex: 1, width: '100%', maxWidth: '1080px', margin: '0 auto', padding: '1.5rem 1.5rem 4rem 1.5rem', textAlign: 'left' }}>
 
             {/* Notification Banner */}
             {notificationMsg && (
@@ -1501,51 +1703,6 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                 {notificationMsg}
               </div>
             )}
-
-            {/* Mode Selector Tab Bar & Current Result */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.3)', padding: '0.5rem', borderRadius: '10px', marginBottom: '1.25rem', gap: '0.5rem', flexWrap: 'wrap' }}>
-              <div style={{ display: 'flex', gap: '0.4rem' }}>
-                <button
-                  type="button"
-                  onClick={() => setTestViewMode('student')}
-                  style={{
-                    padding: '0.45rem 1rem',
-                    fontSize: '0.85rem',
-                    fontWeight: 600,
-                    borderRadius: '8px',
-                    border: 'none',
-                    cursor: 'pointer',
-                    background: testViewMode === 'student' ? 'var(--accent-gradient)' : 'rgba(255,255,255,0.05)',
-                    color: testViewMode === 'student' ? '#fff' : 'var(--text-secondary)'
-                  }}
-                >
-                  👨‍🎓 Student: Answer & Upload Paper
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTestViewMode('examiner')}
-                  style={{
-                    padding: '0.45rem 1rem',
-                    fontSize: '0.85rem',
-                    fontWeight: 600,
-                    borderRadius: '8px',
-                    border: 'none',
-                    cursor: 'pointer',
-                    background: testViewMode === 'examiner' ? 'var(--accent-gradient)' : 'rgba(255,255,255,0.05)',
-                    color: testViewMode === 'examiner' ? '#fff' : 'var(--text-secondary)'
-                  }}
-                >
-                  📝 Examiner: Check & Give Number
-                </button>
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Current:</span>
-                <span style={{ fontSize: '0.9rem', fontWeight: 700, color: '#34d399', background: 'rgba(16, 185, 129, 0.15)', padding: '0.2rem 0.65rem', borderRadius: '14px', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
-                  Result {currentModalDisplayResult}
-                </span>
-              </div>
-            </div>
 
             {/* Uploaded Answer Paper Gallery */}
             {testViewMode === 'examiner' && (
@@ -1619,10 +1776,17 @@ Ensure the "questions" array contains ALL the individual generated questions cov
 
             {/* Slide Navigation Header Bar */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-                <span style={{ fontSize: '1rem', fontWeight: 700, color: '#fff' }}>
-                  {questionDisplayMode === 'slide' ? `Question ${currentSlideIndex + 1} of ${modalQuestions.length}` : `All Questions (${modalQuestions.length})`}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '1.05rem', fontWeight: 700, color: '#fff' }}>
+                  {questionDisplayMode === 'slide' 
+                    ? `Question ${modalQuestions[currentSlideIndex]?.displayNumber || currentSlideIndex + 1} of ${modalQuestions.length}`
+                    : `All Questions (${modalQuestions.length})`}
                 </span>
+                {questionDisplayMode === 'slide' && modalQuestions[currentSlideIndex] && (
+                  <span style={{ fontSize: '0.8rem', color: '#c4b5fd', background: 'rgba(139, 92, 246, 0.12)', border: '1px solid rgba(139, 92, 246, 0.25)', padding: '0.15rem 0.5rem', borderRadius: '6px' }}>
+                    Set {modalQuestions[currentSlideIndex].setNumber}: {modalQuestions[currentSlideIndex].cleanSectionTitle}
+                  </span>
+                )}
                 <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', padding: '0.15rem 0.6rem', borderRadius: '12px', background: 'rgba(255,255,255,0.06)' }}>
                   {testViewMode === 'student' ? `${modalAnsweredCount}/${modalQuestions.length} Answered` : `${modalGradedCount}/${modalQuestions.length} Graded • Awarded: ${modalAwardedSum}/${modalTotalMax}`}
                 </span>
@@ -1667,7 +1831,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
 
             {/* Question Jump Pills */}
             {questionDisplayMode === 'slide' && modalQuestions.length > 0 && (
-              <div style={{ display: 'flex', gap: '0.4rem', overflowX: 'auto', paddingBottom: '0.5rem', marginBottom: '1.1rem' }}>
+              <div style={{ display: 'flex', gap: '0.4rem', overflowX: 'auto', paddingBottom: '0.5rem', marginBottom: '1.25rem' }}>
                 {modalQuestions.map((q, qIdx) => {
                   const isActive = qIdx === currentSlideIndex;
                   const isAns = Boolean(studentAnswers[q.id]?.trim());
@@ -1688,19 +1852,21 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                         flexShrink: 0,
                         padding: '0.35rem 0.65rem',
                         borderRadius: '8px',
-                        fontSize: '0.78rem',
-                        fontWeight: 600,
+                        fontSize: '0.8rem',
+                        fontWeight: 700,
                         cursor: 'pointer',
                         border: isActive ? '1.5px solid var(--accent-primary)' : '1px solid rgba(255,255,255,0.08)',
-                        background: isActive ? 'rgba(139, 92, 246, 0.25)' : (testViewMode === 'student' ? (isAns ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.03)') : (isGrd ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.03)')),
+                        background: isActive ? 'rgba(139, 92, 246, 0.35)' : (testViewMode === 'student' ? (isAns ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.03)') : (isGrd ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.03)')),
                         color: isActive ? '#fff' : (testViewMode === 'student' ? (isAns ? '#34d399' : 'var(--text-secondary)') : (isGrd ? '#34d399' : 'var(--text-secondary)')),
                         display: 'flex',
                         alignItems: 'center',
-                        gap: '0.3rem'
+                        gap: '0.3rem',
+                        boxShadow: isActive ? '0 0 10px rgba(139, 92, 246, 0.35)' : 'none'
                       }}
+                      title={`Question ${q.displayNumber} (${q.cleanSectionTitle || cleanText(q.section)})`}
                     >
-                      <span>Q{q.id || qIdx + 1}</span>
-                      {testViewMode === 'student' && isAns && <span style={{ fontSize: '0.7rem', color: '#34d399' }}>✓</span>}
+                      <span>{q.displayNumber || `Q${qIdx + 1}`}</span>
+                      {testViewMode === 'student' && isAns && <span style={{ fontSize: '0.72rem', color: '#34d399' }}>✓</span>}
                       {testViewMode === 'examiner' && isGrd && <span style={{ fontSize: '0.68rem', color: '#34d399' }}>[{awd}/{qMax}]</span>}
                     </button>
                   );
@@ -1723,44 +1889,71 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                 const isGrd = awardedMarks[q.id] !== undefined && awardedMarks[q.id] !== '';
 
                 return (
-                  <div
-                    key={q.id || actualIndex}
-                    style={{
-                      background: 'rgba(0,0,0,0.28)',
-                      border: '1px solid rgba(255,255,255,0.08)',
-                      borderRadius: '12px',
-                      padding: '1.3rem',
-                      textAlign: 'left'
-                    }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.4rem' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                        <span style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--accent-primary)', background: 'rgba(139, 92, 246, 0.15)', padding: '0.18rem 0.6rem', borderRadius: '6px' }}>
-                          Q{q.id || actualIndex + 1}
-                        </span>
-                        {q.section && (
-                          <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                            {q.section}
+                  <div key={q.id || actualIndex}>
+                    {/* Set Divider in List View */}
+                    {questionDisplayMode !== 'slide' && (idx === 0 || modalQuestions[idx - 1]?.setNumber !== q.setNumber) && (
+                      <div style={{
+                        marginTop: idx > 0 ? '1.5rem' : '0.5rem',
+                        marginBottom: '0.75rem',
+                        padding: '0.75rem 1.1rem',
+                        background: 'linear-gradient(90deg, rgba(139, 92, 246, 0.18), rgba(0,0,0,0.25))',
+                        borderLeft: '4px solid var(--accent-primary)',
+                        borderRadius: '8px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        flexWrap: 'wrap',
+                        gap: '0.5rem'
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                          <span style={{ fontSize: '0.85rem', fontWeight: 800, color: 'var(--accent-primary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                            Set {q.setNumber}
                           </span>
-                        )}
+                          <span style={{ fontSize: '1rem', fontWeight: 700, color: '#fff' }}>
+                            {q.cleanSectionTitle || cleanText(q.section)}
+                          </span>
+                        </div>
+                        <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                          Questions {q.setNumber}.1 – {q.setNumber}.{modalQuestions.filter(x => x.setNumber === q.setNumber).length}
+                        </span>
                       </div>
+                    )}
 
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        {testViewMode === 'student' && isAns && (
-                          <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#34d399', background: 'rgba(16, 185, 129, 0.15)', padding: '0.15rem 0.5rem', borderRadius: '10px' }}>
-                            ✓ Answered
+                    <div
+                      style={{
+                        background: 'rgba(0,0,0,0.28)',
+                        border: '1px solid rgba(255,255,255,0.08)',
+                        borderRadius: '12px',
+                        padding: '1.3rem',
+                        textAlign: 'left'
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.85rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: '0.95rem', fontWeight: 800, color: '#fff', background: 'var(--accent-gradient)', padding: '0.25rem 0.75rem', borderRadius: '8px', letterSpacing: '0.3px', boxShadow: '0 2px 8px rgba(139,92,246,0.35)' }}>
+                            Question {q.displayNumber || actualIndex + 1}
                           </span>
-                        )}
-                        {testViewMode === 'examiner' && (
-                          <span style={{ fontSize: '0.75rem', fontWeight: 600, color: isGrd ? '#34d399' : '#facc15', background: isGrd ? 'rgba(16, 185, 129, 0.15)' : 'rgba(234, 179, 8, 0.15)', padding: '0.15rem 0.5rem', borderRadius: '10px' }}>
-                            {isGrd ? `✓ Awarded: ${awarded}/${qMarks}` : 'Pending Marking'}
+                          <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#c4b5fd', background: 'rgba(139, 92, 246, 0.12)', border: '1px solid rgba(139, 92, 246, 0.25)', padding: '0.22rem 0.65rem', borderRadius: '6px' }}>
+                            Set {q.setNumber}: {q.cleanSectionTitle || cleanText(q.section)}
                           </span>
-                        )}
-                        <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#f1f5f9', background: 'rgba(255,255,255,0.06)', padding: '0.2rem 0.6rem', borderRadius: '12px' }}>
-                          [{qMarks} Marks]
-                        </span>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          {testViewMode === 'student' && isAns && (
+                            <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#34d399', background: 'rgba(16, 185, 129, 0.15)', padding: '0.18rem 0.55rem', borderRadius: '10px' }}>
+                              ✓ Answered
+                            </span>
+                          )}
+                          {testViewMode === 'examiner' && (
+                            <span style={{ fontSize: '0.75rem', fontWeight: 600, color: isGrd ? '#34d399' : '#facc15', background: isGrd ? 'rgba(16, 185, 129, 0.15)' : 'rgba(234, 179, 8, 0.15)', padding: '0.18rem 0.55rem', borderRadius: '10px' }}>
+                              {isGrd ? `✓ Awarded: ${awarded}/${qMarks}` : 'Pending Marking'}
+                            </span>
+                          )}
+                          <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#f1f5f9', background: 'rgba(255,255,255,0.06)', padding: '0.2rem 0.6rem', borderRadius: '12px' }}>
+                            [{qMarks} Marks]
+                          </span>
+                        </div>
                       </div>
-                    </div>
 
                     <div style={{ fontSize: '1.02rem', color: '#f8fafc', lineHeight: 1.6, marginBottom: '0.9rem', whiteSpace: 'pre-line' }}>
                       {cleanText(q.question)}
@@ -1993,6 +2186,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                         </div>
                       </div>
                     )}
+                    </div>
                   </div>
                 );
               })}
@@ -2027,7 +2221,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
 
                 <div style={{ textAlign: 'center' }}>
                   <span style={{ fontSize: '0.83rem', fontWeight: 600, color: '#f1f5f9' }}>
-                    Question {currentSlideIndex + 1} of {modalQuestions.length}
+                    Question {modalQuestions[currentSlideIndex]?.displayNumber || currentSlideIndex + 1} of {modalQuestions.length}
                   </span>
                   <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>Tip: Use ← → keys to slide</div>
                 </div>
@@ -2132,7 +2326,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
               </button>
             </div>
 
-          </div>
+          </main>
         </div>
       )}
 

@@ -181,13 +181,106 @@ function KidProfileContent() {
     return s.trim();
   };
 
+  // Enrich questions with set numbers (MCQ is Set 1 -> 1.1, 1.2..., Set 2 -> 2.1, 2.2...)
+  const enrichWithSetNumbers = (questions) => {
+    if (!questions || !Array.isArray(questions) || questions.length === 0) return [];
+
+    const sectionOrder = [];
+    const sectionInfo = new Map();
+
+    questions.forEach((q, i) => {
+      let rawSec = (q.section || '').trim();
+      const hasOpts = q.options && q.options.length > 0;
+      const isMcq = hasOpts || /mcq|multiple choice/i.test(rawSec);
+
+      let secKey = rawSec;
+      if (!secKey) {
+        secKey = isMcq ? '1. Multiple Choice Questions (MCQ)' : 'Descriptive Questions';
+      }
+
+      if (!sectionInfo.has(secKey)) {
+        sectionInfo.set(secKey, {
+          name: secKey,
+          isMcq,
+          firstIndex: i
+        });
+        sectionOrder.push(secKey);
+      }
+    });
+
+    const sectionToSetNum = new Map();
+    const usedNumbers = new Set();
+
+    // 1. Any section with explicit leading number like "1. MCQ" or "2. Short Questions"
+    sectionOrder.forEach(secKey => {
+      const numMatch = secKey.match(/^(\d+)[.):\s]/);
+      if (numMatch) {
+        const num = parseInt(numMatch[1], 10);
+        sectionToSetNum.set(secKey, num);
+        usedNumbers.add(num);
+      }
+    });
+
+    // 2. If MCQ section exists and doesn't have an explicit number, assign 1
+    const mcqSec = sectionOrder.find(sec => sectionInfo.get(sec)?.isMcq);
+    if (mcqSec && !sectionToSetNum.has(mcqSec)) {
+      if (!usedNumbers.has(1)) {
+        sectionToSetNum.set(mcqSec, 1);
+        usedNumbers.add(1);
+      }
+    }
+
+    // 3. Assign sequential numbers (1, 2, 3...) to remaining sections
+    let currentCounter = 1;
+    sectionOrder.forEach(secKey => {
+      if (!sectionToSetNum.has(secKey)) {
+        while (usedNumbers.has(currentCounter)) {
+          currentCounter++;
+        }
+        sectionToSetNum.set(secKey, currentCounter);
+        usedNumbers.add(currentCounter);
+      }
+    });
+
+    const setCounters = {};
+
+    return questions.map((q) => {
+      let rawSec = (q.section || '').trim();
+      const hasOpts = q.options && q.options.length > 0;
+      const isMcq = hasOpts || /mcq|multiple choice/i.test(rawSec);
+
+      let secKey = rawSec;
+      if (!secKey) {
+        secKey = isMcq ? '1. Multiple Choice Questions (MCQ)' : 'Descriptive Questions';
+      }
+
+      const setNum = sectionToSetNum.get(secKey) || 1;
+      setCounters[setNum] = (setCounters[setNum] || 0) + 1;
+      const subNum = setCounters[setNum];
+      const displayNumber = `${setNum}.${subNum}`;
+
+      let cleanSecTitle = secKey.replace(/^(?:section|part)?\s*\d+[:.)\s-]*/i, '').trim();
+      if (!cleanSecTitle) cleanSecTitle = secKey;
+
+      return {
+        ...q,
+        setNumber: setNum,
+        subNumber: subNum,
+        displayNumber,
+        cleanSectionTitle: cleanSecTitle
+      };
+    });
+  };
+
   // Parser to convert questions into structured clean array without any markdown
   const parseQuestionsData = (raw) => {
     if (!raw) return [];
 
+    let result = [];
+
     // If already an array of question objects
     if (Array.isArray(raw)) {
-      return raw.map((q, i) => ({
+      result = raw.map((q, i) => ({
         ...q,
         id: q.id || i + 1,
         section: cleanText(q.section || 'General Section'),
@@ -195,11 +288,12 @@ function KidProfileContent() {
         options: (q.options || []).map(opt => cleanText(opt)),
         answerKey: cleanText(q.answerKey || q.correctAnswer || q.solution || '')
       }));
+      return enrichWithSetNumbers(result);
     }
 
     // If an object with a .questions array
     if (typeof raw === 'object' && Array.isArray(raw.questions)) {
-      return raw.questions.map((q, i) => ({
+      result = raw.questions.map((q, i) => ({
         ...q,
         id: q.id || i + 1,
         section: cleanText(q.section || 'General Section'),
@@ -207,6 +301,7 @@ function KidProfileContent() {
         options: (q.options || []).map(opt => cleanText(opt)),
         answerKey: cleanText(q.answerKey || q.correctAnswer || q.solution || '')
       }));
+      return enrichWithSetNumbers(result);
     }
 
     if (typeof raw === 'string') {
@@ -214,34 +309,34 @@ function KidProfileContent() {
         const clean = raw.replace(/```json\s*/gi, '').replace(/```\s*$/gi, '').trim();
         const parsed = JSON.parse(clean);
         if (Array.isArray(parsed)) {
-          return parsed.map((q, i) => ({
+          return enrichWithSetNumbers(parsed.map((q, i) => ({
             ...q,
             id: q.id || i + 1,
             section: cleanText(q.section || 'General Section'),
             question: cleanText(q.question),
             options: (q.options || []).map(opt => cleanText(opt)),
             answerKey: cleanText(q.answerKey || q.correctAnswer || q.solution || '')
-          }));
+          })));
         }
         if (parsed && Array.isArray(parsed.questions)) {
-          return parsed.questions.map((q, i) => ({
+          return enrichWithSetNumbers(parsed.questions.map((q, i) => ({
             ...q,
             id: q.id || i + 1,
             section: cleanText(q.section || 'General Section'),
             question: cleanText(q.question),
             options: (q.options || []).map(opt => cleanText(opt)),
             answerKey: cleanText(q.answerKey || q.correctAnswer || q.solution || '')
-          }));
+          })));
         }
         if (parsed && parsed.modelTest && Array.isArray(parsed.modelTest.questions)) {
-          return parsed.modelTest.questions.map((q, i) => ({
+          return enrichWithSetNumbers(parsed.modelTest.questions.map((q, i) => ({
             ...q,
             id: q.id || i + 1,
             section: cleanText(q.section || 'General Section'),
             question: cleanText(q.question),
             options: (q.options || []).map(opt => cleanText(opt)),
             answerKey: cleanText(q.answerKey || q.correctAnswer || q.solution || '')
-          }));
+          })));
         }
         if (parsed && Array.isArray(parsed.sections)) {
           const collected = [];
@@ -260,7 +355,7 @@ function KidProfileContent() {
               });
             }
           });
-          if (collected.length > 0) return collected;
+          if (collected.length > 0) return enrichWithSetNumbers(collected);
         }
       } catch (_) {}
 
@@ -325,9 +420,9 @@ function KidProfileContent() {
       }
 
       if (currentQ) questions.push(currentQ);
-      if (questions.length > 0) return questions;
+      if (questions.length > 0) return enrichWithSetNumbers(questions);
 
-      return [
+      return enrichWithSetNumbers([
         {
           id: 1,
           number: 1,
@@ -337,9 +432,8 @@ function KidProfileContent() {
           options: [],
           answerKey: ''
         }
-      ];
+      ]);
     }
-
     return [];
   };
 
@@ -2761,36 +2855,132 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
         </div>
       )}
 
-      {/* Model Test Question Paper, Answer Sheet & Grading Modal */}
+      {/* Model Test Question Paper, Answer Sheet & Grading Full Page */}
       {viewingModelTest && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 120, padding: '1rem' }}>
-          <div className="card" style={{ maxWidth: '820px', width: '100%', maxHeight: '94vh', overflowY: 'auto', position: 'relative', animation: 'fadeIn 0.25s ease-out', textAlign: 'left', padding: '1.8rem' }}>
-            
-            {/* Viewer Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem', borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.8rem' }}>
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, width: '100vw', height: '100vh', zIndex: 9999, overflowY: 'auto', background: '#090d16', display: 'flex', flexDirection: 'column' }}>
+          
+          {/* Top Sticky Header */}
+          <header style={{
+            position: 'sticky',
+            top: 0,
+            zIndex: 100,
+            background: 'rgba(15, 23, 42, 0.95)',
+            backdropFilter: 'blur(12px)',
+            borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+            padding: '0.75rem 1.5rem',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: '1rem',
+            flexWrap: 'wrap'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+              <button
+                type="button"
+                onClick={() => setViewingModelTest(null)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                  padding: '0.4rem 0.85rem',
+                  borderRadius: '8px',
+                  background: 'rgba(255, 255, 255, 0.08)',
+                  border: '1px solid rgba(255, 255, 255, 0.15)',
+                  color: '#fff',
+                  fontSize: '0.85rem',
+                  fontWeight: 600,
+                  cursor: 'pointer'
+                }}
+              >
+                ← Exit Exam
+              </button>
+
               <div>
-                <h2 style={{ margin: '0 0 0.3rem 0', fontSize: '1.45rem', color: '#fff' }}>
-                  {viewingModelTest.title || 'Model Test'}
-                </h2>
-                <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-                  <span>📅 {viewingModelTest.date || 'Today'}</span>
-                  <span>• Total Marks: {totalMaxMarks}</span>
+                <h2 style={{ margin: 0, fontSize: '1.2rem', color: '#fff', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                  <span>{viewingModelTest.title || 'Model Test'}</span>
                   {viewingModelTest.difficulty && (
-                    <span style={{ padding: '0.1rem 0.5rem', borderRadius: '10px', background: 'rgba(139, 92, 246, 0.2)', color: 'var(--accent-primary)', fontWeight: 600, fontSize: '0.72rem' }}>
+                    <span style={{ padding: '0.1rem 0.5rem', borderRadius: '8px', background: 'rgba(139, 92, 246, 0.2)', color: 'var(--accent-primary)', fontWeight: 600, fontSize: '0.72rem' }}>
                       {viewingModelTest.difficulty}
                     </span>
                   )}
+                </h2>
+                <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                  <span>📅 {viewingModelTest.date || 'Today'}</span>
+                  <span>• Total Marks: {totalMaxMarks}</span>
                 </div>
               </div>
+            </div>
 
-              {/* Close Button */}
-              <button 
-                onClick={() => setViewingModelTest(null)}
-                style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1.4rem', padding: '0.2rem 0.5rem' }}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', background: 'rgba(0,0,0,0.4)', padding: '3px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)' }}>
+                <button
+                  type="button"
+                  onClick={() => setTestViewMode('student')}
+                  style={{
+                    padding: '0.35rem 0.8rem',
+                    borderRadius: '6px',
+                    border: 'none',
+                    fontSize: '0.8rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    background: testViewMode === 'student' ? 'var(--accent-gradient)' : 'transparent',
+                    color: testViewMode === 'student' ? '#fff' : 'var(--text-secondary)'
+                  }}
+                >
+                  👨‍🎓 Student
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTestViewMode('examiner')}
+                  style={{
+                    padding: '0.35rem 0.8rem',
+                    borderRadius: '6px',
+                    border: 'none',
+                    fontSize: '0.8rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    background: testViewMode === 'examiner' ? 'var(--accent-gradient)' : 'transparent',
+                    color: testViewMode === 'examiner' ? '#fff' : 'var(--text-secondary)'
+                  }}
+                >
+                  📝 Examiner
+                </button>
+              </div>
+
+              {/* Current Result Pill */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Current:</span>
+                <span style={{ fontSize: '0.88rem', fontWeight: 700, color: '#34d399', background: 'rgba(16, 185, 129, 0.15)', padding: '0.2rem 0.65rem', borderRadius: '14px', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
+                  Result {currentDisplayResult}
+                </span>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => copyToClipboard(viewingModelTest.questions)}
+                style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '6px', color: '#cbd5e1', cursor: 'pointer' }}
               >
-                ✕
+                {copiedSuccess ? '✓ Copied' : '📋 Copy'}
+              </button>
+              <button
+                type="button"
+                onClick={() => window.print()}
+                style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '6px', color: '#cbd5e1', cursor: 'pointer' }}
+              >
+                🖨️ Print
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewingModelTest(null)}
+                style={{ padding: '0.4rem 0.8rem', background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#f87171', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
+              >
+                ✕ Exit
               </button>
             </div>
+          </header>
+
+          {/* Full Page Body */}
+          <main style={{ flex: 1, width: '100%', maxWidth: '1080px', margin: '0 auto', padding: '1.5rem 1.5rem 4rem 1.5rem', textAlign: 'left' }}>
 
             {/* Notification Banner */}
             {notificationMsg && (
@@ -2798,54 +2988,6 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                 {notificationMsg}
               </div>
             )}
-
-            {/* Mode Selector Tab Bar */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.3)', padding: '0.5rem', borderRadius: '10px', marginBottom: '1.25rem', gap: '0.5rem', flexWrap: 'wrap' }}>
-              <div style={{ display: 'flex', gap: '0.4rem' }}>
-                <button
-                  type="button"
-                  onClick={() => setTestViewMode('student')}
-                  style={{
-                    padding: '0.45rem 1rem',
-                    fontSize: '0.85rem',
-                    fontWeight: 600,
-                    borderRadius: '8px',
-                    border: 'none',
-                    cursor: 'pointer',
-                    background: testViewMode === 'student' ? 'var(--accent-gradient)' : 'rgba(255,255,255,0.05)',
-                    color: testViewMode === 'student' ? '#fff' : 'var(--text-secondary)',
-                    transition: 'all 0.2s'
-                  }}
-                >
-                  👨‍🎓 Student: Answer & Upload Paper
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTestViewMode('examiner')}
-                  style={{
-                    padding: '0.45rem 1rem',
-                    fontSize: '0.85rem',
-                    fontWeight: 600,
-                    borderRadius: '8px',
-                    border: 'none',
-                    cursor: 'pointer',
-                    background: testViewMode === 'examiner' ? 'var(--accent-gradient)' : 'rgba(255,255,255,0.05)',
-                    color: testViewMode === 'examiner' ? '#fff' : 'var(--text-secondary)',
-                    transition: 'all 0.2s'
-                  }}
-                >
-                  📝 Examiner: Check & Give Number
-                </button>
-              </div>
-
-              {/* Current Result Pill */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Current:</span>
-                <span style={{ fontSize: '0.9rem', fontWeight: 700, color: '#34d399', background: 'rgba(16, 185, 129, 0.15)', padding: '0.2rem 0.65rem', borderRadius: '14px', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
-                  Result {currentDisplayResult}
-                </span>
-              </div>
-            </div>
 
             {/* EXAMINER MODE: Student's Uploaded Answer Paper Gallery (Top Inspection Strip) */}
             {testViewMode === 'examiner' && (
@@ -2965,10 +3107,17 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
 
             {/* Slide Navigation Header Bar (Question Counter, Live Saving Indicator, Mode Switcher) */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
                 <span style={{ fontSize: '1rem', fontWeight: 700, color: '#fff' }}>
-                  {questionDisplayMode === 'slide' ? `Question ${currentSlideIndex + 1} of ${parsedQuestions.length}` : `All Questions (${parsedQuestions.length})`}
+                  {questionDisplayMode === 'slide' 
+                    ? `Question ${parsedQuestions[currentSlideIndex]?.displayNumber || currentSlideIndex + 1} of ${parsedQuestions.length}` 
+                    : `All Questions (${parsedQuestions.length})`}
                 </span>
+                {questionDisplayMode === 'slide' && parsedQuestions[currentSlideIndex] && (
+                  <span style={{ fontSize: '0.8rem', color: '#c4b5fd', background: 'rgba(139, 92, 246, 0.12)', border: '1px solid rgba(139, 92, 246, 0.25)', padding: '0.15rem 0.5rem', borderRadius: '6px' }}>
+                    Set {parsedQuestions[currentSlideIndex].setNumber}: {parsedQuestions[currentSlideIndex].cleanSectionTitle}
+                  </span>
+                )}
                 <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', padding: '0.15rem 0.6rem', borderRadius: '12px', background: 'rgba(255,255,255,0.06)' }}>
                   {testViewMode === 'student' 
                     ? `${answeredQuestionsCount}/${parsedQuestions.length} Answered` 
@@ -3090,7 +3239,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                         gap: '0.3rem'
                       }}
                     >
-                      <span>Q{q.id || qIdx + 1}</span>
+                      <span>{q.displayNumber || `Q${q.id || qIdx + 1}`}</span>
                       {testViewMode === 'student' && isAns && <span style={{ fontSize: '0.7rem', color: '#34d399' }}>✓</span>}
                       {testViewMode === 'examiner' && isGrd && <span style={{ fontSize: '0.68rem', color: '#34d399' }}>[{awd}/{qMax}]</span>}
                     </button>
@@ -3115,46 +3264,62 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                 const isGrd = awardedMarks[q.id] !== undefined && awardedMarks[q.id] !== '';
 
                 return (
-                  <div
-                    key={q.id || actualIndex}
-                    style={{
-                      background: 'rgba(0,0,0,0.28)',
-                      border: '1px solid rgba(255,255,255,0.08)',
-                      borderRadius: '12px',
-                      padding: '1.3rem',
-                      textAlign: 'left',
-                      boxShadow: '0 4px 16px rgba(0,0,0,0.25)'
-                    }}
-                  >
-                    {/* Question Header: Section & Marks */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.4rem' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                        <span style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--accent-primary)', background: 'rgba(139, 92, 246, 0.15)', padding: '0.18rem 0.6rem', borderRadius: '6px' }}>
-                          Q{q.id || actualIndex + 1}
+                  <div key={q.id || actualIndex} style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    {/* Set Divider in All List Mode */}
+                    {questionDisplayMode === 'list' && (idx === 0 || q.setNumber !== parsedQuestions[idx - 1]?.setNumber) && (
+                      <div style={{
+                        padding: '0.6rem 1rem',
+                        borderRadius: '8px',
+                        background: 'linear-gradient(90deg, rgba(139, 92, 246, 0.18) 0%, rgba(59, 130, 246, 0.08) 100%)',
+                        borderLeft: '4px solid var(--accent-primary)',
+                        marginTop: idx > 0 ? '0.75rem' : '0',
+                        marginBottom: '0.25rem'
+                      }}>
+                        <span style={{ fontSize: '0.95rem', fontWeight: 700, color: '#fff' }}>
+                          Set {q.setNumber}: {q.cleanSectionTitle || q.section || 'Questions'}
                         </span>
-                        {q.section && (
-                          <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                            {q.section}
-                          </span>
-                        )}
                       </div>
+                    )}
+
+                    <div
+                      style={{
+                        background: 'rgba(0,0,0,0.28)',
+                        border: '1px solid rgba(255,255,255,0.08)',
+                        borderRadius: '12px',
+                        padding: '1.3rem',
+                        textAlign: 'left',
+                        boxShadow: '0 4px 16px rgba(0,0,0,0.25)'
+                      }}
+                    >
+                      {/* Question Header: Section & Marks */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.4rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--accent-primary)', background: 'rgba(139, 92, 246, 0.15)', padding: '0.18rem 0.6rem', borderRadius: '6px' }}>
+                            Question {q.displayNumber || q.id || actualIndex + 1}
+                          </span>
+                          {(q.cleanSectionTitle || q.section) && (
+                            <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                              Set {q.setNumber}: {q.cleanSectionTitle || q.section}
+                            </span>
+                          )}
+                        </div>
                       
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        {testViewMode === 'student' && isAns && (
-                          <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#34d399', background: 'rgba(16, 185, 129, 0.15)', padding: '0.15rem 0.5rem', borderRadius: '10px' }}>
-                            ✓ Answered
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          {testViewMode === 'student' && isAns && (
+                            <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#34d399', background: 'rgba(16, 185, 129, 0.15)', padding: '0.15rem 0.5rem', borderRadius: '10px' }}>
+                              ✓ Answered
+                            </span>
+                          )}
+                          {testViewMode === 'examiner' && (
+                            <span style={{ fontSize: '0.75rem', fontWeight: 600, color: isGrd ? '#34d399' : '#facc15', background: isGrd ? 'rgba(16, 185, 129, 0.15)' : 'rgba(234, 179, 8, 0.15)', padding: '0.15rem 0.5rem', borderRadius: '10px' }}>
+                              {isGrd ? `✓ Awarded: ${awarded}/${qMarks}` : 'Pending Marking'}
+                            </span>
+                          )}
+                          <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#f1f5f9', background: 'rgba(255,255,255,0.06)', padding: '0.2rem 0.6rem', borderRadius: '12px' }}>
+                            [{qMarks} Marks]
                           </span>
-                        )}
-                        {testViewMode === 'examiner' && (
-                          <span style={{ fontSize: '0.75rem', fontWeight: 600, color: isGrd ? '#34d399' : '#facc15', background: isGrd ? 'rgba(16, 185, 129, 0.15)' : 'rgba(234, 179, 8, 0.15)', padding: '0.15rem 0.5rem', borderRadius: '10px' }}>
-                            {isGrd ? `✓ Awarded: ${awarded}/${qMarks}` : 'Pending Marking'}
-                          </span>
-                        )}
-                        <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#f1f5f9', background: 'rgba(255,255,255,0.06)', padding: '0.2rem 0.6rem', borderRadius: '12px' }}>
-                          [{qMarks} Marks]
-                        </span>
+                        </div>
                       </div>
-                    </div>
 
                     {/* Question Prompt */}
                     <div style={{ fontSize: '1.02rem', color: '#f8fafc', lineHeight: 1.6, marginBottom: '0.9rem', whiteSpace: 'pre-line' }}>
@@ -3435,6 +3600,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                       </div>
                     )}
 
+                    </div>
                   </div>
                 );
               })}
@@ -3480,7 +3646,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                 {/* Center Slide Indicator & Keyboard Hint */}
                 <div style={{ textAlign: 'center' }}>
                   <span style={{ fontSize: '0.83rem', fontWeight: 600, color: '#f1f5f9' }}>
-                    Question {currentSlideIndex + 1} of {parsedQuestions.length}
+                    Question {parsedQuestions[currentSlideIndex]?.displayNumber || currentSlideIndex + 1} of {parsedQuestions.length}
                   </span>
                   <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '0.1rem' }}>
                     Tip: Use ← → keyboard arrow keys to slide
@@ -3616,7 +3782,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
               </button>
             </div>
 
-          </div>
+          </main>
         </div>
       )}
 
