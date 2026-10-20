@@ -8,6 +8,7 @@ import { ref, onValue, set, push, remove } from 'firebase/database';
 import { generateGeminiContent } from '../../../lib/gemini';
 import Link from 'next/link';
 import MarkDistributionField from '../../../components/MarkDistributionField';
+import MarkDistributionView from '../../../components/MarkDistributionView';
 
 function ExamPageContent() {
   const router = useRouter();
@@ -833,17 +834,12 @@ ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n
               </div>
             </div>
           ) : (
-            <div style={{ textAlign: 'left', background: 'rgba(0,0,0,0.22)', border: '1px solid rgba(255,255,255,0.04)', borderRadius: '10px', padding: '1rem' }}>
-              {markDistValue ? (
-                <p style={{ margin: 0, fontSize: '0.92rem', color: '#cbd5e1', whiteSpace: 'pre-line', lineHeight: 1.55 }}>
-                  {markDistValue}
-                </p>
-              ) : (
-                <p style={{ margin: 0, fontSize: '0.88rem', color: 'var(--text-secondary)', opacity: 0.8 }}>
-                  No mark distribution configured for this exam yet. Click <strong>Set Mark Distribution</strong> to set MCQ, short questions, and descriptive mark allocation.
-                </p>
-              )}
-            </div>
+            <MarkDistributionView
+              value={markDistValue}
+              onEdit={() => setIsEditingMarkDist(true)}
+              defaultLayout="cards"
+              showWeightageBar={true}
+            />
           )}
         </div>
 
