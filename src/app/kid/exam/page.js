@@ -63,6 +63,13 @@ function ExamPageContent() {
   const [newChapterTitle, setNewChapterTitle] = useState('');
   const [newChapterPdfPage, setNewChapterPdfPage] = useState('');
 
+  // Timer & Exam completion state
+  const [isExamStarted, setIsExamStarted] = useState(false);
+  const [isExamFinished, setIsExamFinished] = useState(false);
+  const [examStartedAt, setExamStartedAt] = useState(null);
+  const [examSubmittedAt, setExamSubmittedAt] = useState(null);
+  const [timerSeconds, setTimerSeconds] = useState(0);
+
   const saveDebounceTimer = useRef(null);
 
   // Compress image helper for uploaded answer sheets
@@ -610,6 +617,39 @@ Ensure the "questions" array contains ALL the individual generated questions cov
     }
   };
 
+  const formatTime = (totalSeconds) => {
+    const s = Math.max(0, Math.floor(totalSeconds));
+    const hrs = Math.floor(s / 3600);
+    const mins = Math.floor((s % 3600) / 60);
+    const secs = s % 60;
+    if (hrs > 0) {
+      return `${hrs}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    }
+    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  };
+
+  const formatDuration = (totalSeconds) => {
+    const s = Math.max(0, Math.floor(totalSeconds));
+    const hrs = Math.floor(s / 3600);
+    const mins = Math.floor((s % 3600) / 60);
+    const secs = s % 60;
+    if (hrs > 0) return `${hrs}h ${mins}m ${secs}s`;
+    if (mins > 0) return `${mins}m ${secs}s`;
+    return `${secs}s`;
+  };
+
+  // Timer effect
+  useEffect(() => {
+    if (!viewingModelTest || isExamFinished || !isExamStarted || !examStartedAt) return;
+
+    setTimerSeconds(Math.floor((Date.now() - examStartedAt) / 1000));
+    const interval = setInterval(() => {
+      setTimerSeconds(Math.floor((Date.now() - examStartedAt) / 1000));
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [viewingModelTest, isExamFinished, isExamStarted, examStartedAt]);
+
   // Open test viewer modal
   const openTestViewer = (test) => {
     setViewingModelTest(test);
@@ -623,6 +663,81 @@ Ensure the "questions" array contains ALL the individual generated questions cov
     setOverallExaminerFeedback(test.examinerGrading?.overallFeedback || '');
     setNotificationMsg('');
     setSavingStatus('');
+
+    const finished = Boolean(test.isFinished || test.submittedAt || test.examinerGrading?.evaluatedAt);
+    const hasStarted = Boolean(test.startedAt || finished || (test.studentAnswers && Object.keys(test.studentAnswers).length > 0));
+    setIsExamFinished(finished);
+    setIsExamStarted(hasStarted);
+    setExamStartedAt(test.startedAt || (hasStarted ? Date.now() : null));
+    setExamSubmittedAt(test.submittedAt || null);
+  };
+
+  const handleStartExam = async () => {
+    if (!viewingModelTest || !user || !kid || !subject || !exam) return;
+    const now = Date.now();
+    setExamStartedAt(now);
+    setIsExamStarted(true);
+    try {
+      const path = `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${subject.id}/modelTests/${exam.id}/${viewingModelTest.testId || viewingModelTest.id}`;
+      await set(ref(database, `${path}/startedAt`), now);
+      setViewingModelTest(prev => ({
+        ...prev,
+        startedAt: now
+      }));
+    } catch (err) {
+      console.error('Error starting exam timer:', err);
+    }
+  };
+
+  const handleFinishAndSubmitExam = async () => {
+    if (!viewingModelTest || !user || !kid || !subject || !exam) return;
+    const confirmed = window.confirm("Are you sure you want to finish and submit your exam? Once submitted, the timer will stop and answers will be unlocked for review.");
+    if (!confirmed) return;
+
+    try {
+      setSavingStatus('saving');
+      const now = Date.now();
+      const timeSpent = examStartedAt ? Math.max(1, Math.floor((now - examStartedAt) / 1000)) : (viewingModelTest.timeSpentSeconds || 0);
+
+      const path = `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${subject.id}/modelTests/${exam.id}/${viewingModelTest.testId || viewingModelTest.id}`;
+      await set(ref(database, `${path}/isFinished`), true);
+      await set(ref(database, `${path}/submittedAt`), now);
+      await set(ref(database, `${path}/timeSpentSeconds`), timeSpent);
+      await set(ref(database, `${path}/studentAnswers`), studentAnswers);
+
+      setViewingModelTest(prev => ({
+        ...prev,
+        isFinished: true,
+        submittedAt: now,
+        timeSpentSeconds: timeSpent,
+        studentAnswers
+      }));
+
+      setIsExamFinished(true);
+      setExamSubmittedAt(now);
+      setNotificationMsg('🎉 Exam completed and submitted successfully! Answer keys and solutions are now unlocked.');
+      setTimeout(() => setNotificationMsg(''), 4500);
+    } catch (err) {
+      alert('Error submitting exam: ' + err.message);
+    } finally {
+      setSavingStatus('');
+    }
+  };
+
+  const handleCopyTest = () => {
+    if (!viewingModelTest) return;
+    if (!isExamFinished && testViewMode === 'student') {
+      const questionsOnly = modalQuestions.map(q => {
+        let text = `${q.displayNumber}. ${q.question}`;
+        if (q.options && q.options.length > 0) {
+          text += '\n' + q.options.join('\n');
+        }
+        return text;
+      }).join('\n\n');
+      copyToClipboard(questionsOnly);
+    } else {
+      copyToClipboard(viewingModelTest.questions);
+    }
   };
 
   const handleDeleteModelTest = async (testId) => {
@@ -819,6 +934,17 @@ Ensure the "questions" array contains ALL the individual generated questions cov
         : (viewingModelTest?.result && viewingModelTest.result !== '40/100' && viewingModelTest.result !== 'Pending'
             ? viewingModelTest.result
             : `0/${modalTotalMax}`));
+
+  const defaultDurationMinutes = viewingModelTest?.duration 
+    ? Number(viewingModelTest.duration) 
+    : (modalTotalMax <= 20 ? 30 : modalTotalMax <= 50 ? 60 : modalTotalMax <= 100 ? 90 : 120);
+  const totalDurationSeconds = defaultDurationMinutes * 60;
+  const elapsedSeconds = isExamFinished && viewingModelTest?.timeSpentSeconds 
+    ? Number(viewingModelTest.timeSpentSeconds) 
+    : (examStartedAt ? Math.max(0, Math.floor((Date.now() - examStartedAt) / 1000)) : 0);
+  const remainingSeconds = Math.max(0, totalDurationSeconds - elapsedSeconds);
+  const isTimeLow = isExamStarted && !isExamFinished && remainingSeconds <= 300 && remainingSeconds > 0;
+  const isTimeUp = isExamStarted && !isExamFinished && remainingSeconds === 0;
 
   return (
     <main className="view-container">
@@ -1635,6 +1761,46 @@ Ensure the "questions" array contains ALL the individual generated questions cov
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+              
+              {/* Live Exam Timer Badge */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.45rem',
+                padding: '0.35rem 0.8rem',
+                borderRadius: '8px',
+                background: isExamFinished 
+                  ? 'rgba(16, 185, 129, 0.12)' 
+                  : (isTimeLow || isTimeUp ? 'rgba(239, 68, 68, 0.18)' : 'rgba(0, 0, 0, 0.45)'),
+                border: `1px solid ${isExamFinished 
+                  ? 'rgba(16, 185, 129, 0.35)' 
+                  : (isTimeLow || isTimeUp ? '#ef4444' : 'rgba(255, 255, 255, 0.12)')}`,
+                boxShadow: isTimeLow ? '0 0 10px rgba(239, 68, 68, 0.35)' : 'none'
+              }}>
+                <span style={{ fontSize: '1rem' }}>
+                  {isExamFinished ? '⏱️' : (isTimeLow || isTimeUp ? '⏰' : '⏱️')}
+                </span>
+                <div style={{ textAlign: 'left', minWidth: '70px' }}>
+                  <div style={{
+                    fontSize: '0.9rem',
+                    fontWeight: 800,
+                    fontFamily: 'monospace',
+                    letterSpacing: '0.5px',
+                    color: isExamFinished 
+                      ? '#34d399' 
+                      : (isTimeLow || isTimeUp ? '#f87171' : '#38bdf8')
+                  }}>
+                    {isExamFinished 
+                      ? formatDuration(elapsedSeconds)
+                      : (isExamStarted ? formatTime(remainingSeconds) : `${defaultDurationMinutes}m Limit`)}
+                  </div>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>
+                    {isExamFinished ? 'Time Taken' : (isExamStarted ? 'Time Left' : 'Duration')}
+                  </div>
+                </div>
+              </div>
+
+              {/* Mode Switcher */}
               <div style={{ display: 'flex', background: 'rgba(0,0,0,0.4)', padding: '0.2rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.08)' }}>
                 <button
                   type="button"
@@ -1654,7 +1820,17 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                 </button>
                 <button
                   type="button"
-                  onClick={() => setTestViewMode('examiner')}
+                  onClick={() => {
+                    if (!isExamFinished) {
+                      const unlock = window.confirm("🔒 Student has not submitted this exam yet. Answers and rubrics are locked.\n\nAre you a teacher/parent who wants to finish the exam now to evaluate?");
+                      if (unlock) {
+                        handleFinishAndSubmitExam();
+                        setTestViewMode('examiner');
+                      }
+                      return;
+                    }
+                    setTestViewMode('examiner');
+                  }}
                   style={{
                     padding: '0.35rem 0.8rem',
                     borderRadius: '6px',
@@ -1663,16 +1839,17 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                     fontWeight: 600,
                     cursor: 'pointer',
                     background: testViewMode === 'examiner' ? 'var(--accent-gradient)' : 'transparent',
-                    color: testViewMode === 'examiner' ? '#fff' : 'var(--text-secondary)'
+                    color: testViewMode === 'examiner' ? '#fff' : (!isExamFinished ? 'rgba(255,255,255,0.45)' : 'var(--text-secondary)')
                   }}
+                  title={!isExamFinished ? 'Locked until student finishes the exam' : 'Examiner Mode'}
                 >
-                  📝 Examiner
+                  {!isExamFinished ? '🔒 Examiner' : '📝 Examiner'}
                 </button>
               </div>
 
               <button
                 type="button"
-                onClick={() => copyToClipboard(viewingModelTest.questions)}
+                onClick={handleCopyTest}
                 style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '6px', color: '#cbd5e1', cursor: 'pointer' }}
               >
                 {copiedSuccess ? '✓ Copied' : '📋 Copy'}
@@ -1704,6 +1881,105 @@ Ensure the "questions" array contains ALL the individual generated questions cov
               </div>
             )}
 
+            {/* Exam Finished & Submitted Review Banner */}
+            {isExamFinished && (
+              <div style={{
+                background: 'linear-gradient(90deg, rgba(16, 185, 129, 0.15) 0%, rgba(59, 130, 246, 0.1) 100%)',
+                border: '1px solid rgba(16, 185, 129, 0.35)',
+                borderRadius: '12px',
+                padding: '1rem 1.4rem',
+                marginBottom: '1.25rem',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: '0.8rem'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <span style={{ fontSize: '1.6rem' }}>🎉</span>
+                  <div>
+                    <div style={{ fontSize: '1.05rem', fontWeight: 700, color: '#fff' }}>Exam Completed & Submitted</div>
+                    <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                      Review mode unlocked. Correct answers, solution rubrics, and detailed breakdowns are visible below.
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.85rem', color: '#34d399', background: 'rgba(16, 185, 129, 0.2)', padding: '0.3rem 0.8rem', borderRadius: '12px', fontWeight: 700 }}>
+                    ⏱️ Time Taken: {formatDuration(elapsedSeconds)}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Student Exam Not Started Screen */}
+            {testViewMode === 'student' && !isExamStarted && !isExamFinished ? (
+              <div style={{
+                background: 'rgba(15, 23, 42, 0.85)',
+                border: '1px solid rgba(139, 92, 246, 0.3)',
+                borderRadius: '16px',
+                padding: '2.5rem',
+                textAlign: 'center',
+                maxWidth: '680px',
+                margin: '2rem auto',
+                boxShadow: '0 10px 40px rgba(0,0,0,0.5)'
+              }}>
+                <div style={{ fontSize: '3rem', marginBottom: '0.75rem' }}>📝</div>
+                <h2 style={{ fontSize: '1.6rem', color: '#fff', margin: '0 0 0.5rem 0' }}>
+                  Ready to take {viewingModelTest.title || 'Model Test'}?
+                </h2>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.92rem', marginBottom: '1.5rem', lineHeight: 1.6 }}>
+                  This exam contains <strong>{modalQuestions.length} Questions</strong> with a total of <strong>{modalTotalMax} Marks</strong>.
+                </p>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.8rem', marginBottom: '1.8rem', textAlign: 'center' }}>
+                  <div style={{ background: 'rgba(255,255,255,0.04)', padding: '0.75rem', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Questions</div>
+                    <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#fff' }}>{modalQuestions.length}</div>
+                  </div>
+                  <div style={{ background: 'rgba(255,255,255,0.04)', padding: '0.75rem', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Total Marks</div>
+                    <div style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--accent-primary)' }}>{modalTotalMax}</div>
+                  </div>
+                  <div style={{ background: 'rgba(255,255,255,0.04)', padding: '0.75rem', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Time Limit</div>
+                    <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#38bdf8' }}>{defaultDurationMinutes} Min</div>
+                  </div>
+                </div>
+
+                <div style={{ background: 'rgba(0,0,0,0.3)', borderRadius: '10px', padding: '1rem', marginBottom: '2rem', textAlign: 'left', border: '1px solid rgba(255,255,255,0.06)' }}>
+                  <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#f1f5f9', marginBottom: '0.4rem' }}>
+                    ⚠️ Exam Rules & Instructions:
+                  </div>
+                  <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.82rem', color: 'var(--text-secondary)', lineHeight: 1.7 }}>
+                    <li>The <strong>{defaultDurationMinutes}-minute countdown timer</strong> will begin as soon as you click Start Exam.</li>
+                    <li>All typed answers and selected options will save automatically in real-time.</li>
+                    <li><strong>Answers and solutions are hidden</strong> until you finish and submit your paper.</li>
+                    <li>You can attach photos of your handwritten answer papers at any time.</li>
+                  </ul>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleStartExam}
+                  style={{
+                    padding: '0.85rem 2.5rem',
+                    fontSize: '1.05rem',
+                    fontWeight: 700,
+                    background: 'var(--accent-gradient)',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: '10px',
+                    cursor: 'pointer',
+                    boxShadow: '0 4px 20px rgba(139, 92, 246, 0.45)',
+                    transition: 'transform 0.15s ease'
+                  }}
+                >
+                  🚀 Start Exam Now
+                </button>
+              </div>
+            ) : (
+              <>
             {/* Uploaded Answer Paper Gallery */}
             {testViewMode === 'examiner' && (
               <div style={{ marginBottom: '1.25rem', background: 'rgba(139, 92, 246, 0.08)', border: '1px solid rgba(139, 92, 246, 0.25)', borderRadius: '12px', padding: '0.9rem' }}>
@@ -1969,12 +2245,38 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                             );
                             const isCorrectKey = hasKey && (q.answerKey.toLowerCase().includes(opt.slice(0, 2).toLowerCase()) || q.answerKey.toLowerCase().includes(opt.toLowerCase()));
 
+                            let btnBg = 'rgba(255,255,255,0.03)';
+                            let btnBorder = 'rgba(255,255,255,0.08)';
+                            let btnColor = 'var(--text-secondary)';
+
+                            if (!isExamFinished) {
+                              if (isPicked) {
+                                btnBg = 'rgba(139, 92, 246, 0.25)';
+                                btnBorder = 'var(--accent-primary)';
+                                btnColor = '#fff';
+                              }
+                            } else {
+                              if (isPicked && isCorrectKey) {
+                                btnBg = 'rgba(16, 185, 129, 0.22)';
+                                btnBorder = '#10b981';
+                                btnColor = '#fff';
+                              } else if (isPicked && !isCorrectKey) {
+                                btnBg = 'rgba(239, 68, 68, 0.22)';
+                                btnBorder = '#ef4444';
+                                btnColor = '#fff';
+                              } else if (!isPicked && isCorrectKey) {
+                                btnBg = 'rgba(16, 185, 129, 0.1)';
+                                btnBorder = 'rgba(16, 185, 129, 0.5)';
+                                btnColor = '#34d399';
+                              }
+                            }
+
                             return (
                               <button
                                 key={optIdx}
                                 type="button"
                                 onClick={() => {
-                                  if (testViewMode === 'student') {
+                                  if (testViewMode === 'student' && !isExamFinished) {
                                     if (isPicked) {
                                       handleStudentAnswerChange(q.id, '', true);
                                     } else {
@@ -1982,17 +2284,17 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                                     }
                                   }
                                 }}
-                                disabled={testViewMode === 'examiner'}
-                                title={testViewMode === 'student' && isPicked ? 'Click again to unselect' : ''}
+                                disabled={testViewMode === 'examiner' || isExamFinished}
+                                title={testViewMode === 'student' && !isExamFinished && isPicked ? 'Click again to unselect' : ''}
                                 style={{
                                   padding: '0.55rem 0.85rem',
                                   borderRadius: '8px',
                                   textAlign: 'left',
                                   fontSize: '0.88rem',
-                                  background: isPicked ? 'rgba(139, 92, 246, 0.25)' : 'rgba(255,255,255,0.03)',
-                                  border: `1px solid ${isPicked ? 'var(--accent-primary)' : 'rgba(255,255,255,0.08)'}`,
-                                  color: isPicked ? '#fff' : 'var(--text-secondary)',
-                                  cursor: testViewMode === 'student' ? 'pointer' : 'default',
+                                  background: btnBg,
+                                  border: `1px solid ${btnBorder}`,
+                                  color: btnColor,
+                                  cursor: testViewMode === 'student' && !isExamFinished ? 'pointer' : 'default',
                                   display: 'flex',
                                   alignItems: 'center',
                                   justifyContent: 'space-between',
@@ -2000,19 +2302,27 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                                 }}
                               >
                                 <span>{opt}</span>
-                                {testViewMode === 'student' && isPicked && (
-                                  <span style={{ fontSize: '0.75rem', color: '#c4b5fd', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
-                                    <span>✓ Picked</span>
-                                  </span>
+                                {!isExamFinished && testViewMode === 'student' && isPicked && (
+                                  <span style={{ fontSize: '0.75rem', color: '#c4b5fd', fontWeight: 600 }}>✓ Picked</span>
                                 )}
-                                {testViewMode === 'examiner' && isCorrectKey && (
+                                {isExamFinished && isPicked && isCorrectKey && (
+                                  <span style={{ fontSize: '0.75rem', color: '#34d399', fontWeight: 700 }}>✓ Correct</span>
+                                )}
+                                {isExamFinished && isPicked && !isCorrectKey && (
+                                  <span style={{ fontSize: '0.75rem', color: '#f87171', fontWeight: 700 }}>✕ Your Answer</span>
+                                )}
+                                {isExamFinished && !isPicked && isCorrectKey && (
+                                  <span style={{ fontSize: '0.72rem', color: '#34d399', background: 'rgba(16, 185, 129, 0.2)', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>✓ Key</span>
+                                )}
+                                {testViewMode === 'examiner' && !isExamFinished && isCorrectKey && (
                                   <span style={{ fontSize: '0.7rem', color: '#34d399', background: 'rgba(16, 185, 129, 0.15)', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>Key ✓</span>
                                 )}
                               </button>
                             );
                           })}
                         </div>
-                        {testViewMode === 'student' && Boolean(studentAns?.trim()) && (
+
+                        {!isExamFinished && testViewMode === 'student' && Boolean(studentAns?.trim()) && (
                           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.2rem' }}>
                             <button
                               type="button"
@@ -2035,6 +2345,13 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                             </button>
                           </div>
                         )}
+
+                        {/* AFTER FINISH: Show Explanation/Solution for MCQ */}
+                        {isExamFinished && hasKey && (
+                          <div style={{ marginTop: '0.55rem', padding: '0.5rem 0.8rem', background: 'rgba(16, 185, 129, 0.08)', borderRadius: '6px', borderLeft: '3px solid #10b981', fontSize: '0.82rem', color: '#cbd5e1' }}>
+                            💡 <strong style={{ color: '#34d399' }}>Answer Key / Solution:</strong> {q.answerKey}
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -2048,7 +2365,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                           {studentAns && (
                             <span style={{ fontSize: '0.72rem', color: '#34d399' }}>✓ Response entered & saved</span>
                           )}
-                          {testViewMode === 'student' && Boolean(studentAns?.trim()) && (
+                          {!isExamFinished && testViewMode === 'student' && Boolean(studentAns?.trim()) && (
                             <button
                               type="button"
                               onClick={() => handleStudentAnswerChange(q.id, '', true)}
@@ -2079,36 +2396,48 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                           <textarea
                             value={studentAns}
                             onChange={(e) => handleStudentAnswerChange(q.id, e.target.value)}
-                            placeholder="Write your step-by-step solution here..."
+                            disabled={isExamFinished}
+                            placeholder={isExamFinished ? "No response entered." : "Write your step-by-step solution here..."}
                             rows={3}
-                            style={{ width: '100%', padding: '0.65rem', background: 'rgba(0,0,0,0.35)', border: '1px solid var(--glass-border)', borderRadius: '6px', color: '#fff', fontSize: '0.9rem', resize: 'vertical' }}
+                            style={{
+                              width: '100%',
+                              padding: '0.65rem',
+                              background: isExamFinished ? 'rgba(0,0,0,0.2)' : 'rgba(0,0,0,0.35)',
+                              border: '1px solid var(--glass-border)',
+                              borderRadius: '6px',
+                              color: isExamFinished ? '#cbd5e1' : '#fff',
+                              fontSize: '0.9rem',
+                              resize: isExamFinished ? 'none' : 'vertical'
+                            }}
                           />
-                          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '0.5rem', marginTop: '0.4rem' }}>
-                            {Boolean(studentAns?.trim()) && (
+                          {!isExamFinished && (
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '0.5rem', marginTop: '0.4rem' }}>
+                              {Boolean(studentAns?.trim()) && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleStudentAnswerChange(q.id, '', true)}
+                                  style={{
+                                    padding: '0.3rem 0.75rem',
+                                    fontSize: '0.78rem',
+                                    background: 'rgba(239, 68, 68, 0.12)',
+                                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                                    color: '#f87171',
+                                    borderRadius: '6px',
+                                    cursor: 'pointer'
+                                  }}
+                                >
+                                  ✕ Clear Answer
+                                </button>
+                              )}
                               <button
                                 type="button"
-                                onClick={() => handleStudentAnswerChange(q.id, '', true)}
-                                style={{
-                                  padding: '0.3rem 0.75rem',
-                                  fontSize: '0.78rem',
-                                  background: 'rgba(239, 68, 68, 0.12)',
-                                  border: '1px solid rgba(239, 68, 68, 0.3)',
-                                  color: '#f87171',
-                                  borderRadius: '6px',
-                                  cursor: 'pointer'
-                                }}
+                                onClick={() => saveStudentAnswers(studentAnswers, true)}
+                                style={{ padding: '0.3rem 0.75rem', fontSize: '0.78rem', background: 'rgba(139, 92, 246, 0.2)', border: '1px solid var(--accent-primary)', color: '#fff', borderRadius: '6px', cursor: 'pointer' }}
                               >
-                                ✕ Clear Answer
+                                💾 Save Answer
                               </button>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => saveStudentAnswers(studentAnswers, true)}
-                              style={{ padding: '0.3rem 0.75rem', fontSize: '0.78rem', background: 'rgba(139, 92, 246, 0.2)', border: '1px solid var(--accent-primary)', color: '#fff', borderRadius: '6px', cursor: 'pointer' }}
-                            >
-                              💾 Save Answer
-                            </button>
-                          </div>
+                            </div>
+                          )}
                         </div>
                       ) : (
                         <div style={{ padding: '0.6rem', background: 'rgba(0,0,0,0.25)', borderRadius: '6px', fontSize: '0.88rem', color: studentAns ? '#e2e8f0' : 'var(--text-secondary)', fontStyle: studentAns ? 'normal' : 'italic', minHeight: '40px', whiteSpace: 'pre-line' }}>
@@ -2116,6 +2445,18 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                         </div>
                       )}
                     </div>
+
+                    {/* AFTER FINISH: Show Rubric / Model Solution for Descriptive Questions */}
+                    {isExamFinished && hasKey && (
+                      <div style={{ marginTop: '0.65rem', background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.25)', borderRadius: '8px', padding: '0.85rem' }}>
+                        <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#34d399', marginBottom: '0.3rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                          <span>💡 Official Model Answer & Rubric:</span>
+                        </div>
+                        <div style={{ fontSize: '0.88rem', color: '#e2e8f0', lineHeight: 1.6, whiteSpace: 'pre-line' }}>
+                          {q.answerKey}
+                        </div>
+                      </div>
+                    )}
 
                     {/* Examiner Evaluation Space */}
                     {testViewMode === 'examiner' && (
@@ -2252,9 +2593,12 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                     type="button"
                     onClick={() => {
                       if (testViewMode === 'student') {
-                        saveStudentAnswers(studentAnswers, true);
-                        setNotificationMsg('✅ All responses submitted successfully!');
-                        setTimeout(() => setNotificationMsg(''), 3000);
+                        if (isExamFinished) {
+                          setNotificationMsg('✅ Exam is already submitted! You are reviewing the answers.');
+                          setTimeout(() => setNotificationMsg(''), 2500);
+                        } else {
+                          handleFinishAndSubmitExam();
+                        }
                       } else {
                         saveExaminerGrading(awardedMarks, examinerNotes, overallExaminerFeedback);
                         setNotificationMsg(`🎉 Paper evaluated successfully! Result published: Result ${modalAwardedSum}/${modalTotalMax}`);
@@ -2264,7 +2608,9 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                     className="primary"
                     style={{ padding: '0.55rem 1.2rem', borderRadius: '8px', fontSize: '0.85rem', fontWeight: 600 }}
                   >
-                    {testViewMode === 'student' ? '🚀 Finish & Submit Paper' : `✅ Finish Checking (${modalAwardedSum}/${modalTotalMax})`}
+                    {testViewMode === 'student' 
+                      ? (isExamFinished ? '✅ Exam Completed (Review Mode)' : '🚀 Finish & Submit Paper') 
+                      : `✅ Finish Checking (${modalAwardedSum}/${modalTotalMax})`}
                   </button>
                 )}
               </div>
@@ -2303,7 +2649,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
               <div style={{ display: 'flex', gap: '0.5rem' }}>
                 <button
                   type="button"
-                  onClick={() => copyToClipboard(viewingModelTest.questions)}
+                  onClick={handleCopyTest}
                   style={{ padding: '0.45rem 0.8rem', fontSize: '0.82rem', background: 'rgba(255,255,255,0.06)', border: '1px solid var(--glass-border)', borderRadius: '6px', cursor: 'pointer' }}
                 >
                   {copiedSuccess ? '✓ Copied' : 'Copy Test'}
@@ -2317,14 +2663,37 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                 </button>
               </div>
 
-              <button
-                type="button"
-                onClick={() => setViewingModelTest(null)}
-                style={{ padding: '0.55rem 1.4rem', background: 'rgba(255,255,255,0.1)', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '0.88rem' }}
-              >
-                Close
-              </button>
+              <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
+                {testViewMode === 'student' && !isExamFinished && (
+                  <button
+                    type="button"
+                    onClick={handleFinishAndSubmitExam}
+                    style={{
+                      padding: '0.55rem 1.2rem',
+                      background: 'var(--accent-gradient)',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: '8px',
+                      cursor: 'pointer',
+                      fontSize: '0.85rem',
+                      fontWeight: 600
+                    }}
+                  >
+                    🚀 Finish & Submit Paper
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setViewingModelTest(null)}
+                  style={{ padding: '0.55rem 1.4rem', background: 'rgba(255,255,255,0.1)', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '0.88rem' }}
+                >
+                  Close
+                </button>
+              </div>
             </div>
+
+            </>
+          )}
 
           </main>
         </div>
