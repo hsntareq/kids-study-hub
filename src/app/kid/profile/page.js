@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState, useRef } from 'react';
+import { Suspense, useEffect, useState, useRef, useMemo } from 'react';
 import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { auth, database } from '../../../lib/firebase';
 import { generateGeminiContent } from '../../../lib/gemini';
@@ -88,6 +88,12 @@ function KidProfileContent() {
   const [examStartedAt, setExamStartedAt] = useState(null);
   const [examSubmittedAt, setExamSubmittedAt] = useState(null);
   const [timerSeconds, setTimerSeconds] = useState(0);
+
+  // Question Navigator State (Scroller vs Collapsible by Question Type)
+  const [navigatorViewMode, setNavigatorViewMode] = useState('collapsible'); // 'collapsible' or 'scroller'
+  const [selectedSetFilter, setSelectedSetFilter] = useState('all');
+  const [collapsedSets, setCollapsedSets] = useState({});
+  const pillsScrollRef = useRef(null);
 
   const saveDebounceTimer = useRef(null);
 
@@ -1216,6 +1222,44 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
   const remainingSeconds = Math.max(0, totalDurationSeconds - elapsedSeconds);
   const isTimeLow = isExamStarted && !isExamFinished && remainingSeconds <= 300 && remainingSeconds > 0;
   const isTimeUp = isExamStarted && !isExamFinished && remainingSeconds === 0;
+
+  // Group questions by set / question type for contained collapsible & filtered navigation
+  const questionSets = useMemo(() => {
+    const map = new Map();
+    parsedQuestions.forEach((q, idx) => {
+      const setNum = q.setNumber || 1;
+      if (!map.has(setNum)) {
+        map.set(setNum, {
+          setNumber: setNum,
+          title: q.cleanSectionTitle || `Set ${setNum}`,
+          questions: []
+        });
+      }
+      map.get(setNum).questions.push({ ...q, globalIndex: idx });
+    });
+    return Array.from(map.values());
+  }, [parsedQuestions]);
+
+  const toggleSetCollapse = (setNum) => {
+    setCollapsedSets(prev => ({
+      ...prev,
+      [setNum]: !prev[setNum]
+    }));
+  };
+
+  const handleScrollPills = (direction) => {
+    if (!pillsScrollRef.current) return;
+    const distance = direction === 'left' ? -260 : 260;
+    pillsScrollRef.current.scrollBy({ left: distance, behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    if (questionDisplayMode !== 'slide') return;
+    const activeBtn = document.getElementById(`q-pill-${currentSlideIndex}`);
+    if (activeBtn) {
+      activeBtn.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+    }
+  }, [currentSlideIndex, questionDisplayMode, navigatorViewMode]);
 
   return (
     <main className="view-container">
@@ -3467,60 +3511,352 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
               </div>
             )}
 
-            {/* Question Jump Pills Carousel (Slide Mode) */}
+            {/* Contained Question Navigator (Collapsible by Question Type & Contained Scroller Strip) */}
             {questionDisplayMode === 'slide' && parsedQuestions.length > 0 && (
-              <div style={{ display: 'flex', gap: '0.4rem', overflowX: 'auto', paddingBottom: '0.5rem', marginBottom: '1.1rem' }}>
-                {parsedQuestions.map((q, qIdx) => {
-                  const isActive = qIdx === currentSlideIndex;
-                  const isAns = Boolean(studentAnswers[q.id]?.trim());
-                  const isGrd = awardedMarks[q.id] !== undefined && awardedMarks[q.id] !== '';
-                  const awd = awardedMarks[q.id];
-                  const qMax = Number(q.marks) || 5;
-
-                  return (
+              <div style={{
+                width: '100%',
+                maxWidth: '100%',
+                boxSizing: 'border-box',
+                background: 'rgba(15, 23, 42, 0.75)',
+                border: '1px solid rgba(255, 255, 255, 0.08)',
+                borderRadius: '12px',
+                padding: '0.75rem',
+                marginBottom: '1.25rem',
+                boxShadow: '0 4px 20px rgba(0, 0, 0, 0.25)'
+              }}>
+                {/* Navigator Header Controls: Set Filter Tabs + View Mode Toggles */}
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: '0.6rem',
+                  marginBottom: '0.65rem',
+                  flexWrap: 'wrap'
+                }}>
+                  {/* Set Tabs / Filter */}
+                  <div style={{ display: 'flex', gap: '0.35rem', overflowX: 'auto', maxWidth: '100%', paddingBottom: '2px', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)', marginRight: '0.2rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                      Sets:
+                    </span>
                     <button
-                      key={q.id || qIdx}
                       type="button"
-                      onClick={() => {
-                        // Auto-save before changing slide
-                        if (testViewMode === 'student') {
-                          saveStudentAnswers(studentAnswers, true);
-                        } else {
-                          saveExaminerGrading(awardedMarks, examinerNotes, overallExaminerFeedback);
-                        }
-                        setCurrentSlideIndex(qIdx);
-                      }}
+                      onClick={() => setSelectedSetFilter('all')}
                       style={{
-                        flexShrink: 0,
-                        padding: '0.35rem 0.65rem',
-                        borderRadius: '8px',
-                        fontSize: '0.78rem',
+                        padding: '0.22rem 0.6rem',
+                        borderRadius: '6px',
+                        fontSize: '0.75rem',
                         fontWeight: 600,
                         cursor: 'pointer',
-                        transition: 'all 0.15s ease',
-                        border: isActive ? '1.5px solid var(--accent-primary)' : '1px solid rgba(255,255,255,0.08)',
-                        background: isActive 
-                          ? 'rgba(139, 92, 246, 0.25)' 
-                          : (testViewMode === 'student'
-                              ? (isAns ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.03)')
-                              : (isGrd ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.03)')),
-                        color: isActive 
-                          ? '#fff' 
-                          : (testViewMode === 'student'
-                              ? (isAns ? '#34d399' : 'var(--text-secondary)')
-                              : (isGrd ? '#34d399' : 'var(--text-secondary)')),
-                        boxShadow: isActive ? '0 0 10px rgba(139, 92, 246, 0.35)' : 'none',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.3rem'
+                        border: selectedSetFilter === 'all' ? '1px solid var(--accent-primary)' : '1px solid rgba(255,255,255,0.08)',
+                        background: selectedSetFilter === 'all' ? 'rgba(139, 92, 246, 0.25)' : 'rgba(255,255,255,0.03)',
+                        color: selectedSetFilter === 'all' ? '#fff' : 'var(--text-secondary)',
+                        whiteSpace: 'nowrap'
                       }}
                     >
-                      <span>{q.displayNumber || `Q${q.id || qIdx + 1}`}</span>
-                      {testViewMode === 'student' && isAns && <span style={{ fontSize: '0.7rem', color: '#34d399' }}>✓</span>}
-                      {testViewMode === 'examiner' && isGrd && <span style={{ fontSize: '0.68rem', color: '#34d399' }}>[{awd}/{qMax}]</span>}
+                      All ({parsedQuestions.length})
                     </button>
-                  );
-                })}
+                    {questionSets.map(s => {
+                      const isFilterActive = selectedSetFilter === s.setNumber;
+                      const isCurrentActive = parsedQuestions[currentSlideIndex]?.setNumber === s.setNumber;
+                      const sAnswered = s.questions.filter(q => Boolean(studentAnswers[q.id]?.trim())).length;
+
+                      return (
+                        <button
+                          key={s.setNumber}
+                          type="button"
+                          onClick={() => {
+                            setSelectedSetFilter(s.setNumber);
+                            if (!isCurrentActive && s.questions.length > 0) {
+                              setCurrentSlideIndex(s.questions[0].globalIndex);
+                            }
+                          }}
+                          style={{
+                            padding: '0.22rem 0.6rem',
+                            borderRadius: '6px',
+                            fontSize: '0.75rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            border: isFilterActive ? '1px solid var(--accent-primary)' : (isCurrentActive ? '1px solid rgba(139, 92, 246, 0.4)' : '1px solid rgba(255,255,255,0.08)'),
+                            background: isFilterActive ? 'rgba(139, 92, 246, 0.25)' : (isCurrentActive ? 'rgba(139, 92, 246, 0.1)' : 'rgba(255,255,255,0.03)'),
+                            color: isFilterActive || isCurrentActive ? '#fff' : 'var(--text-secondary)',
+                            whiteSpace: 'nowrap',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.35rem'
+                          }}
+                        >
+                          <span>Set {s.setNumber}: {s.title}</span>
+                          <span style={{ fontSize: '0.68rem', opacity: 0.8, color: sAnswered === s.questions.length ? '#34d399' : 'inherit' }}>
+                            ({sAnswered}/{s.questions.length})
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Mode Selector & Scroller Arrow Controls */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <div style={{ display: 'flex', background: 'rgba(0,0,0,0.4)', borderRadius: '6px', padding: '2px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                      <button
+                        type="button"
+                        onClick={() => setNavigatorViewMode('collapsible')}
+                        style={{
+                          padding: '0.22rem 0.55rem',
+                          fontSize: '0.72rem',
+                          fontWeight: 600,
+                          border: 'none',
+                          borderRadius: '4px',
+                          background: navigatorViewMode === 'collapsible' ? 'var(--accent-primary)' : 'transparent',
+                          color: navigatorViewMode === 'collapsible' ? '#fff' : 'var(--text-secondary)',
+                          cursor: 'pointer'
+                        }}
+                        title="Group questions by type with collapsible sections"
+                      >
+                        📁 By Question Type
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setNavigatorViewMode('scroller')}
+                        style={{
+                          padding: '0.22rem 0.55rem',
+                          fontSize: '0.72rem',
+                          fontWeight: 600,
+                          border: 'none',
+                          borderRadius: '4px',
+                          background: navigatorViewMode === 'scroller' ? 'var(--accent-primary)' : 'transparent',
+                          color: navigatorViewMode === 'scroller' ? '#fff' : 'var(--text-secondary)',
+                          cursor: 'pointer'
+                        }}
+                        title="Horizontal scroll strip with navigation arrows"
+                      >
+                        ↔ Scroller Strip
+                      </button>
+                    </div>
+
+                    {navigatorViewMode === 'scroller' && (
+                      <div style={{ display: 'flex', gap: '0.25rem' }}>
+                        <button
+                          type="button"
+                          onClick={() => handleScrollPills('left')}
+                          style={{
+                            padding: '0.22rem 0.5rem',
+                            fontSize: '0.75rem',
+                            background: 'rgba(255,255,255,0.06)',
+                            border: '1px solid rgba(255,255,255,0.1)',
+                            borderRadius: '5px',
+                            color: '#fff',
+                            cursor: 'pointer'
+                          }}
+                          title="Scroll left"
+                        >
+                          ◀
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleScrollPills('right')}
+                          style={{
+                            padding: '0.22rem 0.5rem',
+                            fontSize: '0.75rem',
+                            background: 'rgba(255,255,255,0.06)',
+                            border: '1px solid rgba(255,255,255,0.1)',
+                            borderRadius: '5px',
+                            color: '#fff',
+                            cursor: 'pointer'
+                          }}
+                          title="Scroll right"
+                        >
+                          ▶
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* CONTENT AREA */}
+                {navigatorViewMode === 'collapsible' ? (
+                  /* Collapsible Sets View (flexWrap: wrap ensures zero overflow) */
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+                    {questionSets
+                      .filter(s => selectedSetFilter === 'all' || selectedSetFilter === s.setNumber)
+                      .map(s => {
+                        const isCollapsed = Boolean(collapsedSets[s.setNumber]);
+                        const isSetCurrent = parsedQuestions[currentSlideIndex]?.setNumber === s.setNumber;
+                        const sAnswered = s.questions.filter(q => Boolean(studentAnswers[q.id]?.trim())).length;
+
+                        return (
+                          <div
+                            key={s.setNumber}
+                            style={{
+                              background: isSetCurrent ? 'rgba(139, 92, 246, 0.08)' : 'rgba(0,0,0,0.22)',
+                              border: isSetCurrent ? '1px solid rgba(139, 92, 246, 0.3)' : '1px solid rgba(255,255,255,0.06)',
+                              borderRadius: '8px',
+                              overflow: 'hidden'
+                            }}
+                          >
+                            {/* Set Collapsible Header */}
+                            <div
+                              onClick={() => toggleSetCollapse(s.setNumber)}
+                              style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                padding: '0.45rem 0.75rem',
+                                cursor: 'pointer',
+                                background: isSetCurrent ? 'rgba(139, 92, 246, 0.14)' : 'rgba(255,255,255,0.02)',
+                                userSelect: 'none'
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                <span style={{ fontSize: '0.82rem', fontWeight: 700, color: isSetCurrent ? '#fff' : '#e2e8f0' }}>
+                                  Set {s.setNumber}: {s.title}
+                                </span>
+                                <span style={{ fontSize: '0.7rem', color: sAnswered === s.questions.length ? '#34d399' : 'var(--text-secondary)', background: 'rgba(255,255,255,0.06)', padding: '0.1rem 0.45rem', borderRadius: '10px' }}>
+                                  {sAnswered}/{s.questions.length} Answered
+                                </span>
+                                {isSetCurrent && (
+                                  <span style={{ fontSize: '0.65rem', background: 'rgba(16, 185, 129, 0.2)', color: '#34d399', padding: '0.1rem 0.4rem', borderRadius: '4px', fontWeight: 700 }}>
+                                    ● Current Set
+                                  </span>
+                                )}
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', color: 'var(--text-secondary)', fontSize: '0.72rem' }}>
+                                <span>{isCollapsed ? '▼ Expand' : '▲ Collapse'}</span>
+                              </div>
+                            </div>
+
+                            {/* Set Questions Grid (Wrapped inside container) */}
+                            {!isCollapsed && (
+                              <div style={{
+                                display: 'flex',
+                                flexWrap: 'wrap',
+                                gap: '0.35rem',
+                                padding: '0.55rem 0.75rem'
+                              }}>
+                                {s.questions.map(q => {
+                                  const isActive = q.globalIndex === currentSlideIndex;
+                                  const isAns = Boolean(studentAnswers[q.id]?.trim());
+                                  const isGrd = awardedMarks[q.id] !== undefined && awardedMarks[q.id] !== '';
+                                  const awd = awardedMarks[q.id];
+                                  const qMax = Number(q.marks) || 5;
+
+                                  return (
+                                    <button
+                                      key={q.id || q.globalIndex}
+                                      id={`q-pill-${q.globalIndex}`}
+                                      type="button"
+                                      onClick={() => {
+                                        if (testViewMode === 'student') saveStudentAnswers(studentAnswers, true);
+                                        else saveExaminerGrading(awardedMarks, examinerNotes, overallExaminerFeedback);
+                                        setCurrentSlideIndex(q.globalIndex);
+                                      }}
+                                      style={{
+                                        padding: '0.32rem 0.6rem',
+                                        borderRadius: '7px',
+                                        fontSize: '0.78rem',
+                                        fontWeight: 700,
+                                        cursor: 'pointer',
+                                        border: isActive ? '1.5px solid var(--accent-primary)' : '1px solid rgba(255,255,255,0.08)',
+                                        background: isActive
+                                          ? 'rgba(139, 92, 246, 0.35)'
+                                          : (testViewMode === 'student'
+                                              ? (isAns ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.03)')
+                                              : (isGrd ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.03)')),
+                                        color: isActive
+                                          ? '#fff'
+                                          : (testViewMode === 'student'
+                                              ? (isAns ? '#34d399' : 'var(--text-secondary)')
+                                              : (isGrd ? '#34d399' : 'var(--text-secondary)')),
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '0.3rem',
+                                        boxShadow: isActive ? '0 0 10px rgba(139, 92, 246, 0.35)' : 'none',
+                                        transition: 'all 0.12s ease'
+                                      }}
+                                      title={`Question ${q.displayNumber} (${q.cleanSectionTitle || cleanText(q.section)})`}
+                                    >
+                                      <span>{q.displayNumber || `Q${q.globalIndex + 1}`}</span>
+                                      {testViewMode === 'student' && isAns && <span style={{ fontSize: '0.72rem', color: '#34d399' }}>✓</span>}
+                                      {testViewMode === 'examiner' && isGrd && <span style={{ fontSize: '0.68rem', color: '#34d399' }}>[{awd}/{qMax}]</span>}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                  </div>
+                ) : (
+                  /* Contained Scroller Strip View */
+                  <div
+                    ref={pillsScrollRef}
+                    style={{
+                      display: 'flex',
+                      gap: '0.4rem',
+                      overflowX: 'auto',
+                      scrollBehavior: 'smooth',
+                      padding: '0.2rem 0.2rem 0.4rem 0.2rem',
+                      width: '100%',
+                      minWidth: 0,
+                      boxSizing: 'border-box'
+                    }}
+                  >
+                    {(selectedSetFilter === 'all'
+                      ? parsedQuestions
+                      : parsedQuestions.filter(q => q.setNumber === selectedSetFilter)
+                    ).map((q, filteredIdx) => {
+                      const originalIdx = parsedQuestions.findIndex(orig => orig.id === q.id);
+                      const qIdx = originalIdx !== -1 ? originalIdx : filteredIdx;
+                      const isActive = qIdx === currentSlideIndex;
+                      const isAns = Boolean(studentAnswers[q.id]?.trim());
+                      const isGrd = awardedMarks[q.id] !== undefined && awardedMarks[q.id] !== '';
+                      const awd = awardedMarks[q.id];
+                      const qMax = Number(q.marks) || 5;
+
+                      return (
+                        <button
+                          key={q.id || qIdx}
+                          id={`q-pill-${qIdx}`}
+                          type="button"
+                          onClick={() => {
+                            if (testViewMode === 'student') saveStudentAnswers(studentAnswers, true);
+                            else saveExaminerGrading(awardedMarks, examinerNotes, overallExaminerFeedback);
+                            setCurrentSlideIndex(qIdx);
+                          }}
+                          style={{
+                            flexShrink: 0,
+                            padding: '0.35rem 0.65rem',
+                            borderRadius: '8px',
+                            fontSize: '0.8rem',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            border: isActive ? '1.5px solid var(--accent-primary)' : '1px solid rgba(255,255,255,0.08)',
+                            background: isActive
+                              ? 'rgba(139, 92, 246, 0.35)'
+                              : (testViewMode === 'student'
+                                  ? (isAns ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.03)')
+                                  : (isGrd ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.03)')),
+                            color: isActive
+                              ? '#fff'
+                              : (testViewMode === 'student'
+                                  ? (isAns ? '#34d399' : 'var(--text-secondary)')
+                                  : (isGrd ? '#34d399' : 'var(--text-secondary)')),
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.3rem',
+                            boxShadow: isActive ? '0 0 10px rgba(139, 92, 246, 0.35)' : 'none',
+                            transition: 'all 0.12s ease'
+                          }}
+                          title={`Question ${q.displayNumber} (${q.cleanSectionTitle || cleanText(q.section)})`}
+                        >
+                          <span>{q.displayNumber || `Q${qIdx + 1}`}</span>
+                          {testViewMode === 'student' && isAns && <span style={{ fontSize: '0.72rem', color: '#34d399' }}>✓</span>}
+                          {testViewMode === 'examiner' && isGrd && <span style={{ fontSize: '0.68rem', color: '#34d399' }}>[{awd}/{qMax}]</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
 
