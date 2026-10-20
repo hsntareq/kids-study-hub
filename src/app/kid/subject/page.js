@@ -839,11 +839,15 @@ function SubjectPageContent() {
                   border: '1px solid rgba(255,255,255,0.1)',
                   color: 'var(--text-secondary)',
                   cursor: 'pointer',
-                  padding: '0.5rem',
+                  padding: 0,
+                  width: '36px',
+                  height: '36px',
                   borderRadius: '10px',
                   display: 'flex',
                   alignItems: 'center',
-                  transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)'
+                  justifyContent: 'center',
+                  transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+                  flexShrink: 0
                 }}
                 title="Universal Subject Settings & Auto-Archive Policy"
                 onMouseOver={(e) => {

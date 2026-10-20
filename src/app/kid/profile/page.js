@@ -1374,6 +1374,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                       style={{ 
                         width: '34px',
                         height: '34px',
+                        padding: 0,
                         borderRadius: '10px',
                         background: 'rgba(255, 255, 255, 0.04)', 
                         border: '1px solid rgba(255, 255, 255, 0.08)', 
