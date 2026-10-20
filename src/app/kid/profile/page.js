@@ -43,6 +43,10 @@ function KidProfileContent() {
   const [editingMarkDistKey, setEditingMarkDistKey] = useState(null); // `${subjectId}_${examId}`
   const [inlineMarkDistValue, setInlineMarkDistValue] = useState('');
 
+  // Exam Archive state
+  const [archiveToast, setArchiveToast] = useState(null); // { message, subjectId, examId }
+  const [showArchivedExamsMap, setShowArchivedExamsMap] = useState({}); // { [subjectId]: boolean }
+
   // Model test popover / generator state
   const [modelTestTarget, setModelTestTarget] = useState(null); // { subject, exam }
   const [modelTestDate, setModelTestDate] = useState('');
@@ -448,8 +452,37 @@ function KidProfileContent() {
 
   const handleUpdateExamStatus = async (subjectId, examId, newStatus) => {
     if (!user || !kid) return;
-    const path = `users/${user.uid}/kids/${kid.id}/subjects/${subjectId}/examSettings/${examId}/status`;
+    const dataOwnerUid = searchParams.get("parentId") || user.uid;
+    const path = `users/${dataOwnerUid}/kids/${kid.id}/subjects/${subjectId}/examSettings/${examId}/status`;
     await set(ref(database, path), newStatus);
+  };
+
+  const handleArchiveExam = async (subjectId, examId, examTitle) => {
+    if (!user || !kid) return;
+    const dataOwnerUid = searchParams.get("parentId") || user.uid;
+    const basePath = `users/${dataOwnerUid}/kids/${kid.id}/subjects/${subjectId}/examSettings/${examId}`;
+    
+    // Set isArchived flag, archived timestamp, and mark status Completed
+    await set(ref(database, `${basePath}/isArchived`), true);
+    await set(ref(database, `${basePath}/archivedAt`), Date.now());
+    await set(ref(database, `${basePath}/status`), 'Completed');
+
+    setArchiveToast({
+      message: `Exam "${examTitle}" was closed and moved to archives.`,
+      subjectId,
+      examId
+    });
+    setTimeout(() => {
+      setArchiveToast((cur) => cur && cur.examId === examId ? null : cur);
+    }, 6000);
+  };
+
+  const handleRestoreExam = async (subjectId, examId) => {
+    if (!user || !kid) return;
+    const dataOwnerUid = searchParams.get("parentId") || user.uid;
+    const basePath = `users/${dataOwnerUid}/kids/${kid.id}/subjects/${subjectId}/examSettings/${examId}`;
+    await set(ref(database, `${basePath}/isArchived`), false);
+    setArchiveToast(null);
   };
 
   const handleDelete = async (id, type, parentSubjectId = null, parentExamId = null) => {
@@ -1186,6 +1219,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                 const examProgress = examTotalChaps > 0 ? Math.round((examCompletedChaps / examTotalChaps) * 100) : 0;
 
                 const examSetting = (subject.examSettings && subject.examSettings[exam.id]) || {};
+                const isArchived = Boolean(examSetting.isArchived || examSetting.status === 'Archived' || exam.isArchived);
                 const examStatus = examSetting.status || (examProgress === 100 && examTotalChaps > 0 ? 'Completed' : (examProgress > 0 ? 'In Progress' : 'Not Started'));
 
                 const rawTests = (subject.modelTests && subject.modelTests[exam.id]) || {};
@@ -1239,6 +1273,8 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                   completedChapters: examCompletedChaps,
                   progress: examProgress,
                   status: examStatus,
+                  isArchived,
+                  archivedAt: examSetting.archivedAt || null,
                   testCount,
                   tests: testList,
                   avgTestScore,
@@ -1246,17 +1282,19 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                 };
               });
 
+              // Separate active and archived exams
+              const activeExams = subjectExams.filter(ex => !ex.isArchived);
+              const archivedExams = subjectExams.filter(ex => ex.isArchived);
+
               const progressPercent = totalChapters > 0 ? Math.round((completedChapters / totalChapters) * 100) : 0;
               const remainingChapters = Math.max(0, totalChapters - completedChapters);
 
-              // Determine immediate next exam:
-              // 1. Any exam with status 'In Progress'
-              // 2. Or first exam that is not 'Completed'
-              const nextUpExam = subjectExams.find(ex => ex.status === 'In Progress') 
-                || subjectExams.find(ex => ex.status !== 'Completed')
-                || subjectExams[0];
+              // Determine immediate next exam from active (non-archived) exams:
+              const nextUpExam = activeExams.find(ex => ex.status === 'In Progress') 
+                || activeExams.find(ex => ex.status !== 'Completed')
+                || activeExams[0];
 
-              const examsWithModelTests = subjectExams.filter(ex => ex.tests && ex.tests.length > 0);
+              const examsWithModelTests = activeExams.filter(ex => ex.tests && ex.tests.length > 0);
 
               const queryParentId = searchParams.get("parentId");
               const parentIdQuery = queryParentId ? `&parentId=${queryParentId}` : '';
@@ -1667,167 +1705,385 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                       flexDirection: 'column',
                       gap: '1rem',
                       padding: '1rem 0.2rem 0.4rem 0.2rem',
-                      borderTop: '1px dashed rgba(255, 255, 255, 0.08)',
-                      animation: 'fadeIn 0.25s ease-out'
+                      borderTop: '1px dashed rgba(255, 255, 255, 0.08)'
                     }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ fontSize: '0.74rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.6px' }}>
-                          Exams & Workspaces
-                        </span>
-                        <span style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)' }}>
-                          Click exam to enter study workspace
-                        </span>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <span style={{ fontSize: '0.74rem', fontWeight: 700, color: '#f1f5f9', textTransform: 'uppercase', letterSpacing: '0.6px' }}>
+                            Exams & Workspaces
+                          </span>
+                          <span style={{
+                            fontSize: '0.68rem',
+                            padding: '0.12rem 0.5rem',
+                            borderRadius: '9999px',
+                            background: 'rgba(99, 102, 241, 0.15)',
+                            border: '1px solid rgba(129, 140, 248, 0.3)',
+                            color: '#c7d2fe',
+                            fontWeight: 600
+                          }}>
+                            {activeExams.length} Active
+                          </span>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                          {archivedExams.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setShowArchivedExamsMap(prev => ({ ...prev, [subject.id]: !prev[subject.id] }));
+                              }}
+                              style={{
+                                background: showArchivedExamsMap[subject.id] ? 'rgba(255, 255, 255, 0.1)' : 'rgba(255, 255, 255, 0.04)',
+                                border: '1px solid rgba(255, 255, 255, 0.08)',
+                                color: showArchivedExamsMap[subject.id] ? '#fff' : 'var(--text-secondary)',
+                                fontSize: '0.7rem',
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.35rem',
+                                padding: '0.22rem 0.55rem',
+                                borderRadius: '7px',
+                                transition: 'all 0.15s'
+                              }}
+                            >
+                              <span>📦 {showArchivedExamsMap[subject.id] ? 'Hide' : 'Show'} Archived ({archivedExams.length})</span>
+                              <span style={{ transform: showArchivedExamsMap[subject.id] ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s', display: 'inline-block' }}>▼</span>
+                            </button>
+                          )}
+                          <span style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)' }}>
+                            Click exam to enter study workspace
+                          </span>
+                        </div>
                       </div>
 
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '0.75rem' }}>
-                        {subjectExams.map(ex => {
-                          const examHref = `/kid/exam?id=${searchParams.get("id")}&subject=${subjectSlug}&examId=${ex.id}&subjectId=${subject.id}${parentIdQuery}`;
-                          const isNextUp = nextUpExam && ex.id === nextUpExam.id && ex.status !== 'Completed';
-                          const isMajorExam = /final|term|annual|board|midterm|semester/i.test(ex.title);
+                      {activeExams.length === 0 ? (
+                        <div style={{
+                          padding: '1.5rem',
+                          background: 'rgba(255, 255, 255, 0.02)',
+                          border: '1px dashed rgba(255, 255, 255, 0.08)',
+                          borderRadius: '12px',
+                          textAlign: 'center',
+                          color: 'var(--text-secondary)',
+                          fontSize: '0.82rem'
+                        }}>
+                          <span style={{ display: 'block', fontSize: '1.25rem', marginBottom: '0.3rem' }}>🎉</span>
+                          All scheduled exams have been completed and archived. Click &quot;Show Archived&quot; to review past workspaces.
+                        </div>
+                      ) : (
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '0.75rem' }}>
+                          {activeExams.map(ex => {
+                            const examHref = `/kid/exam?id=${searchParams.get("id")}&subject=${subjectSlug}&examId=${ex.id}&subjectId=${subject.id}${parentIdQuery}`;
+                            const isNextUp = nextUpExam && ex.id === nextUpExam.id && ex.status !== 'Completed';
+                            const isMajorExam = /final|term|annual|board|midterm|semester/i.test(ex.title);
 
-                          return (
-                            <Link
-                              key={ex.id}
-                              href={examHref}
-                              style={{
-                                display: 'flex',
-                                flexDirection: 'column',
-                                justifyContent: 'space-between',
-                                padding: '0.85rem 1rem',
-                                background: isNextUp
-                                  ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.08), rgba(139, 92, 246, 0.08))'
-                                  : 'rgba(255, 255, 255, 0.025)',
-                                border: isNextUp
-                                  ? '1px solid rgba(245, 158, 11, 0.5)'
-                                  : '1px solid rgba(255, 255, 255, 0.06)',
-                                borderRadius: '12px',
-                                textDecoration: 'none',
-                                transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
-                                gap: '0.65rem',
-                                position: 'relative',
-                                boxShadow: isNextUp ? '0 4px 18px rgba(245, 158, 11, 0.12)' : 'none'
-                              }}
-                              onMouseOver={(e) => {
-                                e.currentTarget.style.background = isNextUp
-                                  ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.13), rgba(139, 92, 246, 0.13))'
-                                  : 'rgba(255, 255, 255, 0.055)';
-                                e.currentTarget.style.borderColor = isNextUp
-                                  ? 'rgba(245, 158, 11, 0.75)'
-                                  : 'rgba(139, 92, 246, 0.4)';
-                                e.currentTarget.style.transform = 'translateY(-2px)';
-                              }}
-                              onMouseOut={(e) => {
-                                e.currentTarget.style.background = isNextUp
-                                  ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.08), rgba(139, 92, 246, 0.08))'
-                                  : 'rgba(255, 255, 255, 0.025)';
-                                e.currentTarget.style.borderColor = isNextUp
-                                  ? 'rgba(245, 158, 11, 0.5)'
-                                  : 'rgba(255, 255, 255, 0.06)';
-                                e.currentTarget.style.transform = 'translateY(0)';
-                              }}
-                              title={`Open ${ex.title} Exam Workspace`}
-                            >
-                              {/* Top row: Badges */}
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
-                                  {isNextUp && (
+                            return (
+                              <div
+                                key={ex.id}
+                                onClick={() => router.push(examHref)}
+                                style={{
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  justifyContent: 'space-between',
+                                  padding: '0.85rem 1rem',
+                                  background: isNextUp
+                                    ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.08), rgba(139, 92, 246, 0.08))'
+                                    : 'rgba(255, 255, 255, 0.025)',
+                                  border: isNextUp
+                                    ? '1px solid rgba(245, 158, 11, 0.5)'
+                                    : '1px solid rgba(255, 255, 255, 0.06)',
+                                  borderRadius: '12px',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                                  gap: '0.65rem',
+                                  position: 'relative',
+                                  boxShadow: isNextUp ? '0 4px 18px rgba(245, 158, 11, 0.12)' : 'none'
+                                }}
+                                onMouseOver={(e) => {
+                                  e.currentTarget.style.background = isNextUp
+                                    ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.13), rgba(139, 92, 246, 0.13))'
+                                    : 'rgba(255, 255, 255, 0.055)';
+                                  e.currentTarget.style.borderColor = isNextUp
+                                    ? 'rgba(245, 158, 11, 0.75)'
+                                    : 'rgba(139, 92, 246, 0.4)';
+                                  e.currentTarget.style.transform = 'translateY(-2px)';
+                                }}
+                                onMouseOut={(e) => {
+                                  e.currentTarget.style.background = isNextUp
+                                    ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.08), rgba(139, 92, 246, 0.08))'
+                                    : 'rgba(255, 255, 255, 0.025)';
+                                  e.currentTarget.style.borderColor = isNextUp
+                                    ? 'rgba(245, 158, 11, 0.5)'
+                                    : 'rgba(255, 255, 255, 0.06)';
+                                  e.currentTarget.style.transform = 'translateY(0)';
+                                }}
+                                title={`Open ${ex.title} Exam Workspace`}
+                              >
+                                {/* Top row: Badges, Status, and Manual End/Archive Action */}
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                                    {isNextUp && (
+                                      <span style={{
+                                        fontSize: '0.66rem',
+                                        fontWeight: 700,
+                                        letterSpacing: '0.4px',
+                                        padding: '0.16rem 0.5rem',
+                                        borderRadius: '8px',
+                                        background: 'linear-gradient(135deg, #f59e0b, #ef4444)',
+                                        color: '#ffffff',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '0.25rem',
+                                        boxShadow: '0 2px 8px rgba(245, 158, 11, 0.35)',
+                                        textTransform: 'uppercase'
+                                      }}>
+                                        <span>⚡</span>
+                                        <span>Next Up</span>
+                                      </span>
+                                    )}
+
+                                    {isMajorExam && (
+                                      <span style={{
+                                        fontSize: '0.66rem',
+                                        fontWeight: 600,
+                                        padding: '0.15rem 0.45rem',
+                                        borderRadius: '8px',
+                                        background: 'rgba(168, 85, 247, 0.15)',
+                                        border: '1px solid rgba(168, 85, 247, 0.3)',
+                                        color: '#d8b4fe',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '0.25rem'
+                                      }}>
+                                        <span>🏆</span>
+                                        <span>Major</span>
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                                     <span style={{
-                                      fontSize: '0.66rem',
-                                      fontWeight: 700,
-                                      letterSpacing: '0.4px',
-                                      padding: '0.16rem 0.5rem',
+                                      fontSize: '0.67rem',
+                                      padding: '0.12rem 0.45rem',
                                       borderRadius: '8px',
-                                      background: 'linear-gradient(135deg, #f59e0b, #ef4444)',
-                                      color: '#ffffff',
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      gap: '0.25rem',
-                                      boxShadow: '0 2px 8px rgba(245, 158, 11, 0.35)',
-                                      textTransform: 'uppercase'
+                                      fontWeight: 600,
+                                      background:
+                                        ex.status === 'Completed' ? 'rgba(16, 185, 129, 0.15)' :
+                                        ex.status === 'In Progress' ? 'rgba(59, 130, 246, 0.15)' :
+                                        ex.status === 'Reviewing' ? 'rgba(168, 85, 247, 0.15)' :
+                                        'rgba(148, 163, 184, 0.1)',
+                                      color:
+                                        ex.status === 'Completed' ? '#34d399' :
+                                        ex.status === 'In Progress' ? '#60a5fa' :
+                                        ex.status === 'Reviewing' ? '#c084fc' :
+                                        '#94a3b8'
                                     }}>
-                                      <span>⚡</span>
-                                      <span>Next Up</span>
+                                      {ex.status}
                                     </span>
-                                  )}
 
-                                  {isMajorExam && (
+                                    {/* Manual End / Close / Archive Button */}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleArchiveExam(subject.id, ex.id, ex.title);
+                                      }}
+                                      style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '0.22rem',
+                                        padding: '0.12rem 0.48rem',
+                                        borderRadius: '7px',
+                                        background: ex.status === 'Completed' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(255, 255, 255, 0.05)',
+                                        border: ex.status === 'Completed' ? '1px solid rgba(52, 211, 153, 0.35)' : '1px solid rgba(255, 255, 255, 0.1)',
+                                        color: ex.status === 'Completed' ? '#34d399' : '#cbd5e1',
+                                        fontSize: '0.66rem',
+                                        fontWeight: 600,
+                                        cursor: 'pointer',
+                                        transition: 'all 0.15s ease'
+                                      }}
+                                      onMouseEnter={(e) => {
+                                        e.currentTarget.style.background = 'rgba(239, 68, 68, 0.18)';
+                                        e.currentTarget.style.borderColor = 'rgba(248, 113, 113, 0.45)';
+                                        e.currentTarget.style.color = '#f87171';
+                                      }}
+                                      onMouseLeave={(e) => {
+                                        e.currentTarget.style.background = ex.status === 'Completed' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(255, 255, 255, 0.05)';
+                                        e.currentTarget.style.borderColor = ex.status === 'Completed' ? 'rgba(52, 211, 153, 0.35)' : 'rgba(255, 255, 255, 0.1)';
+                                        e.currentTarget.style.color = ex.status === 'Completed' ? '#34d399' : '#cbd5e1';
+                                      }}
+                                      title="Manually end and archive this completed exam from the active list"
+                                    >
+                                      <span>📦</span>
+                                      <span>{ex.status === 'Completed' ? 'Archive' : 'End Exam'}</span>
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {/* Title & Meta */}
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                                  <span style={{ fontWeight: 600, fontSize: '0.92rem', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                    {ex.title}
+                                  </span>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.73rem', color: 'var(--text-secondary)' }}>
+                                    <span>{ex.completedChapters}/{ex.totalChapters} Chaps</span>
+                                    <span>•</span>
+                                    <span>{ex.testCount} {ex.testCount === 1 ? 'Test' : 'Tests'}</span>
+                                    {ex.avgTestScore !== null && (
+                                      <>
+                                        <span>•</span>
+                                        <span style={{ color: ex.avgTestScore >= 75 ? '#34d399' : '#fbbf24', fontWeight: 600 }}>
+                                          Avg: {ex.avgTestScore}%
+                                        </span>
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+
+                                {/* Mini progress bar */}
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.6rem', marginTop: '0.15rem' }}>
+                                  <div style={{ flex: 1, height: '4px', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '2px', overflow: 'hidden' }}>
+                                    <div style={{
+                                      height: '100%',
+                                      width: `${ex.progress}%`,
+                                      background: ex.progress === 100 ? '#10b981' : isNextUp ? '#f59e0b' : '#8b5cf6',
+                                      borderRadius: '2px'
+                                    }} />
+                                  </div>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', color: isNextUp ? '#fbbf24' : 'var(--text-secondary)', fontSize: '0.73rem', fontWeight: 600 }}>
+                                    <span>Workspace</span>
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Collapsible Archived Workspaces Section */}
+                      {showArchivedExamsMap[subject.id] && archivedExams.length > 0 && (
+                        <div style={{
+                          marginTop: '0.5rem',
+                          padding: '0.85rem 1rem',
+                          background: 'rgba(0, 0, 0, 0.28)',
+                          border: '1px dashed rgba(255, 255, 255, 0.12)',
+                          borderRadius: '14px',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.75rem'
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                              <span>📁</span>
+                              <span style={{ fontSize: '0.74rem', color: '#cbd5e1', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                                Archived & Closed Exam Workspaces ({archivedExams.length})
+                              </span>
+                            </div>
+                            <span style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>
+                              Removed from active list • Preserved for reference
+                            </span>
+                          </div>
+
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '0.65rem' }}>
+                            {archivedExams.map(ex => {
+                              const examHref = `/kid/exam?id=${searchParams.get("id")}&subject=${subjectSlug}&examId=${ex.id}&subjectId=${subject.id}${parentIdQuery}`;
+
+                              return (
+                                <div
+                                  key={ex.id}
+                                  style={{
+                                    padding: '0.75rem 0.95rem',
+                                    background: 'rgba(255, 255, 255, 0.025)',
+                                    border: '1px solid rgba(255, 255, 255, 0.06)',
+                                    borderRadius: '10px',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '0.55rem'
+                                  }}
+                                >
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.4rem' }}>
+                                    <span style={{ fontWeight: 600, fontSize: '0.88rem', color: '#e2e8f0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                      {ex.title}
+                                    </span>
                                     <span style={{
                                       fontSize: '0.66rem',
                                       fontWeight: 600,
-                                      padding: '0.15rem 0.45rem',
-                                      borderRadius: '8px',
-                                      background: 'rgba(168, 85, 247, 0.15)',
-                                      border: '1px solid rgba(168, 85, 247, 0.3)',
-                                      color: '#d8b4fe',
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      gap: '0.25rem'
+                                      padding: '0.1rem 0.4rem',
+                                      borderRadius: '6px',
+                                      background: 'rgba(16, 185, 129, 0.12)',
+                                      color: '#34d399',
+                                      border: '1px solid rgba(52, 211, 153, 0.25)',
+                                      flexShrink: 0
                                     }}>
-                                      <span>🏆</span>
-                                      <span>Major</span>
+                                      Archived ✓
                                     </span>
-                                  )}
-                                </div>
+                                  </div>
 
-                                <span style={{
-                                  fontSize: '0.67rem',
-                                  padding: '0.12rem 0.45rem',
-                                  borderRadius: '8px',
-                                  fontWeight: 600,
-                                  background:
-                                    ex.status === 'Completed' ? 'rgba(16, 185, 129, 0.15)' :
-                                    ex.status === 'In Progress' ? 'rgba(59, 130, 246, 0.15)' :
-                                    ex.status === 'Reviewing' ? 'rgba(168, 85, 247, 0.15)' :
-                                    'rgba(148, 163, 184, 0.1)',
-                                  color:
-                                    ex.status === 'Completed' ? '#34d399' :
-                                    ex.status === 'In Progress' ? '#60a5fa' :
-                                    ex.status === 'Reviewing' ? '#c084fc' :
-                                    '#94a3b8'
-                                }}>
-                                  {ex.status}
-                                </span>
-                              </div>
-
-                              {/* Title & Meta */}
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-                                <span style={{ fontWeight: 600, fontSize: '0.92rem', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                  {ex.title}
-                                </span>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.73rem', color: 'var(--text-secondary)' }}>
-                                  <span>{ex.completedChapters}/{ex.totalChapters} Chaps</span>
-                                  <span>•</span>
-                                  <span>{ex.testCount} {ex.testCount === 1 ? 'Test' : 'Tests'}</span>
-                                  {ex.avgTestScore !== null && (
-                                    <>
-                                      <span>•</span>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                                    <span>{ex.completedChapters}/{ex.totalChapters} Chaps • {ex.testCount} Tests</span>
+                                    {ex.avgTestScore !== null && (
                                       <span style={{ color: ex.avgTestScore >= 75 ? '#34d399' : '#fbbf24', fontWeight: 600 }}>
                                         Avg: {ex.avgTestScore}%
                                       </span>
-                                    </>
-                                  )}
-                                </div>
-                              </div>
+                                    )}
+                                  </div>
 
-                              {/* Mini progress bar */}
-                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.6rem', marginTop: '0.15rem' }}>
-                                <div style={{ flex: 1, height: '4px', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '2px', overflow: 'hidden' }}>
-                                  <div style={{
-                                    height: '100%',
-                                    width: `${ex.progress}%`,
-                                    background: ex.progress === 100 ? '#10b981' : isNextUp ? '#f59e0b' : '#8b5cf6',
-                                    borderRadius: '2px'
-                                  }} />
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255, 255, 255, 0.05)', paddingTop: '0.45rem', marginTop: '0.1rem' }}>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRestoreExam(subject.id, ex.id)}
+                                      style={{
+                                        background: 'rgba(99, 102, 241, 0.15)',
+                                        border: '1px solid rgba(129, 140, 248, 0.3)',
+                                        color: '#c7d2fe',
+                                        fontSize: '0.68rem',
+                                        fontWeight: 600,
+                                        padding: '0.2rem 0.55rem',
+                                        borderRadius: '6px',
+                                        cursor: 'pointer',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '0.25rem',
+                                        transition: 'all 0.15s'
+                                      }}
+                                      onMouseEnter={(e) => {
+                                        e.currentTarget.style.background = 'rgba(99, 102, 241, 0.3)';
+                                        e.currentTarget.style.color = '#fff';
+                                      }}
+                                      onMouseLeave={(e) => {
+                                        e.currentTarget.style.background = 'rgba(99, 102, 241, 0.15)';
+                                        e.currentTarget.style.color = '#c7d2fe';
+                                      }}
+                                      title="Restore this exam workspace back to the active list"
+                                    >
+                                      <span>↺</span>
+                                      <span>Restore to Active</span>
+                                    </button>
+
+                                    <Link
+                                      href={examHref}
+                                      style={{
+                                        color: 'var(--accent-primary)',
+                                        fontSize: '0.72rem',
+                                        fontWeight: 600,
+                                        textDecoration: 'none',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '0.2rem'
+                                      }}
+                                    >
+                                      <span>View Records</span>
+                                      <span>→</span>
+                                    </Link>
+                                  </div>
                                 </div>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', color: isNextUp ? '#fbbf24' : 'var(--text-secondary)', fontSize: '0.73rem', fontWeight: 600 }}>
-                                  <span>Workspace</span>
-                                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
-                                </div>
-                              </div>
-                            </Link>
-                          );
-                        })}
-                      </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
 
                       {/* Model Tests Mastery & Performance Overview (if tests exist) */}
                       {examsWithModelTests.length > 0 && (
@@ -3527,6 +3783,83 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Archive / Close Floating Notification Toast */}
+      {archiveToast && (
+        <div style={{
+          position: 'fixed',
+          bottom: '24px',
+          right: '24px',
+          zIndex: 9999,
+          background: 'rgba(15, 23, 42, 0.95)',
+          border: '1px solid rgba(52, 211, 153, 0.4)',
+          boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.6), 0 0 15px rgba(16, 185, 129, 0.2)',
+          backdropFilter: 'blur(10px)',
+          borderRadius: '12px',
+          padding: '0.75rem 1.15rem',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.85rem',
+          color: '#f8fafc',
+          fontSize: '0.86rem',
+          animation: 'slideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1)'
+        }}>
+          <div style={{
+            width: '28px',
+            height: '28px',
+            borderRadius: '50%',
+            background: 'rgba(16, 185, 129, 0.2)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: '0.95rem'
+          }}>
+            📦
+          </div>
+          <span style={{ fontWeight: 500 }}>{archiveToast.message}</span>
+          <button
+            type="button"
+            onClick={() => handleRestoreExam(archiveToast.subjectId, archiveToast.examId)}
+            style={{
+              background: 'rgba(255, 255, 255, 0.1)',
+              border: '1px solid rgba(255, 255, 255, 0.2)',
+              color: '#34d399',
+              fontWeight: 700,
+              fontSize: '0.78rem',
+              padding: '0.3rem 0.65rem',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = 'rgba(52, 211, 153, 0.2)';
+              e.currentTarget.style.color = '#fff';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)';
+              e.currentTarget.style.color = '#34d399';
+            }}
+          >
+            Undo
+          </button>
+          <button
+            type="button"
+            onClick={() => setArchiveToast(null)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--text-secondary)',
+              cursor: 'pointer',
+              fontSize: '1rem',
+              lineHeight: 1,
+              padding: '0.2rem'
+            }}
+            aria-label="Dismiss"
+          >
+            ✕
+          </button>
         </div>
       )}
     </main>

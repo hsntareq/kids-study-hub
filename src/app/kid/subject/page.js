@@ -26,6 +26,8 @@ function SubjectPageContent() {
   // Decluttering: Collapsible accordion panels state (summaries visible by default)
   const [isChaptersExpanded, setIsChaptersExpanded] = useState(false);
   const [isExamsExpanded, setIsExamsExpanded] = useState(false);
+  const [showArchivedExams, setShowArchivedExams] = useState(false);
+  const [archiveToast, setArchiveToast] = useState(null); // { message, examId }
 
   // Universal Subject Settings Modal state
   const [showSubjectSettings, setShowSubjectSettings] = useState(false);
@@ -226,16 +228,59 @@ function SubjectPageContent() {
     });
   }, [allSubjectChapters, chapterStatusFilter, chapterSearchQuery]);
 
-  // Identify next upcoming exam
+  // Separate active and archived exams
+  const activeExams = useMemo(() => {
+    return exams.filter(ex => {
+      const examSetting = (subject && subject.examSettings && subject.examSettings[ex.id]) || {};
+      return !examSetting.isArchived && examSetting.status !== 'Archived';
+    });
+  }, [exams, subject]);
+
+  const archivedExams = useMemo(() => {
+    return exams.filter(ex => {
+      const examSetting = (subject && subject.examSettings && subject.examSettings[ex.id]) || {};
+      return Boolean(examSetting.isArchived || examSetting.status === 'Archived');
+    });
+  }, [exams, subject]);
+
+  // Identify next upcoming exam (from active exams only)
   const nextUpExam = useMemo(() => {
-    return exams.find(ex => {
+    return activeExams.find(ex => {
       const examSetting = (subject && subject.examSettings && subject.examSettings[ex.id]) || {};
       return examSetting.status === 'In Progress';
-    }) || exams.find(ex => {
+    }) || activeExams.find(ex => {
       const examSetting = (subject && subject.examSettings && subject.examSettings[ex.id]) || {};
       return examSetting.status !== 'Completed';
-    }) || exams[0];
-  }, [exams, subject]);
+    }) || activeExams[0];
+  }, [activeExams, subject]);
+
+  // Handle manually ending and archiving an exam workspace
+  const handleArchiveExam = async (examId, examTitle) => {
+    if (!user || !kid || !subject) return;
+    const dataOwnerUid = searchParams.get('parentId') || user.uid;
+    const basePath = `users/${dataOwnerUid}/kids/${kid.id}/subjects/${subject.id}/examSettings/${examId}`;
+    
+    await set(ref(database, `${basePath}/isArchived`), true);
+    await set(ref(database, `${basePath}/archivedAt`), Date.now());
+    await set(ref(database, `${basePath}/status`), 'Completed');
+
+    setArchiveToast({
+      message: `Exam "${examTitle}" was closed and moved to archives.`,
+      examId
+    });
+    setTimeout(() => {
+      setArchiveToast((cur) => cur && cur.examId === examId ? null : cur);
+    }, 6000);
+  };
+
+  // Restore an archived exam back to the active list
+  const handleRestoreExam = async (examId) => {
+    if (!user || !kid || !subject) return;
+    const dataOwnerUid = searchParams.get('parentId') || user.uid;
+    const basePath = `users/${dataOwnerUid}/kids/${kid.id}/subjects/${subject.id}/examSettings/${examId}`;
+    await set(ref(database, `${basePath}/isArchived`), false);
+    setArchiveToast(null);
+  };
 
   // Chapter completion toggle
   const handleToggleChapterComplete = async (examId, chapId, currentCompleted) => {
@@ -2918,7 +2963,7 @@ function SubjectPageContent() {
                   background: 'rgba(99, 102, 241, 0.15)',
                   color: '#a5b4fc'
                 }}>
-                  {exams.length} {exams.length === 1 ? 'Exam Track' : 'Exam Tracks'} Mapped
+                  {activeExams.length} {activeExams.length === 1 ? 'Active Exam Track' : 'Active Exam Tracks'} Mapped
                 </span>
                 {nextUpExam && (
                   <span style={{
@@ -2942,8 +2987,37 @@ function SubjectPageContent() {
             </div>
           </div>
 
-          {/* Right: Add Exam + Accordion Toggle Chevron */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+          {/* Right: Add Exam + Archived Toggle + Accordion Toggle Chevron */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+            {archivedExams.length > 0 && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowArchivedExams(prev => !prev);
+                  if (!isExamsExpanded) setIsExamsExpanded(true);
+                }}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.35rem',
+                  padding: '0.4rem 0.85rem',
+                  background: showArchivedExams ? 'rgba(52, 211, 153, 0.18)' : 'rgba(255, 255, 255, 0.05)',
+                  border: showArchivedExams ? '1px solid rgba(52, 211, 153, 0.45)' : '1px solid rgba(255, 255, 255, 0.1)',
+                  borderRadius: '8px',
+                  color: showArchivedExams ? '#34d399' : '#cbd5e1',
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease'
+                }}
+                title="Toggle display of archived/closed exams"
+              >
+                <span>📁</span>
+                <span>{showArchivedExams ? 'Hide Archived' : 'Archived'} ({archivedExams.length})</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={(e) => {
@@ -3003,7 +3077,7 @@ function SubjectPageContent() {
                 if (!isExamsExpanded) e.currentTarget.style.background = 'rgba(255, 255, 255, 0.06)';
               }}
             >
-              <span>{isExamsExpanded ? 'Collapse Exams' : `View All Exam Tracks (${exams.length})`}</span>
+              <span>{isExamsExpanded ? 'Collapse Exams' : `View All Exam Tracks (${activeExams.length})`}</span>
               <span style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -3065,12 +3139,12 @@ function SubjectPageContent() {
                     ⚡ Immediate Exam Focus: {nextUpExam.title}
                   </span>
                   <span style={{ fontSize: '0.76rem', color: 'var(--text-secondary)' }}>
-                    • {exams.length} tracks scheduled
+                    • {activeExams.length} active tracks scheduled
                   </span>
                 </>
               ) : (
                 <span style={{ fontSize: '0.78rem', color: '#cbd5e1' }}>
-                  {exams.length > 0 ? `${exams.length} exam tracks active.` : 'No exams scheduled yet.'}
+                  {activeExams.length > 0 ? `${activeExams.length} active exam tracks.` : (archivedExams.length > 0 ? 'All scheduled exams have been completed and archived.' : 'No exams scheduled yet.')}
                 </span>
               )}
 
@@ -3094,7 +3168,7 @@ function SubjectPageContent() {
               transition: 'all 0.2s ease',
               boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)'
             }}>
-              <span>Expand Exam Workspaces ({exams.length})</span>
+              <span>Expand Exam Workspaces ({activeExams.length})</span>
               <span style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -3130,16 +3204,39 @@ function SubjectPageContent() {
         {isExamsExpanded && (
           <div style={{ marginTop: '1.25rem', animation: 'fadeIn 0.2s ease-out' }}>
             {/* Exams Summary Cards Grid */}
-            {exams.length === 0 ? (
+            {activeExams.length === 0 ? (
               <div style={{ padding: '2.5rem 1rem', background: 'rgba(0,0,0,0.18)', borderRadius: '14px', border: '1px dashed rgba(255,255,255,0.08)', textAlign: 'center' }}>
-                <p style={{ color: 'var(--text-secondary)', margin: '0 0 1rem 0', fontSize: '0.9rem' }}>No exams created for this subject yet.</p>
-                <button onClick={() => setShowAddExamModal(true)} className="primary" style={{ padding: '0.5rem 1.25rem', borderRadius: '8px' }}>
-                  + Add First Exam
-                </button>
+                <span style={{ display: 'block', fontSize: '1.5rem', marginBottom: '0.4rem' }}>🎉</span>
+                <p style={{ color: 'var(--text-secondary)', margin: '0 0 1rem 0', fontSize: '0.9rem' }}>
+                  {archivedExams.length > 0 ? 'All scheduled exams have been completed and archived.' : 'No exams created for this subject yet.'}
+                </p>
+                <div style={{ display: 'flex', justifyContent: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+                  <button onClick={() => setShowAddExamModal(true)} className="primary" style={{ padding: '0.5rem 1.25rem', borderRadius: '8px', cursor: 'pointer' }}>
+                    + Add Exam
+                  </button>
+                  {archivedExams.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setShowArchivedExams(prev => !prev)}
+                      style={{
+                        padding: '0.5rem 1.15rem',
+                        background: showArchivedExams ? 'rgba(52, 211, 153, 0.2)' : 'rgba(255,255,255,0.08)',
+                        border: showArchivedExams ? '1px solid rgba(52, 211, 153, 0.45)' : '1px solid rgba(255,255,255,0.15)',
+                        borderRadius: '8px',
+                        color: showArchivedExams ? '#34d399' : '#cbd5e1',
+                        cursor: 'pointer',
+                        fontWeight: 600,
+                        fontSize: '0.84rem'
+                      }}
+                    >
+                      📁 {showArchivedExams ? 'Hide' : 'Review'} Archived Workspaces ({archivedExams.length})
+                    </button>
+                  )}
+                </div>
               </div>
             ) : (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1rem' }}>
-            {exams.map(ex => {
+            {activeExams.map(ex => {
               const examHref = `/kid/exam?id=${searchParams.get("id")}&subject=${subjectSlug}&examId=${ex.id}&subjectId=${subject.id}${parentIdQuery}`;
               const isNextUp = nextUpExam && ex.id === nextUpExam.id;
 
@@ -3177,7 +3274,7 @@ function SubjectPageContent() {
                   }}
                 >
                   <div>
-                    {/* Header: Title + Next Up / Status Badges */}
+                    {/* Header: Title + Next Up / Status Badges + Archive Option */}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem', gap: '0.5rem' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
                         {isNextUp && (
@@ -3206,9 +3303,49 @@ function SubjectPageContent() {
                         </span>
                       </div>
 
-                      <span style={{ fontSize: '0.76rem', color: 'var(--text-secondary)' }}>
-                        {exTotal} {exTotal === 1 ? 'Chapter' : 'Chapters'}
-                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                        <span style={{ fontSize: '0.76rem', color: 'var(--text-secondary)' }}>
+                          {exTotal} {exTotal === 1 ? 'Chapter' : 'Chapters'}
+                        </span>
+
+                        {/* Manual End / Close / Archive Button */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            handleArchiveExam(ex.id, ex.title);
+                          }}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.22rem',
+                            padding: '0.15rem 0.52rem',
+                            borderRadius: '7px',
+                            background: examStatus === 'Completed' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(255, 255, 255, 0.05)',
+                            border: examStatus === 'Completed' ? '1px solid rgba(52, 211, 153, 0.35)' : '1px solid rgba(255, 255, 255, 0.12)',
+                            color: examStatus === 'Completed' ? '#34d399' : '#cbd5e1',
+                            fontSize: '0.68rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            transition: 'all 0.15s ease'
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.background = 'rgba(239, 68, 68, 0.18)';
+                            e.currentTarget.style.borderColor = 'rgba(248, 113, 113, 0.45)';
+                            e.currentTarget.style.color = '#f87171';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.background = examStatus === 'Completed' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(255, 255, 255, 0.05)';
+                            e.currentTarget.style.borderColor = examStatus === 'Completed' ? '1px solid rgba(52, 211, 153, 0.35)' : '1px solid rgba(255, 255, 255, 0.12)';
+                            e.currentTarget.style.color = examStatus === 'Completed' ? '#34d399' : '#cbd5e1';
+                          }}
+                          title="Manually end and archive this completed exam from the active list"
+                        >
+                          <span>📦</span>
+                          <span>{examStatus === 'Completed' ? 'Archive' : 'End Exam'}</span>
+                        </button>
+                      </div>
                     </div>
 
                     <h3 style={{ margin: '0.2rem 0 0.5rem 0', fontSize: '1.2rem', fontWeight: 700, color: '#fff' }}>
@@ -3282,6 +3419,130 @@ function SubjectPageContent() {
           </div>
         )}
 
+        {/* Collapsible Archived Workspaces Section */}
+        {showArchivedExams && archivedExams.length > 0 && (
+          <div style={{
+            marginTop: '1.25rem',
+            padding: '1.1rem 1.3rem',
+            background: 'rgba(0, 0, 0, 0.35)',
+            border: '1px dashed rgba(255, 255, 255, 0.14)',
+            borderRadius: '16px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '0.85rem'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                <span>📁</span>
+                <span style={{ fontSize: '0.8rem', color: '#cbd5e1', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  Archived & Closed Exam Workspaces ({archivedExams.length})
+                </span>
+              </div>
+              <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                Removed from active list • Preserved for past records and model test scores
+              </span>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '0.85rem' }}>
+              {archivedExams.map(ex => {
+                const examHref = `/kid/exam?id=${searchParams.get("id")}&subject=${subjectSlug}&examId=${ex.id}&subjectId=${subject.id}${parentIdQuery}`;
+                const chapsObj = (subject.chapters && subject.chapters[ex.id]) || {};
+                const chapsList = Object.values(chapsObj);
+                const exTotal = chapsList.length;
+                const exDone = chapsList.filter(c => c.completed || c.status === 'completed').length;
+                const testsObj = (subject.modelTests && subject.modelTests[ex.id]) || {};
+                const testList = Object.values(testsObj);
+
+                return (
+                  <div
+                    key={ex.id}
+                    style={{
+                      padding: '0.9rem 1.1rem',
+                      background: 'rgba(255, 255, 255, 0.025)',
+                      border: '1px solid rgba(255, 255, 255, 0.07)',
+                      borderRadius: '12px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.65rem'
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.4rem' }}>
+                      <span style={{ fontWeight: 600, fontSize: '0.95rem', color: '#e2e8f0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {ex.title}
+                      </span>
+                      <span style={{
+                        fontSize: '0.66rem',
+                        fontWeight: 600,
+                        padding: '0.12rem 0.45rem',
+                        borderRadius: '6px',
+                        background: 'rgba(16, 185, 129, 0.12)',
+                        color: '#34d399',
+                        border: '1px solid rgba(52, 211, 153, 0.25)',
+                        flexShrink: 0
+                      }}>
+                        Archived ✓
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+                      <span>{exDone}/{exTotal} Chapters • {testList.length} Tests</span>
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255, 255, 255, 0.05)', paddingTop: '0.5rem', marginTop: '0.15rem' }}>
+                      <button
+                        type="button"
+                        onClick={() => handleRestoreExam(ex.id)}
+                        style={{
+                          background: 'rgba(99, 102, 241, 0.15)',
+                          border: '1px solid rgba(129, 140, 248, 0.3)',
+                          color: '#c7d2fe',
+                          fontSize: '0.7rem',
+                          fontWeight: 600,
+                          padding: '0.22rem 0.6rem',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.25rem',
+                          transition: 'all 0.15s'
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = 'rgba(99, 102, 241, 0.3)';
+                          e.currentTarget.style.color = '#fff';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = 'rgba(99, 102, 241, 0.15)';
+                          e.currentTarget.style.color = '#c7d2fe';
+                        }}
+                        title="Restore this exam workspace back to the active list"
+                      >
+                        <span>↺</span>
+                        <span>Restore to Active</span>
+                      </button>
+
+                      <Link
+                        href={examHref}
+                        style={{
+                          color: 'var(--accent-primary)',
+                          fontSize: '0.75rem',
+                          fontWeight: 600,
+                          textDecoration: 'none',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.25rem'
+                        }}
+                      >
+                        <span>View Records</span>
+                        <span>→</span>
+                      </Link>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Bottom Collapse Bar */}
         <div style={{
           display: 'flex',
@@ -3292,7 +3553,7 @@ function SubjectPageContent() {
           borderTop: '1px solid rgba(255, 255, 255, 0.06)'
         }}>
           <span style={{ fontSize: '0.76rem', color: 'var(--text-secondary)' }}>
-            Showing {exams.length} dedicated exam workspaces
+            Showing {activeExams.length} active exam workspaces {archivedExams.length > 0 ? `(${archivedExams.length} archived)` : ''}
           </span>
           <button
             type="button"
@@ -4634,6 +4895,83 @@ function SubjectPageContent() {
 
             </form>
           </div>
+        </div>
+      )}
+
+      {/* Archive / Close Floating Notification Toast */}
+      {archiveToast && (
+        <div style={{
+          position: 'fixed',
+          bottom: '24px',
+          right: '24px',
+          zIndex: 9999,
+          background: 'rgba(15, 23, 42, 0.95)',
+          border: '1px solid rgba(52, 211, 153, 0.4)',
+          boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.6), 0 0 15px rgba(16, 185, 129, 0.2)',
+          backdropFilter: 'blur(10px)',
+          borderRadius: '12px',
+          padding: '0.75rem 1.15rem',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.85rem',
+          color: '#f8fafc',
+          fontSize: '0.86rem',
+          animation: 'slideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1)'
+        }}>
+          <div style={{
+            width: '28px',
+            height: '28px',
+            borderRadius: '50%',
+            background: 'rgba(16, 185, 129, 0.2)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: '0.95rem'
+          }}>
+            📦
+          </div>
+          <span style={{ fontWeight: 500 }}>{archiveToast.message}</span>
+          <button
+            type="button"
+            onClick={() => handleRestoreExam(archiveToast.examId)}
+            style={{
+              background: 'rgba(255, 255, 255, 0.1)',
+              border: '1px solid rgba(255, 255, 255, 0.2)',
+              color: '#34d399',
+              fontWeight: 700,
+              fontSize: '0.78rem',
+              padding: '0.3rem 0.65rem',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = 'rgba(52, 211, 153, 0.2)';
+              e.currentTarget.style.color = '#fff';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)';
+              e.currentTarget.style.color = '#34d399';
+            }}
+          >
+            Undo
+          </button>
+          <button
+            type="button"
+            onClick={() => setArchiveToast(null)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--text-secondary)',
+              cursor: 'pointer',
+              fontSize: '1rem',
+              lineHeight: 1,
+              padding: '0.2rem'
+            }}
+            aria-label="Dismiss"
+          >
+            ✕
+          </button>
         </div>
       )}
     </main>
