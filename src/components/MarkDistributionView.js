@@ -86,17 +86,17 @@ export default function MarkDistributionView({
             onClick={onEdit}
             className="primary"
             style={{
-              padding: '0.5rem 1.1rem',
-              fontSize: '0.82rem',
-              borderRadius: '8px',
+              padding: '0.28rem 0.72rem',
+              fontSize: '0.76rem',
+              borderRadius: '6px',
               display: 'inline-flex',
               alignItems: 'center',
-              gap: '0.4rem',
+              gap: '0.35rem',
               cursor: 'pointer',
               marginTop: '0.25rem'
             }}
           >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 5v14M5 12h14" />
             </svg>
             Set Mark Distribution
@@ -115,28 +115,28 @@ export default function MarkDistributionView({
           justifyContent: 'space-between',
           alignItems: 'center',
           flexWrap: 'wrap',
-          gap: '0.75rem',
-          paddingBottom: '0.5rem'
+          gap: '0.5rem',
+          paddingBottom: '0.35rem'
         }}
       >
         {/* KPI Chips */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
           {totalMarks > 0 && (
             <div
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: '0.4rem',
+                gap: '0.35rem',
                 background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.18) 0%, rgba(5, 150, 105, 0.1) 100%)',
                 border: '1px solid rgba(16, 185, 129, 0.35)',
-                borderRadius: '8px',
-                padding: '0.35rem 0.75rem',
+                borderRadius: '6px',
+                padding: '0.22rem 0.58rem',
                 color: '#34d399',
-                fontSize: '0.82rem',
+                fontSize: '0.75rem',
                 fontWeight: 700
               }}
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="10" />
                 <path d="m9 12 2 2 4-4" />
               </svg>
@@ -148,13 +148,13 @@ export default function MarkDistributionView({
             style={{
               display: 'inline-flex',
               alignItems: 'center',
-              gap: '0.35rem',
+              gap: '0.3rem',
               background: 'rgba(255, 255, 255, 0.04)',
               border: '1px solid var(--glass-border, rgba(255,255,255,0.08))',
-              borderRadius: '8px',
-              padding: '0.35rem 0.65rem',
+              borderRadius: '6px',
+              padding: '0.22rem 0.52rem',
               color: '#cbd5e1',
-              fontSize: '0.8rem',
+              fontSize: '0.74rem',
               fontWeight: 500
             }}
           >
@@ -170,7 +170,7 @@ export default function MarkDistributionView({
             alignItems: 'center',
             background: 'rgba(0, 0, 0, 0.35)',
             border: '1px solid var(--glass-border, rgba(255,255,255,0.08))',
-            borderRadius: '8px',
+            borderRadius: '6px',
             padding: '2px'
           }}
         >
@@ -178,22 +178,22 @@ export default function MarkDistributionView({
             type="button"
             onClick={() => setLayout('cards')}
             style={{
-              padding: '0.3rem 0.65rem',
-              fontSize: '0.75rem',
+              padding: '0.2rem 0.52rem',
+              fontSize: '0.72rem',
               fontWeight: 600,
               border: 'none',
-              borderRadius: '6px',
+              borderRadius: '5px',
               background: layout === 'cards' ? 'rgba(99, 102, 241, 0.3)' : 'transparent',
               color: layout === 'cards' ? '#fff' : 'var(--text-secondary, #94a3b8)',
               cursor: 'pointer',
               display: 'inline-flex',
               alignItems: 'center',
-              gap: '0.3rem',
+              gap: '0.25rem',
               transition: 'all 0.15s ease'
             }}
             title="Card Grid View"
           >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
               <rect x="3" y="3" width="7" height="7" />
               <rect x="14" y="3" width="7" height="7" />
               <rect x="14" y="14" width="7" height="7" />
@@ -205,17 +205,17 @@ export default function MarkDistributionView({
             type="button"
             onClick={() => setLayout('table')}
             style={{
-              padding: '0.3rem 0.65rem',
-              fontSize: '0.75rem',
+              padding: '0.2rem 0.52rem',
+              fontSize: '0.72rem',
               fontWeight: 600,
               border: 'none',
-              borderRadius: '6px',
+              borderRadius: '5px',
               background: layout === 'table' ? 'rgba(99, 102, 241, 0.3)' : 'transparent',
               color: layout === 'table' ? '#fff' : 'var(--text-secondary, #94a3b8)',
               cursor: 'pointer',
               display: 'inline-flex',
               alignItems: 'center',
-              gap: '0.3rem',
+              gap: '0.25rem',
               transition: 'all 0.15s ease'
             }}
             title="Detailed Table View"
@@ -284,8 +284,8 @@ export default function MarkDistributionView({
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-            gap: '0.85rem'
+            gridTemplateColumns: 'repeat(auto-fill, minmax(min(260px, 100%), 1fr))',
+            gap: '0.6rem'
           }}
         >
           {parsed.items.map((item, idx) => {
@@ -299,82 +299,104 @@ export default function MarkDistributionView({
                   background: 'linear-gradient(145deg, rgba(20, 27, 45, 0.75) 0%, rgba(13, 18, 32, 0.85) 100%)',
                   border: '1px solid rgba(255, 255, 255, 0.08)',
                   borderLeft: `4px solid ${color}`,
-                  borderRadius: '12px',
-                  padding: '1rem',
+                  borderRadius: '10px',
+                  padding: '0.7rem 0.85rem',
                   display: 'flex',
                   flexDirection: 'column',
-                  gap: '0.65rem',
-                  boxShadow: '0 4px 14px rgba(0, 0, 0, 0.25)',
+                  gap: '0.5rem',
                   transition: 'all 0.15s ease'
                 }}
               >
-                {/* Header row: Section Badge + Title */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', minWidth: 0, flex: 1 }}>
+                {/* Row 1: Index badge + Title on the same line */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'nowrap', minWidth: 0 }}>
+                  <span
+                    style={{
+                      fontSize: '0.68rem',
+                      fontWeight: 700,
+                      color: color,
+                      background: 'rgba(255, 255, 255, 0.05)',
+                      border: `1px solid ${color}40`,
+                      borderRadius: '5px',
+                      padding: '0.1rem 0.38rem',
+                      flexShrink: 0,
+                      letterSpacing: '0.02em'
+                    }}
+                  >
+                    #{item.index}
+                  </span>
+                  <h4
+                    style={{
+                      margin: 0,
+                      fontSize: '0.9rem',
+                      fontWeight: 600,
+                      color: '#f8fafc',
+                      lineHeight: 1.3,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      flex: 1,
+                      minWidth: 0
+                    }}
+                    title={item.title}
+                  >
+                    {item.title}
+                  </h4>
+                </div>
+
+                {item.group && (
+                  <span
+                    style={{
+                      fontSize: '0.66rem',
+                      fontWeight: 600,
+                      color: '#c4b5fd',
+                      background: 'rgba(139, 92, 246, 0.14)',
+                      border: '1px solid rgba(139, 92, 246, 0.28)',
+                      borderRadius: '4px',
+                      padding: '0.1rem 0.35rem',
+                      alignSelf: 'flex-start',
+                      marginTop: '-0.2rem',
+                      lineHeight: 1.2
+                    }}
+                  >
+                    📁 {item.group}
+                  </span>
+                )}
+
+                {/* Row 2: Marks pill + weightage on a separate line */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  {item.marks !== null ? (
                     <span
                       style={{
-                        fontSize: '0.72rem',
+                        fontSize: '0.8rem',
                         fontWeight: 700,
-                        color: color,
-                        background: 'rgba(255, 255, 255, 0.05)',
-                        border: `1px solid ${color}40`,
-                        borderRadius: '6px',
-                        padding: '0.12rem 0.4rem',
-                        flexShrink: 0
+                        color: '#34d399',
+                        background: 'rgba(16, 185, 129, 0.14)',
+                        border: '1px solid rgba(16, 185, 129, 0.3)',
+                        borderRadius: '5px',
+                        padding: '0.12rem 0.45rem',
+                        whiteSpace: 'nowrap'
                       }}
                     >
-                      #{item.index}
+                      {item.marks} Marks
                     </span>
-                    <h4
+                  ) : item.rawMarksInfo ? (
+                    <span
                       style={{
-                        margin: 0,
-                        fontSize: '0.92rem',
-                        fontWeight: 600,
-                        color: '#f8fafc',
-                        lineHeight: 1.35
+                        fontSize: '0.74rem',
+                        color: '#e2e8f0',
+                        background: 'rgba(255, 255, 255, 0.06)',
+                        borderRadius: '5px',
+                        padding: '0.1rem 0.4rem'
                       }}
                     >
-                      {item.title}
-                    </h4>
-                  </div>
-
-                  {/* Marks Pill */}
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', flexShrink: 0 }}>
-                    {item.marks !== null ? (
-                      <span
-                        style={{
-                          fontSize: '0.84rem',
-                          fontWeight: 700,
-                          color: '#34d399',
-                          background: 'rgba(16, 185, 129, 0.16)',
-                          border: '1px solid rgba(16, 185, 129, 0.35)',
-                          borderRadius: '6px',
-                          padding: '0.18rem 0.5rem',
-                          letterSpacing: '0.01em',
-                          whiteSpace: 'nowrap'
-                        }}
-                      >
-                        {item.marks} Marks
-                      </span>
-                    ) : item.rawMarksInfo ? (
-                      <span
-                        style={{
-                          fontSize: '0.76rem',
-                          color: '#e2e8f0',
-                          background: 'rgba(255, 255, 255, 0.06)',
-                          borderRadius: '6px',
-                          padding: '0.15rem 0.45rem'
-                        }}
-                      >
-                        {item.rawMarksInfo}
-                      </span>
-                    ) : null}
-                    {weightage !== null && (
-                      <span style={{ fontSize: '0.68rem', color: '#94a3b8', marginTop: '0.15rem' }}>
-                        {weightage}% of exam
-                      </span>
-                    )}
-                  </div>
+                      {item.rawMarksInfo}
+                    </span>
+                  ) : null}
+                  {weightage !== null && (
+                    <span style={{ fontSize: '0.7rem', color: '#64748b' }}>
+                      {weightage}% of exam
+                    </span>
+                  )}
                 </div>
 
                 {/* Calculation / Formula Chip */}
@@ -512,6 +534,11 @@ export default function MarkDistributionView({
                       <div style={{ fontWeight: 600, color: '#f8fafc', fontSize: '0.88rem' }}>
                         {item.title}
                       </div>
+                      {item.group && (
+                        <div style={{ fontSize: '0.7rem', color: '#c4b5fd', marginTop: '0.2rem' }}>
+                          📁 {item.group}
+                        </div>
+                      )}
                     </td>
 
                     {/* Formula */}
