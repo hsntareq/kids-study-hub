@@ -4,7 +4,7 @@ import { Suspense, useEffect, useState, useRef } from 'react';
 import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { auth, database } from '../../../lib/firebase';
 import { generateGeminiContent } from '../../../lib/gemini';
-import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { onAuthStateChanged, signOut, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth';
 import { ref, get, push, set, onValue, remove } from 'firebase/database';
 import Link from 'next/link';
 import MarkDistributionField from '../../../components/MarkDistributionField';
@@ -93,11 +93,46 @@ function KidProfileContent() {
   const [editingDurationModal, setEditingDurationModal] = useState(null);
   const [tempDurationValue, setTempDurationValue] = useState(60);
 
+  // Exam pause state
+  const [isExamPaused, setIsExamPaused] = useState(false);
+  const [pausedAt, setPausedAt] = useState(null);          // timestamp when paused
+  const [totalPausedMs, setTotalPausedMs] = useState(0);  // total accumulated paused time
+  const [pauseLog, setPauseLog] = useState([]);            // [{ reason, pausedAt, resumedAt }]
+  const [showPauseModal, setShowPauseModal] = useState(false);
+  const [pauseReasonInput, setPauseReasonInput] = useState('');
+
   // Question Navigator State (Scroller vs Collapsible by Question Type)
   const [navigatorViewMode, setNavigatorViewMode] = useState('collapsible'); // 'collapsible' or 'scroller'
   const [selectedSetFilter, setSelectedSetFilter] = useState('all');
   const [collapsedSets, setCollapsedSets] = useState({});
   const pillsScrollRef = useRef(null);
+
+  // Student email assignment & Teacher invite state
+  const [showAssignEmailModal, setShowAssignEmailModal] = useState(false);
+  const [studentEmailInput, setStudentEmailInput] = useState('');
+  const [isSavingEmail, setIsSavingEmail] = useState(false);
+  const [emailModalError, setEmailModalError] = useState('');
+
+  const [showInviteTeacherModal, setShowInviteTeacherModal] = useState(false);
+  const [teacherEmailInput, setTeacherEmailInput] = useState('');
+  const [isSendingInvite, setIsSendingInvite] = useState(false);
+  const [inviteModalError, setInviteModalError] = useState('');
+  const [inviteModalSuccess, setInviteModalSuccess] = useState('');
+
+  // Set Password modal state
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [currentPasswordInput, setCurrentPasswordInput] = useState('');
+  const [newPasswordInput, setNewPasswordInput] = useState('');
+  const [confirmPasswordInput, setConfirmPasswordInput] = useState('');
+  const [passwordModalError, setPasswordModalError] = useState('');
+  const [passwordModalSuccess, setPasswordModalSuccess] = useState('');
+  const [isSavingPassword, setIsSavingPassword] = useState(false);
+  const [showCurrentPw, setShowCurrentPw] = useState(false);
+  const [showNewPw, setShowNewPw] = useState(false);
+  const [showConfirmPw, setShowConfirmPw] = useState(false);
+
+  // Delete request state (student requests, parent approves)
+  const [deleteRequests, setDeleteRequests] = useState({}); // { [testId]: { [qId]: { questionText, requestedAt, status } } }
 
   const saveDebounceTimer = useRef(null);
 
@@ -202,18 +237,33 @@ function KidProfileContent() {
   const enrichWithSetNumbers = (questions) => {
     if (!questions || !Array.isArray(questions) || questions.length === 0) return [];
 
-    const sectionOrder = [];
-    const sectionInfo = new Map();
-
-    questions.forEach((q, i) => {
+    const getNormalizedSecKey = (q) => {
       let rawSec = (q.section || '').trim();
       const hasOpts = q.options && q.options.length > 0;
       const isMcq = hasOpts || /mcq|multiple choice/i.test(rawSec);
 
       let secKey = rawSec;
       if (!secKey) {
-        secKey = isMcq ? '1. Multiple Choice Questions (MCQ)' : 'Descriptive Questions';
+        return isMcq ? '1. Multiple Choice Questions (MCQ)' : 'Descriptive Questions';
       }
+      // Remove question-specific suffixes like "(Question 1)", "(Q1)", "- Question 1" so sections group questions cleanly
+      secKey = secKey
+        .replace(/\s*[\(\[]\s*(?:question|q)\s*\d+\s*[\)\]]/gi, '')
+        .replace(/\s*-\s*(?:question|q)\s*\d+\b/gi, '')
+        .trim();
+      if (!secKey) {
+        return isMcq ? '1. Multiple Choice Questions (MCQ)' : 'Descriptive Questions';
+      }
+      return secKey;
+    };
+
+    const sectionOrder = [];
+    const sectionInfo = new Map();
+
+    questions.forEach((q, i) => {
+      const hasOpts = q.options && q.options.length > 0;
+      const isMcq = hasOpts || /mcq|multiple choice/i.test(q.section || '');
+      const secKey = getNormalizedSecKey(q);
 
       if (!sectionInfo.has(secKey)) {
         sectionInfo.set(secKey, {
@@ -262,15 +312,7 @@ function KidProfileContent() {
     const setCounters = {};
 
     return questions.map((q) => {
-      let rawSec = (q.section || '').trim();
-      const hasOpts = q.options && q.options.length > 0;
-      const isMcq = hasOpts || /mcq|multiple choice/i.test(rawSec);
-
-      let secKey = rawSec;
-      if (!secKey) {
-        secKey = isMcq ? '1. Multiple Choice Questions (MCQ)' : 'Descriptive Questions';
-      }
-
+      const secKey = getNormalizedSecKey(q);
       const setNum = sectionToSetNum.get(secKey) || 1;
       setCounters[setNum] = (setCounters[setNum] || 0) + 1;
       const subNum = setCounters[setNum];
@@ -470,7 +512,7 @@ function KidProfileContent() {
               id: key,
               ...data[key]
             }));
-            const foundKid = kidsList.find(k => k.name.toLowerCase() === decodeURIComponent(searchParams.get("id")).toLowerCase() || k.id === searchParams.get("id"));
+            const foundKid = kidsList.find(k => k.name?.toLowerCase() === decodeURIComponent(searchParams.get("id")).toLowerCase() || k.id === searchParams.get("id"));
             
             if (foundKid) {
               setKid(foundKid);
@@ -517,19 +559,81 @@ function KidProfileContent() {
     return () => unsubscribe();
   }, [router, searchParams.get("id"), searchParams]);
 
+  // Load delete requests from Firebase (realtime)
+  useEffect(() => {
+    if (!user || !kid) return;
+    const dataOwnerUid = searchParams.get('parentId') || user.uid;
+    const reqRef = ref(database, `users/${dataOwnerUid}/kids/${kid.id}/deleteRequests`);
+    const unsub = onValue(reqRef, (snap) => {
+      setDeleteRequests(snap.val() || {});
+    });
+    return () => unsub();
+  }, [user?.uid, kid?.id]);
+
+  // Student sends a delete request for a question
+  const handleRequestQuestionDelete = async (testId, question) => {
+    if (!user || !kid || !viewingModelTest) return;
+    const dataOwnerUid = searchParams.get('parentId') || user.uid;
+    const reqPath = `users/${dataOwnerUid}/kids/${kid.id}/deleteRequests/${testId}/${question.id}`;
+    await set(ref(database, reqPath), {
+      questionId: question.id,
+      questionText: (question.question || '').slice(0, 200),
+      displayNumber: question.displayNumber || question.id,
+      section: question.cleanSectionTitle || question.section || '',
+      requestedAt: Date.now(),
+      status: 'pending',
+      testId,
+      subjectId: viewingModelTest.subjectId || '',
+      examId: viewingModelTest.examId || '',
+    });
+  };
+
+  // Parent approves: filter the question out of the saved questions JSON
+  const handleApproveDeleteRequest = async (testId, qId, subjectId, examId) => {
+    if (!user || !kid) return;
+    const dataOwnerUid = user.uid;
+    try {
+      const testPath = `users/${dataOwnerUid}/kids/${kid.id}/subjects/${subjectId}/modelTests/${examId}/${testId}`;
+      const snap = await get(ref(database, testPath + '/questions'));
+      const rawQuestions = snap.val();
+      if (rawQuestions) {
+        const parsed = parseQuestionsData(rawQuestions);
+        const filtered = parsed.filter(q => String(q.id) !== String(qId));
+        await set(ref(database, testPath + '/questions'), JSON.stringify({ questions: filtered }));
+      }
+      await remove(ref(database, `users/${dataOwnerUid}/kids/${kid.id}/deleteRequests/${testId}/${qId}`));
+      if (viewingModelTest && (viewingModelTest.testId === testId || viewingModelTest.id === testId)) {
+        const newSnap = await get(ref(database, testPath));
+        if (newSnap.exists()) {
+          setViewingModelTest(prev => ({ ...prev, questions: newSnap.val().questions }));
+        }
+      }
+    } catch (err) {
+      console.error('Error approving delete request:', err);
+    }
+  };
+
+  // Parent rejects: just remove the request
+  const handleRejectDeleteRequest = async (testId, qId) => {
+    if (!user || !kid) return;
+    await remove(ref(database, `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/deleteRequests/${testId}/${qId}`));
+  };
+
   const handleGlobalAdd = async (e) => {
+
     e.preventDefault();
     if (!newTitle || !user || !kid) return;
+    const dataOwnerUid = searchParams.get("parentId") || user.uid;
 
     if (addType === 'subject') {
-      const sRef = ref(database, `users/${user.uid}/kids/${kid.id}/subjects`);
+      const sRef = ref(database, `users/${dataOwnerUid}/kids/${kid.id}/subjects`);
       await set(push(sRef), { title: newTitle });
     } else if (addType === 'exam') {
-      const eRef = ref(database, `users/${user.uid}/kids/${kid.id}/exams`);
+      const eRef = ref(database, `users/${dataOwnerUid}/kids/${kid.id}/exams`);
       await set(push(eRef), { title: newTitle });
     } else if (addType === 'chapter') {
       if (!selectedSubjectId || !selectedExamId) return;
-      const cRef = ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${selectedSubjectId}/chapters/${selectedExamId}`);
+      const cRef = ref(database, `users/${dataOwnerUid}/kids/${kid.id}/subjects/${selectedSubjectId}/chapters/${selectedExamId}`);
       await set(push(cRef), { title: newTitle, pdfPage: newPdfPage });
     }
     
@@ -546,14 +650,15 @@ function KidProfileContent() {
 
   const handleSaveEdit = async (id, type, parentSubjectId = null, parentExamId = null) => {
     if (!editTitle.trim() || !user || !kid) return;
+    const dataOwnerUid = searchParams.get("parentId") || user.uid;
     
     if (type === 'subject') {
-      await set(ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${id}/title`), editTitle);
+      await set(ref(database, `users/${dataOwnerUid}/kids/${kid.id}/subjects/${id}/title`), editTitle);
     } else if (type === 'exam') {
-      await set(ref(database, `users/${user.uid}/kids/${kid.id}/exams/${id}/title`), editTitle);
+      await set(ref(database, `users/${dataOwnerUid}/kids/${kid.id}/exams/${id}/title`), editTitle);
     } else if (type === 'chapter') {
-      await set(ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${parentSubjectId}/chapters/${parentExamId}/${id}/title`), editTitle);
-      await set(ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${parentSubjectId}/chapters/${parentExamId}/${id}/pdfPage`), editPdfPage);
+      await set(ref(database, `users/${dataOwnerUid}/kids/${kid.id}/subjects/${parentSubjectId}/chapters/${parentExamId}/${id}/title`), editTitle);
+      await set(ref(database, `users/${dataOwnerUid}/kids/${kid.id}/subjects/${parentSubjectId}/chapters/${parentExamId}/${id}/pdfPage`), editPdfPage);
     }
     
     setEditingId(null);
@@ -563,8 +668,9 @@ function KidProfileContent() {
 
   const handleSaveSubjectSettings = async () => {
     if (!settingsSubject || !user || !kid) return;
-    await set(ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${settingsSubject.id}/bookUrl`), subjectBookUrl.trim());
-    await set(ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${settingsSubject.id}/examRetentionDays`), Number(subjectExamRetentionDays) || 0);
+    const dataOwnerUid = searchParams.get("parentId") || user.uid;
+    await set(ref(database, `users/${dataOwnerUid}/kids/${kid.id}/subjects/${settingsSubject.id}/bookUrl`), subjectBookUrl.trim());
+    await set(ref(database, `users/${dataOwnerUid}/kids/${kid.id}/subjects/${settingsSubject.id}/examRetentionDays`), Number(subjectExamRetentionDays) || 0);
     setSettingsSubject(null);
     setSubjectBookUrl('');
     setSubjectExamRetentionDays('7');
@@ -572,21 +678,24 @@ function KidProfileContent() {
 
   const handleSaveExamSettings = async () => {
     if (!settingsExamInfo || !user || !kid) return;
-    await set(ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${settingsExamInfo.subjectId}/examSettings/${settingsExamInfo.examId}/markDistribution`), examMarkDistribution);
+    const dataOwnerUid = searchParams.get("parentId") || user.uid;
+    await set(ref(database, `users/${dataOwnerUid}/kids/${kid.id}/subjects/${settingsExamInfo.subjectId}/examSettings/${settingsExamInfo.examId}/markDistribution`), examMarkDistribution);
     setSettingsExamInfo(null);
     setExamMarkDistribution('');
   };
 
   const handleSaveInlineMarkDist = async (subjectId, examId) => {
     if (!user || !kid) return;
-    await set(ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${subjectId}/examSettings/${examId}/markDistribution`), inlineMarkDistValue);
+    const dataOwnerUid = searchParams.get("parentId") || user.uid;
+    await set(ref(database, `users/${dataOwnerUid}/kids/${kid.id}/subjects/${subjectId}/examSettings/${examId}/markDistribution`), inlineMarkDistValue);
     setEditingMarkDistKey(null);
   };
 
   const handleToggleChapterComplete = async (subjectId, examId, chapId, currentCompleted) => {
     if (!user || !kid) return;
+    const dataOwnerUid = searchParams.get("parentId") || user.uid;
     const newCompleted = !currentCompleted;
-    const chapPath = `users/${user.uid}/kids/${kid.id}/subjects/${subjectId}/chapters/${examId}/${chapId}`;
+    const chapPath = `users/${dataOwnerUid}/kids/${kid.id}/subjects/${subjectId}/chapters/${examId}/${chapId}`;
     await set(ref(database, `${chapPath}/completed`), newCompleted);
     await set(ref(database, `${chapPath}/status`), newCompleted ? 'completed' : 'not_started');
   };
@@ -628,12 +737,104 @@ function KidProfileContent() {
 
   const handleDelete = async (id, type, parentSubjectId = null, parentExamId = null) => {
     if (!window.confirm(`Are you sure you want to delete this ${type}?`)) return;
+    const dataOwnerUid = searchParams.get("parentId") || user.uid;
     let path = '';
-    if (type === 'subject') path = `users/${user.uid}/kids/${kid.id}/subjects/${id}`;
-    else if (type === 'exam') path = `users/${user.uid}/kids/${kid.id}/exams/${id}`;
-    else if (type === 'chapter') path = `users/${user.uid}/kids/${kid.id}/subjects/${parentSubjectId}/chapters/${parentExamId}/${id}`;
+    if (type === 'subject') path = `users/${dataOwnerUid}/kids/${kid.id}/subjects/${id}`;
+    else if (type === 'exam') path = `users/${dataOwnerUid}/kids/${kid.id}/exams/${id}`;
+    else if (type === 'chapter') path = `users/${dataOwnerUid}/kids/${kid.id}/subjects/${parentSubjectId}/chapters/${parentExamId}/${id}`;
     
     await remove(ref(database, path));
+  };
+
+  // Assign or update student email and sync studentLinks
+  const handleSaveStudentEmail = async (e) => {
+    e.preventDefault();
+    if (!studentEmailInput.trim() || !user || !kid) return;
+    const cleanEmail = studentEmailInput.trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(cleanEmail)) {
+      setEmailModalError('Please enter a valid email address.');
+      return;
+    }
+
+    setIsSavingEmail(true);
+    setEmailModalError('');
+    try {
+      const dataOwnerUid = searchParams.get("parentId") || user.uid;
+      const safeEmail = cleanEmail.replace(/\./g, ',');
+
+      // Update student's email in their profile record
+      await set(ref(database, `users/${dataOwnerUid}/kids/${kid.id}/email`), cleanEmail);
+
+      // Create / update studentLinks entry for fast search and assignment
+      await set(ref(database, `studentLinks/${safeEmail}`), {
+        parentId: dataOwnerUid,
+        kidId: kid.id,
+        name: kid.name,
+        grade: kid.grade || '',
+        email: cleanEmail,
+        color: kid.color || '#3b82f6',
+        updatedAt: Date.now()
+      });
+
+      // If kid previously had a different email, clean up the old link
+      if (kid.email && kid.email.toLowerCase() !== cleanEmail) {
+        const oldSafeEmail = kid.email.toLowerCase().replace(/\./g, ',');
+        await remove(ref(database, `studentLinks/${oldSafeEmail}`));
+      }
+
+      setKid(prev => ({ ...prev, email: cleanEmail }));
+      setShowAssignEmailModal(false);
+    } catch (err) {
+      console.error('Error assigning student email:', err);
+      setEmailModalError(err.message || 'Failed to update email. Please try again.');
+    } finally {
+      setIsSavingEmail(false);
+    }
+  };
+
+  // Invite teacher or parent by email
+  const handleSendTeacherInvite = async (e) => {
+    e.preventDefault();
+    if (!teacherEmailInput.trim() || !user || !kid) return;
+    const cleanTeacherEmail = teacherEmailInput.trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(cleanTeacherEmail)) {
+      setInviteModalError('Please enter a valid email address.');
+      return;
+    }
+
+    setIsSendingInvite(true);
+    setInviteModalError('');
+    setInviteModalSuccess('');
+    try {
+      const dataOwnerUid = searchParams.get("parentId") || user.uid;
+      const safeTeacherEmail = cleanTeacherEmail.replace(/\./g, ',');
+
+      // Write to teacherInvites
+      await set(ref(database, `teacherInvites/${safeTeacherEmail}/${kid.id}`), {
+        kidId: kid.id,
+        parentId: dataOwnerUid,
+        name: kid.name,
+        grade: kid.grade || '',
+        email: kid.email || '',
+        color: kid.color || '#3b82f6',
+        invitedBy: user.email || 'Parent/Guardian',
+        invitedAt: Date.now()
+      });
+
+      setInviteModalSuccess(`Invitation sent to ${cleanTeacherEmail}! When they log in to their dashboard, they can accept this student.`);
+      setTimeout(() => {
+        setShowInviteTeacherModal(false);
+        setTeacherEmailInput('');
+        setInviteModalSuccess('');
+      }, 2500);
+    } catch (err) {
+      console.error('Error inviting teacher:', err);
+      setInviteModalError(err.message || 'Failed to send invite. Please try again.');
+    } finally {
+      setIsSendingInvite(false);
+    }
   };
 
   // Open Popover to generate model test
@@ -703,11 +904,12 @@ ${testGuidelines.length > 0 ? testGuidelines.map(g => `- ${g}`).join('\n') : '- 
 
 ${customInstructions.trim() ? `Specific Custom Instructions from Teacher:\n${customInstructions.trim()}\n` : ''}
 
-CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
-1. DO NOT use ANY markdown formatting (NO asterisks like **, NO headers like ####, NO bullet asterisks *, NO backticks).
-2. DO NOT use LaTeX formatting (NO dollar signs $, NO \\times, NO \\frac, NO \\div). Use standard plain keyboard symbols: "x", "÷", "+", "-", "/", "%".
-3. Every question must be clean, readable plain text for a school student without any code or markdown artifacts.
-4. Return strictly a valid JSON object matching this schema:
+CRITICAL INSTRUCTION - ZERO MARKDOWN, ZERO LATEX, AND MUST GENERATE ALL PARTS:
+1. MANDATORY - INCLUDE ALL PARTS & SECTIONS: You MUST generate questions for EVERY SINGLE PART / SECTION described in the Mark Distribution above (e.g., Part 1: MCQ, Part 2: Short Questions, Part 3: Short-Answer, Part 4: Competency-Based). NEVER skip or omit Part 1 or Part 2. The output "questions" array MUST include questions for all parts starting from Part 1 to the final part!
+2. DO NOT use ANY markdown formatting (NO asterisks like **, NO headers like ####, NO bullet asterisks *, NO backticks).
+3. DO NOT use LaTeX formatting (NO dollar signs $, NO \times, NO \frac, NO \div). Use standard plain keyboard symbols: "x", "÷", "+", "-", "/", "%".
+4. Every question must be clean, readable plain text for a school student without any code or markdown artifacts.
+5. Return strictly a valid JSON object matching this schema:
 {
   "title": "${modelTestTitle.trim() || `${subject.title} - ${exam.title} Model Test`}",
   "fullMarks": 100,
@@ -715,32 +917,41 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
   "questions": [
     {
       "id": 1,
-      "section": "Section A: Multiple Choice Questions",
+      "section": "1. Multiple Choice Questions (MCQ)",
       "question": "Clear question text without asterisks or markdown",
-      "marks": 5,
+      "marks": 1,
       "options": ["A) option 1", "B) option 2", "C) option 3", "D) option 4"],
       "answerKey": "Correct option and short explanation"
     },
     {
       "id": 2,
-      "section": "Section B: Short / Creative Questions",
-      "question": "Question requiring calculation or written steps",
-      "marks": 10,
+      "section": "2. Short-Answer Questions",
+      "question": "Clear question text",
+      "marks": 2,
       "options": [],
       "answerKey": "Step-by-step solution"
+    },
+    {
+      "id": 3,
+      "section": "3. Competency-Based Questions",
+      "question": "Structured problem question",
+      "marks": 7,
+      "options": [],
+      "answerKey": "Detailed solution rubric"
     }
   ]
-}`;
+}
+Ensure the "questions" array contains ALL questions across EVERY section described in the Mark Distribution.`;
 
       const questionsText = await generateGeminiContent(prompt);
 
       // Update exam mark distribution if changed in modal
       if (testMarkDistribution.trim()) {
-        await set(ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${subject.id}/examSettings/${exam.id}/markDistribution`), testMarkDistribution.trim());
+        await set(ref(database, `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${subject.id}/examSettings/${exam.id}/markDistribution`), testMarkDistribution.trim());
       }
 
       // Save Model Test in Firebase
-      const testsRef = ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${subject.id}/modelTests/${exam.id}`);
+      const testsRef = ref(database, `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${subject.id}/modelTests/${exam.id}`);
       const newTestRef = push(testsRef);
       const testData = {
         title: modelTestTitle.trim() || `Model Test - ${modelTestDate}`,
@@ -790,7 +1001,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
       const selectedChapterTitles = selectedChaptersForTest.map(id => chaptersObj[id]?.title).filter(Boolean);
 
       if (testMarkDistribution.trim()) {
-        await set(ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${subject.id}/examSettings/${exam.id}/markDistribution`), testMarkDistribution.trim());
+        await set(ref(database, `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${subject.id}/examSettings/${exam.id}/markDistribution`), testMarkDistribution.trim());
       }
 
       const defaultQuestionsJson = JSON.stringify({
@@ -807,7 +1018,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
         ]
       });
 
-      const testsRef = ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${subject.id}/modelTests/${exam.id}`);
+      const testsRef = ref(database, `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${subject.id}/modelTests/${exam.id}`);
       const newTestRef = push(testsRef);
       const testData = {
         title: modelTestTitle.trim() || `Model Test - ${modelTestDate}`,
@@ -853,17 +1064,20 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
     return `${secs}s`;
   };
 
-  // Timer effect
+  // Timer effect — pauses when isExamPaused is true
   useEffect(() => {
     if (!viewingModelTest || isExamFinished || !isExamStarted || !examStartedAt) return;
+    if (isExamPaused) return; // don't tick while paused
 
-    setTimerSeconds(Math.floor((Date.now() - examStartedAt) / 1000));
+    // elapsed = wall-clock time since start minus total paused time
+    const computeElapsed = () => Math.max(0, Math.floor((Date.now() - examStartedAt - totalPausedMs) / 1000));
+    setTimerSeconds(computeElapsed());
     const interval = setInterval(() => {
-      setTimerSeconds(Math.floor((Date.now() - examStartedAt) / 1000));
+      setTimerSeconds(computeElapsed());
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [viewingModelTest, isExamFinished, isExamStarted, examStartedAt]);
+  }, [viewingModelTest, isExamFinished, isExamStarted, examStartedAt, isExamPaused, totalPausedMs]);
 
   const openTestViewer = (test) => {
     setViewingModelTest(test);
@@ -885,6 +1099,14 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
     setIsExamStarted(hasStarted);
     setExamStartedAt(test.startedAt || (hasStarted ? Date.now() : null));
     setExamSubmittedAt(test.submittedAt || null);
+
+    // Restore pause state
+    setIsExamPaused(false);
+    setPausedAt(null);
+    setTotalPausedMs(test.totalPausedMs || 0);
+    setPauseLog(test.pauseLog ? Object.values(test.pauseLog) : []);
+    setShowPauseModal(false);
+    setPauseReasonInput('');
   };
 
   const handleUpdateExamDuration = async (newMinutes) => {
@@ -893,7 +1115,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
     setViewingModelTest(prev => prev ? ({ ...prev, duration: mins }) : prev);
     if (viewingModelTest && user && kid) {
       try {
-        const path = `users/${user.uid}/kids/${kid.id}/subjects/${viewingModelTest.subjectId}/modelTests/${viewingModelTest.examId}/${viewingModelTest.testId || viewingModelTest.id}`;
+        const path = `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${viewingModelTest.subjectId}/modelTests/${viewingModelTest.examId}/${viewingModelTest.testId || viewingModelTest.id}`;
         await set(ref(database, `${path}/duration`), mins);
       } catch (err) {
         console.error('Error saving exam duration:', err);
@@ -905,7 +1127,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
     if (!editingDurationModal || !user || !kid) return;
     const mins = Math.max(1, Math.min(360, Number(tempDurationValue) || 60));
     try {
-      const path = `users/${user.uid}/kids/${kid.id}/subjects/${editingDurationModal.subjectId}/modelTests/${editingDurationModal.examId}/${editingDurationModal.testId}/duration`;
+      const path = `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${editingDurationModal.subjectId}/modelTests/${editingDurationModal.examId}/${editingDurationModal.testId}/duration`;
       await set(ref(database, path), mins);
       if (viewingModelTest && (viewingModelTest.id === editingDurationModal.testId || viewingModelTest.testId === editingDurationModal.testId)) {
         setViewingModelTest(prev => ({ ...prev, duration: mins }));
@@ -924,7 +1146,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
     setExamStartedAt(now);
     setIsExamStarted(true);
     try {
-      const path = `users/${user.uid}/kids/${kid.id}/subjects/${viewingModelTest.subjectId}/modelTests/${viewingModelTest.examId}/${viewingModelTest.testId || viewingModelTest.id}`;
+      const path = `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${viewingModelTest.subjectId}/modelTests/${viewingModelTest.examId}/${viewingModelTest.testId || viewingModelTest.id}`;
       await set(ref(database, `${path}/startedAt`), now);
       await set(ref(database, `${path}/duration`), defaultDurationMinutes);
       setViewingModelTest(prev => ({
@@ -934,6 +1156,54 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
       }));
     } catch (err) {
       console.error('Error starting exam timer:', err);
+    }
+  };
+
+  // Pause the exam — opens the reason modal
+  const handlePauseExam = () => {
+    setShowPauseModal(true);
+    setPauseReasonInput('');
+  };
+
+  // Confirm pause with a reason
+  const handleConfirmPause = async (reason) => {
+    if (!viewingModelTest || !user || !kid) return;
+    const now = Date.now();
+    setIsExamPaused(true);
+    setPausedAt(now);
+    setShowPauseModal(false);
+    try {
+      const path = `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${viewingModelTest.subjectId}/modelTests/${viewingModelTest.examId}/${viewingModelTest.testId || viewingModelTest.id}`;
+      const entry = { reason: reason || 'No reason given', pausedAt: now, resumedAt: null };
+      await push(ref(database, `${path}/pauseLog`), entry);
+      // Save time-of-pause so we can compute elapsed correctly on reload
+      await set(ref(database, `${path}/totalPausedMs`), totalPausedMs);
+      setPauseLog(prev => [...prev, entry]);
+    } catch (err) {
+      console.error('Error saving pause:', err);
+    }
+  };
+
+  // Resume the exam
+  const handleResumeExam = async () => {
+    if (!viewingModelTest || !user || !kid) return;
+    const now = Date.now();
+    const additionalPause = pausedAt ? (now - pausedAt) : 0;
+    const newTotalPausedMs = totalPausedMs + additionalPause;
+    setTotalPausedMs(newTotalPausedMs);
+    setPausedAt(null);
+    setIsExamPaused(false);
+    // Update the last pauseLog entry's resumedAt
+    setPauseLog(prev => {
+      const updated = [...prev];
+      if (updated.length > 0) updated[updated.length - 1] = { ...updated[updated.length - 1], resumedAt: now };
+      return updated;
+    });
+    try {
+      const path = `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${viewingModelTest.subjectId}/modelTests/${viewingModelTest.examId}/${viewingModelTest.testId || viewingModelTest.id}`;
+      await set(ref(database, `${path}/totalPausedMs`), newTotalPausedMs);
+    } catch (err) {
+      console.error('Error resuming exam:', err);
     }
   };
 
@@ -947,7 +1217,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
       const now = Date.now();
       const timeSpent = examStartedAt ? Math.max(1, Math.floor((now - examStartedAt) / 1000)) : (viewingModelTest.timeSpentSeconds || 0);
 
-      const path = `users/${user.uid}/kids/${kid.id}/subjects/${viewingModelTest.subjectId}/modelTests/${viewingModelTest.examId}/${viewingModelTest.testId}`;
+      const path = `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${viewingModelTest.subjectId}/modelTests/${viewingModelTest.examId}/${viewingModelTest.testId}`;
       await set(ref(database, `${path}/isFinished`), true);
       await set(ref(database, `${path}/submittedAt`), now);
       await set(ref(database, `${path}/timeSpentSeconds`), timeSpent);
@@ -1018,7 +1288,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
 
   const handleUpdateTestResult = async (subjectId, examId, testId, newResult) => {
     if (!user || !kid) return;
-    await set(ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${subjectId}/modelTests/${examId}/${testId}/result`), newResult);
+    await set(ref(database, `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${subjectId}/modelTests/${examId}/${testId}/result`), newResult);
     if (viewingModelTest && viewingModelTest.testId === testId) {
       setViewingModelTest(prev => ({ ...prev, result: newResult }));
     }
@@ -1027,7 +1297,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
 
   const handleDeleteModelTest = async (subjectId, examId, testId) => {
     if (!window.confirm('Are you sure you want to delete this model test?')) return;
-    await remove(ref(database, `users/${user.uid}/kids/${kid.id}/subjects/${subjectId}/modelTests/${examId}/${testId}`));
+    await remove(ref(database, `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${subjectId}/modelTests/${examId}/${testId}`));
     if (viewingModelTest && viewingModelTest.testId === testId) {
       setViewingModelTest(null);
     }
@@ -1040,7 +1310,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
 
     const executeSave = async () => {
       try {
-        const path = `users/${user.uid}/kids/${kid.id}/subjects/${viewingModelTest.subjectId}/modelTests/${viewingModelTest.examId}/${viewingModelTest.testId}`;
+        const path = `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${viewingModelTest.subjectId}/modelTests/${viewingModelTest.examId}/${viewingModelTest.testId}`;
         await set(ref(database, `${path}/studentAnswers`), updatedAnswers);
         setViewingModelTest(prev => ({
           ...prev,
@@ -1096,7 +1366,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
     const updated = [...uploadedAnswerPages, ...newPages];
     setUploadedAnswerPages(updated);
     if (viewingModelTest && user && kid) {
-      const path = `users/${user.uid}/kids/${kid.id}/subjects/${viewingModelTest.subjectId}/modelTests/${viewingModelTest.examId}/${viewingModelTest.testId}`;
+      const path = `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${viewingModelTest.subjectId}/modelTests/${viewingModelTest.examId}/${viewingModelTest.testId}`;
       await set(ref(database, `${path}/uploadedPages`), updated);
       setViewingModelTest(prev => ({ ...prev, uploadedPages: updated }));
     }
@@ -1106,7 +1376,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
     const updated = uploadedAnswerPages.filter(p => p.id !== pageId);
     setUploadedAnswerPages(updated);
     if (viewingModelTest && user && kid) {
-      const path = `users/${user.uid}/kids/${kid.id}/subjects/${viewingModelTest.subjectId}/modelTests/${viewingModelTest.examId}/${viewingModelTest.testId}`;
+      const path = `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${viewingModelTest.subjectId}/modelTests/${viewingModelTest.examId}/${viewingModelTest.testId}`;
       await set(ref(database, `${path}/uploadedPages`), updated);
       setViewingModelTest(prev => ({ ...prev, uploadedPages: updated }));
     }
@@ -1116,7 +1386,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
     if (!viewingModelTest || !user || !kid) return;
     setIsSavingSubmission(true);
     try {
-      const path = `users/${user.uid}/kids/${kid.id}/subjects/${viewingModelTest.subjectId}/modelTests/${viewingModelTest.examId}/${viewingModelTest.testId}`;
+      const path = `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${viewingModelTest.subjectId}/modelTests/${viewingModelTest.examId}/${viewingModelTest.testId}`;
       await set(ref(database, `${path}/studentAnswers`), studentAnswers);
       await set(ref(database, `${path}/uploadedPages`), uploadedAnswerPages);
 
@@ -1146,7 +1416,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
       const totalAwarded = qList.reduce((acc, q) => acc + (Number(updatedMarks[q.id]) || 0), 0);
       const newResult = `${totalAwarded}/${totalMax}`;
 
-      const path = `users/${user.uid}/kids/${kid.id}/subjects/${viewingModelTest.subjectId}/modelTests/${viewingModelTest.examId}/${viewingModelTest.testId}`;
+      const path = `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${viewingModelTest.subjectId}/modelTests/${viewingModelTest.examId}/${viewingModelTest.testId}`;
       await set(ref(database, `${path}/result`), newResult);
       const gradingObj = {
         awardedMarks: updatedMarks,
@@ -1198,7 +1468,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
       const totalAwarded = parsedQuestions.reduce((acc, q) => acc + (Number(awardedMarks[q.id]) || 0), 0);
       const newResult = `${totalAwarded}/${totalMax}`;
 
-      const path = `users/${user.uid}/kids/${kid.id}/subjects/${viewingModelTest.subjectId}/modelTests/${viewingModelTest.examId}/${viewingModelTest.testId}`;
+      const path = `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${viewingModelTest.subjectId}/modelTests/${viewingModelTest.examId}/${viewingModelTest.testId}`;
       await set(ref(database, `${path}/result`), newResult);
       const gradingObj = {
         awardedMarks,
@@ -1306,7 +1576,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
 
   return (
     <main className="view-container">
-      <div className="card" style={{ maxWidth: '840px', width: '100%', padding: '2.5rem' }}>
+      <div className="card" style={{ maxWidth: '840px', width: '100%', padding: 'clamp(1rem, 4vw, 2.5rem)' }}>
         
         {/* Header / Back Navigation */}
         <div style={{ marginBottom: '2rem' }}>
@@ -1330,14 +1600,14 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
         </div>
 
         {/* Profile Header */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '2rem', marginBottom: '3rem', paddingBottom: '2rem', borderBottom: '1px solid var(--glass-border)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 'clamp(1rem, 4vw, 2rem)', marginBottom: '2rem', paddingBottom: '1.5rem', borderBottom: '1px solid var(--glass-border)' }}>
           {kid.email ? (
             <>
               <img 
                 src={`https://unavatar.io/${kid.email}?fallback=false`} 
                 alt={kid.name}
                 referrerPolicy="no-referrer"
-                style={{ width: '120px', height: '120px', borderRadius: '50%', objectFit: 'cover', boxShadow: `0 8px 24px ${kid.color}40`, border: `4px solid ${kid.color}`, display: 'block' }}
+                style={{ width: 'clamp(72px, 18vw, 120px)', height: 'clamp(72px, 18vw, 120px)', borderRadius: '50%', objectFit: 'cover', boxShadow: `0 8px 24px ${kid.color}40`, border: `4px solid ${kid.color}`, display: 'block' }}
                 onError={(e) => {
                   e.target.style.display = 'none';
                   if (e.target.nextElementSibling) {
@@ -1345,25 +1615,172 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                   }
                 }}
               />
-              <div style={{ width: '120px', height: '120px', borderRadius: '50%', background: kid.color, display: 'none', alignItems: 'center', justifyContent: 'center', fontSize: '3.5rem', fontWeight: 'bold', color: '#fff', boxShadow: `0 8px 24px ${kid.color}40`, border: `4px solid ${kid.color}`, flexShrink: 0 }}>
-                {kid.name.charAt(0)}
+              <div style={{ width: 'clamp(72px, 18vw, 120px)', height: 'clamp(72px, 18vw, 120px)', borderRadius: '50%', background: kid.color, display: 'none', alignItems: 'center', justifyContent: 'center', fontSize: 'clamp(2rem, 6vw, 3.5rem)', fontWeight: 'bold', color: '#fff', boxShadow: `0 8px 24px ${kid.color}40`, border: `4px solid ${kid.color}`, flexShrink: 0 }}>
+                {kid.name?.charAt(0)}
               </div>
             </>
           ) : (
-            <div style={{ width: '120px', height: '120px', borderRadius: '50%', background: kid.color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '3.5rem', fontWeight: 'bold', color: '#fff', boxShadow: `0 8px 24px ${kid.color}40`, border: `4px solid ${kid.color}`, flexShrink: 0 }}>
-              {kid.name.charAt(0)}
+            <div style={{ width: 'clamp(72px, 18vw, 120px)', height: 'clamp(72px, 18vw, 120px)', borderRadius: '50%', background: kid.color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 'clamp(2rem, 6vw, 3.5rem)', fontWeight: 'bold', color: '#fff', boxShadow: `0 8px 24px ${kid.color}40`, border: `4px solid ${kid.color}`, flexShrink: 0 }}>
+              {kid.name?.charAt(0)}
             </div>
           )}
           
-          <div style={{ textAlign: 'left' }}>
-            <h1 style={{ fontSize: '2.5rem', marginBottom: '0.5rem', lineHeight: 1.1 }}>{kid.name}</h1>
-            <p style={{ fontSize: '1.2rem', color: 'var(--text-secondary)', margin: '0 0 0.5rem 0' }}>{kid.grade}</p>
-            {kid.email && <p style={{ fontSize: '0.95rem', color: 'var(--text-secondary)', margin: 0, opacity: 0.8 }}>{kid.email}</p>}
+          <div style={{ textAlign: 'left', flex: '1 1 180px', minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+              <h1 style={{ fontSize: 'clamp(1.5rem, 5vw, 2.5rem)', margin: 0, lineHeight: 1.1 }}>{kid.name}</h1>
+              {searchParams.get("parentId") && (
+                <span style={{
+                  fontSize: '0.75rem',
+                  fontWeight: 700,
+                  padding: '0.2rem 0.6rem',
+                  borderRadius: '9999px',
+                  background: 'rgba(56, 189, 248, 0.15)',
+                  border: '1px solid rgba(56, 189, 248, 0.4)',
+                  color: '#38bdf8'
+                }}>
+                  👨‍🏫 Assigned View
+                </span>
+              )}
+            </div>
+            <p style={{ fontSize: '1.15rem', color: 'var(--text-secondary)', margin: '0.35rem 0 0.75rem 0' }}>{kid.grade}</p>
+
+            {/* Email assignment & Teacher invitation bar */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+              {kid.email ? (
+                <div style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  padding: '0.35rem 0.75rem',
+                  borderRadius: '8px',
+                  background: 'rgba(255, 255, 255, 0.05)',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  fontSize: '0.86rem',
+                  color: '#cbd5e1'
+                }}>
+                  <span>✉️</span>
+                  <span style={{ fontWeight: 600 }}>{kid.email}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStudentEmailInput(kid.email || '');
+                      setEmailModalError('');
+                      setShowAssignEmailModal(true);
+                    }}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#a5b4fc',
+                      cursor: 'pointer',
+                      fontSize: '0.78rem',
+                      fontWeight: 600,
+                      textDecoration: 'underline',
+                      marginLeft: '0.25rem',
+                      padding: 0
+                    }}
+                    title="Change student email address"
+                  >
+                    Edit
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStudentEmailInput('');
+                    setEmailModalError('');
+                    setShowAssignEmailModal(true);
+                  }}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.4rem',
+                    padding: '0.35rem 0.8rem',
+                    borderRadius: '8px',
+                    background: 'rgba(99, 102, 241, 0.15)',
+                    border: '1px solid rgba(129, 140, 248, 0.4)',
+                    color: '#a5b4fc',
+                    fontSize: '0.84rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  <span>✉️</span>
+                  <span>+ Assign Student Email</span>
+                </button>
+              )}
+
+              {/* Invite Teacher / Parent Action */}
+              <button
+                type="button"
+                onClick={() => {
+                  setTeacherEmailInput('');
+                  setInviteModalError('');
+                  setInviteModalSuccess('');
+                  setShowInviteTeacherModal(true);
+                }}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                  padding: '0.35rem 0.8rem',
+                  borderRadius: '8px',
+                  background: 'rgba(16, 185, 129, 0.12)',
+                  border: '1px solid rgba(16, 185, 129, 0.35)',
+                  color: '#6ee7b7',
+                  fontSize: '0.84rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+                title="Invite a teacher or parent to monitor and assess this student"
+              >
+                <span>🔗</span>
+                <span>Invite Teacher / Parent</span>
+              </button>
+
+              {/* Set Password Action */}
+              {!isStudentView && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCurrentPasswordInput('');
+                    setNewPasswordInput('');
+                    setConfirmPasswordInput('');
+                    setPasswordModalError('');
+                    setPasswordModalSuccess('');
+                    setShowCurrentPw(false);
+                    setShowNewPw(false);
+                    setShowConfirmPw(false);
+                    setShowPasswordModal(true);
+                  }}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.4rem',
+                    padding: '0.35rem 0.8rem',
+                    borderRadius: '8px',
+                    background: 'rgba(245, 158, 11, 0.12)',
+                    border: '1px solid rgba(245, 158, 11, 0.35)',
+                    color: '#fcd34d',
+                    fontSize: '0.84rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                  title="Set or change the password for this student's account"
+                >
+                  <span>🔑</span>
+                  <span>Set Password</span>
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
         {/* Subjects, Exams, and Syllabus Section */}
-        <div style={{ marginTop: '2.5rem' }}>
+        <div style={{ marginTop: 'clamp(1.5rem, 4vw, 2.5rem)' }}>
           
           {/* Section Header with View Mode Switcher and Add Subject Action */}
           <div style={{
@@ -1376,7 +1793,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
           }}>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
-                <h2 style={{ textAlign: 'left', fontSize: '1.5rem', fontWeight: 700, margin: 0, color: '#fff', letterSpacing: '-0.02em' }}>
+                <h2 style={{ textAlign: 'left', fontSize: 'clamp(1.15rem, 4vw, 1.5rem)', fontWeight: 700, margin: 0, color: '#fff', letterSpacing: '-0.02em' }}>
                   Enrolled Subjects
                 </h2>
                 <span style={{
@@ -1512,7 +1929,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
             WebkitOverflowScrolling: 'touch'
           } : {
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(min(360px, 100%), 1fr))',
             gridAutoFlow: 'dense',
             gap: '1.25rem',
             alignItems: 'start'
@@ -1547,7 +1964,8 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
               </div>
             )}
             {subjects.map(subject => {
-              const subjectSlug = subject.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+              const subjectTitle = subject?.title || subject?.name || subject?.subjectName || '';
+              const subjectSlug = subjectTitle ? subjectTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') : (subject?.id || 'subject');
 
               // Calculate overall chapters, completed chapters, and model tests for this subject
               let totalChapters = 0;
@@ -1706,13 +2124,13 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                         flexShrink: 0,
                         boxShadow: '0 4px 12px rgba(139, 92, 246, 0.15)'
                       }}>
-                        {getSubjectIcon(subject.title)}
+                        {getSubjectIcon(subjectTitle)}
                       </div>
 
                       <div style={{ minWidth: 0, flex: 1 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
                           <h3 style={{ margin: 0, fontSize: isExpanded ? '1.35rem' : '1.22rem', color: '#fff', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {subject.title}
+                            {subjectTitle || 'Untitled Subject'}
                           </h3>
 
                           {isExpanded && (
@@ -2208,11 +2626,11 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                           All scheduled exams have been completed and archived. Click &quot;Show Archived&quot; to review past workspaces.
                         </div>
                       ) : (
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '0.75rem' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(260px, 100%), 1fr))', gap: '0.75rem' }}>
                           {activeExams.map(ex => {
                             const examHref = `/kid/exam?id=${searchParams.get("id")}&subject=${subjectSlug}&examId=${ex.id}&subjectId=${subject.id}${parentIdQuery}`;
                             const isNextUp = nextUpExam && ex.id === nextUpExam.id && ex.status !== 'Completed';
-                            const isMajorExam = /final|term|annual|board|midterm|semester/i.test(ex.title);
+                            const isMajorExam = /final|term|annual|board|midterm|semester/i.test(ex?.title || '');
 
                             return (
                               <div
@@ -2774,7 +3192,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                       e.currentTarget.style.boxShadow = '0 4px 14px rgba(99, 102, 241, 0.25)';
                     }}
                   >
-                    <span>Open {subject.title} Hub</span>
+                    <span>Open {subjectTitle || 'Subject'} Hub</span>
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
                   </Link>
                 </div>
@@ -3043,7 +3461,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
               {/* Quick Preset Pills for Duration */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', marginTop: '-0.35rem' }}>
                 <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>Quick Time:</span>
-                {[15, 30, 45, 60, 90, 120].map(mins => (
+                {[15, 30, 45, 60, 90, 120, 150, 180].map(mins => (
                   <button
                     key={mins}
                     type="button"
@@ -3281,6 +3699,32 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                 )}
               </div>
 
+              {/* Pause / Resume Button */}
+              {isExamStarted && !isExamFinished && (
+                <button
+                  type="button"
+                  onClick={isExamPaused ? handleResumeExam : handlePauseExam}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.35rem',
+                    padding: '0.38rem 0.85rem',
+                    borderRadius: '8px',
+                    fontSize: '0.8rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    border: `1px solid ${isExamPaused ? 'rgba(16,185,129,0.45)' : 'rgba(245,158,11,0.45)'}`,
+                    background: isExamPaused ? 'rgba(16,185,129,0.15)' : 'rgba(245,158,11,0.12)',
+                    color: isExamPaused ? '#34d399' : '#fcd34d',
+                    transition: 'all 0.2s',
+                  }}
+                  title={isExamPaused ? 'Resume the exam — timer will continue' : 'Pause the exam and provide a reason'}
+                >
+                  <span>{isExamPaused ? '▶️' : '⏸️'}</span>
+                  <span>{isExamPaused ? 'Resume Exam' : 'Pause Exam'}</span>
+                </button>
+              )}
+
               {/* Mode Switcher */}
               <div style={{ display: 'flex', background: 'rgba(0,0,0,0.4)', padding: '3px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)' }}>
                 <button
@@ -3363,12 +3807,157 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
           {/* Full Page Body */}
           <main style={{ flex: 1, width: '100%', maxWidth: '1020px', margin: '0 auto', padding: 'clamp(0.75rem, 2vw, 1.25rem) clamp(0.5rem, 2.5vw, 1.25rem) clamp(5.5rem, 12vh, 7rem) clamp(0.5rem, 2.5vw, 1.25rem)', boxSizing: 'border-box', textAlign: 'left' }}>
 
+            {/* Paused Exam Overlay */}
+            {isExamPaused && (
+              <div style={{
+                position: 'fixed',
+                inset: 0,
+                zIndex: 9998,
+                background: 'rgba(5, 10, 25, 0.92)',
+                backdropFilter: 'blur(14px)',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '1.5rem',
+                textAlign: 'center',
+                padding: '2rem',
+              }}>
+                <div style={{ fontSize: '4rem', lineHeight: 1 }}>⏸️</div>
+                <div>
+                  <h2 style={{ margin: '0 0 0.4rem 0', fontSize: '2rem', color: '#fcd34d', fontWeight: 800, letterSpacing: '-0.02em' }}>
+                    Exam Paused
+                  </h2>
+                  <p style={{ margin: 0, fontSize: '1rem', color: 'var(--text-secondary)', maxWidth: '420px' }}>
+                    {pauseLog.length > 0 && pauseLog[pauseLog.length - 1]?.reason
+                      ? <><strong style={{ color: '#fff' }}>Reason:</strong> {pauseLog[pauseLog.length - 1].reason}</>
+                      : 'The timer is paused. Resume when you are ready.'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleResumeExam}
+                  style={{
+                    padding: '0.85rem 2.5rem',
+                    borderRadius: '12px',
+                    fontSize: '1.05rem',
+                    fontWeight: 700,
+                    border: 'none',
+                    background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                    color: '#fff',
+                    cursor: 'pointer',
+                    boxShadow: '0 6px 24px rgba(16,185,129,0.4)',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.5rem',
+                  }}
+                >
+                  <span>▶️</span>
+                  <span>Resume Exam</span>
+                </button>
+                <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: 0 }}>
+                  Timer is stopped. Questions and answers are hidden while paused.
+                </p>
+              </div>
+            )}
+
             {/* Notification Banner */}
             {notificationMsg && (
               <div style={{ background: 'rgba(16, 185, 129, 0.2)', border: '1px solid rgba(16, 185, 129, 0.4)', color: '#34d399', padding: '0.6rem 1rem', borderRadius: '8px', marginBottom: '1rem', fontSize: '0.88rem', fontWeight: 600 }}>
                 {notificationMsg}
               </div>
             )}
+
+            {/* Pending Question Delete Requests Panel (Parent only) */}
+            {!isStudentView && (() => {
+              const testId = viewingModelTest?.testId || viewingModelTest?.id;
+              const reqsForTest = deleteRequests[testId] || {};
+              const pendingEntries = Object.entries(reqsForTest);
+              if (pendingEntries.length === 0) return null;
+              return (
+                <div style={{
+                  background: 'linear-gradient(90deg, rgba(245,158,11,0.1) 0%, rgba(15,23,42,0.85) 100%)',
+                  border: '1px solid rgba(245,158,11,0.4)',
+                  borderRadius: '12px',
+                  padding: '1rem 1.25rem',
+                  marginBottom: '1.25rem',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                    <span style={{ fontSize: '1.1rem' }}>🗑️</span>
+                    <span style={{ fontSize: '0.95rem', fontWeight: 700, color: '#fcd34d' }}>
+                      Question Deletion Requests ({pendingEntries.length})
+                    </span>
+                    <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginLeft: '0.25rem' }}>
+                      — Student has requested to remove these questions. Review and decide:
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+                    {pendingEntries.map(([qId, req]) => (
+                      <div key={qId} style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'flex-start',
+                        gap: '1rem',
+                        padding: '0.7rem 0.9rem',
+                        background: 'rgba(0,0,0,0.3)',
+                        borderRadius: '8px',
+                        border: '1px solid rgba(245,158,11,0.2)',
+                        flexWrap: 'wrap'
+                      }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#fcd34d', marginBottom: '0.2rem' }}>
+                            Q{req.displayNumber} {req.section ? `· ${req.section}` : ''}
+                          </div>
+                          <div style={{ fontSize: '0.8rem', color: '#cbd5e1', wordBreak: 'break-word', lineHeight: 1.4 }}>
+                            {req.questionText ? `"${req.questionText.slice(0, 120)}${req.questionText.length > 120 ? '…' : ''}"` : 'No preview'}
+                          </div>
+                          <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+                            Requested {new Date(req.requestedAt).toLocaleString()}
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '0.45rem', flexShrink: 0, alignItems: 'center' }}>
+                          <button
+                            type="button"
+                            onClick={() => handleApproveDeleteRequest(testId, qId, req.subjectId, req.examId)}
+                            style={{
+                              padding: '0.35rem 0.8rem',
+                              borderRadius: '6px',
+                              border: 'none',
+                              background: 'rgba(239,68,68,0.2)',
+                              color: '#f87171',
+                              fontSize: '0.8rem',
+                              fontWeight: 700,
+                              cursor: 'pointer',
+                              border: '1px solid rgba(239,68,68,0.4)'
+                            }}
+                            title="Permanently remove this question from the test"
+                          >
+                            ✓ Approve Delete
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleRejectDeleteRequest(testId, qId)}
+                            style={{
+                              padding: '0.35rem 0.75rem',
+                              borderRadius: '6px',
+                              border: '1px solid rgba(255,255,255,0.12)',
+                              background: 'rgba(255,255,255,0.05)',
+                              color: '#94a3b8',
+                              fontSize: '0.8rem',
+                              fontWeight: 600,
+                              cursor: 'pointer'
+                            }}
+                            title="Dismiss this request — keep the question"
+                          >
+                            ✕ Reject
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Exam Finished & Submitted Review Banner */}
             {isExamFinished && (
@@ -3401,146 +3990,83 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
               </div>
             )}
 
-            {/* Student Exam Not Started Screen */}
-            {testViewMode === 'student' && !isExamStarted && !isExamFinished ? (
+            {/* Student Exam Not Started Screen / Banner */}
+            {testViewMode === 'student' && !isExamStarted && !isExamFinished && (
               <div style={{
-                background: 'rgba(15, 23, 42, 0.85)',
-                border: '1px solid rgba(139, 92, 246, 0.3)',
-                borderRadius: '16px',
-                padding: '2.5rem',
-                textAlign: 'center',
-                maxWidth: '680px',
-                margin: '2rem auto',
-                boxShadow: '0 10px 40px rgba(0,0,0,0.5)'
+                background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.16) 0%, rgba(56, 189, 248, 0.12) 100%)',
+                border: '1px solid rgba(139, 92, 246, 0.4)',
+                borderRadius: '14px',
+                padding: '1.25rem 1.6rem',
+                marginBottom: '1.5rem',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: '1.2rem',
+                boxShadow: '0 8px 30px rgba(0,0,0,0.3)'
               }}>
-                <div style={{ fontSize: '3rem', marginBottom: '0.75rem' }}>📝</div>
-                <h2 style={{ fontSize: '1.6rem', color: '#fff', margin: '0 0 0.5rem 0' }}>
-                  Ready to take {viewingModelTest.title || 'Model Test'}?
-                </h2>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.92rem', marginBottom: '1.5rem', lineHeight: 1.6 }}>
-                  This exam contains <strong>{parsedQuestions.length} Questions</strong> with a total of <strong>{totalMaxMarks} Marks</strong>.
-                </p>
-
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.8rem', marginBottom: '1.8rem', textAlign: 'center' }}>
-                  <div style={{ background: 'rgba(255,255,255,0.04)', padding: '0.75rem', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.08)' }}>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Questions</div>
-                    <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#fff' }}>{parsedQuestions.length}</div>
+                <div style={{ flex: '1 1 280px', minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.35rem' }}>
+                    <span style={{ fontSize: '1.5rem' }}>📝</span>
+                    <h2 style={{ fontSize: '1.2rem', color: '#fff', margin: 0, fontWeight: 700 }}>
+                      Ready to take {viewingModelTest.title || 'Model Test'}?
+                    </h2>
                   </div>
-                  <div style={{ background: 'rgba(255,255,255,0.04)', padding: '0.75rem', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.08)' }}>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Total Marks</div>
-                    <div style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--accent-primary)' }}>{totalMaxMarks}</div>
-                  </div>
-                  <div style={{ background: 'rgba(255,255,255,0.04)', padding: '0.75rem', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.08)' }}>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Time Limit</div>
-                    <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#38bdf8' }}>{defaultDurationMinutes} Min</div>
-                  </div>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.86rem', margin: 0, lineHeight: 1.5 }}>
+                    Contains <strong>{parsedQuestions.length} Questions</strong> ({totalMaxMarks} Marks). You can browse and navigate the question sets below, adjust your exam duration, and start when ready!
+                  </p>
                 </div>
 
-                {/* Interactive Exam Duration / Time Limit Selector */}
-                <div style={{
-                  background: 'rgba(56, 189, 248, 0.08)',
-                  border: '1px solid rgba(56, 189, 248, 0.3)',
-                  borderRadius: '12px',
-                  padding: '1.2rem',
-                  marginBottom: '1.6rem',
-                  textAlign: 'left'
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-                    <label style={{ fontSize: '0.9rem', fontWeight: 700, color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                      <span>⏱️</span>
-                      <span>Set Exam Duration / Time Limit:</span>
-                    </label>
-                    <span style={{ fontSize: '0.8rem', color: '#cbd5e1' }}>
-                      Selected: <strong style={{ color: '#fff', fontSize: '0.95rem' }}>{defaultDurationMinutes} Minutes</strong>
-                    </span>
-                  </div>
-
-                  {/* Preset Pills */}
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem', marginBottom: '0.75rem' }}>
-                    {[15, 20, 30, 45, 60, 90, 120, 180].map(mins => (
-                      <button
-                        key={mins}
-                        type="button"
-                        onClick={() => handleUpdateExamDuration(mins)}
-                        style={{
-                          padding: '0.35rem 0.75rem',
-                          borderRadius: '8px',
-                          fontSize: '0.8rem',
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                          background: defaultDurationMinutes === mins ? '#38bdf8' : 'rgba(255,255,255,0.06)',
-                          color: defaultDurationMinutes === mins ? '#0f172a' : '#cbd5e1',
-                          border: `1px solid ${defaultDurationMinutes === mins ? '#38bdf8' : 'rgba(255,255,255,0.12)'}`,
-                          boxShadow: defaultDurationMinutes === mins ? '0 0 10px rgba(56, 189, 248, 0.4)' : 'none',
-                          transition: 'all 0.15s ease'
-                        }}
-                      >
-                        {mins < 60 ? `${mins}m` : `${mins / 60}h${mins % 60 ? ` ${mins % 60}m` : ''}`}
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* Custom minute input */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Custom time:</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={360}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', flexWrap: 'wrap' }}>
+                  {/* Duration Selector */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'rgba(0,0,0,0.4)', padding: '0.35rem 0.75rem', borderRadius: '8px', border: '1px solid rgba(56, 189, 248, 0.3)' }}>
+                    <span style={{ fontSize: '0.85rem' }}>⏱️</span>
+                    <select
                       value={defaultDurationMinutes}
                       onChange={(e) => handleUpdateExamDuration(e.target.value)}
                       style={{
-                        width: '80px',
-                        padding: '0.35rem 0.65rem',
-                        background: 'rgba(0,0,0,0.5)',
-                        border: '1px solid rgba(56, 189, 248, 0.45)',
-                        borderRadius: '6px',
+                        background: 'transparent',
+                        border: 'none',
                         color: '#38bdf8',
-                        fontSize: '0.9rem',
+                        fontSize: '0.86rem',
                         fontWeight: 700,
-                        textAlign: 'center'
+                        cursor: 'pointer',
+                        outline: 'none'
                       }}
-                    />
-                    <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>minutes</span>
-                    <span style={{ fontSize: '0.74rem', color: '#94a3b8', marginLeft: 'auto' }}>
-                      (You can also adjust during exam or add +5m anytime)
-                    </span>
+                    >
+                      {[15, 20, 30, 45, 60, 90, 120, 150, 180].map(mins => (
+                        <option key={mins} value={mins} style={{ background: '#0f172a', color: '#fff' }}>
+                          {mins} Mins
+                        </option>
+                      ))}
+                    </select>
                   </div>
-                </div>
 
-                <div style={{ background: 'rgba(0,0,0,0.3)', borderRadius: '10px', padding: '1rem', marginBottom: '2rem', textAlign: 'left', border: '1px solid rgba(255,255,255,0.06)' }}>
-                  <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#f1f5f9', marginBottom: '0.4rem' }}>
-                    ⚠️ Exam Rules & Instructions:
-                  </div>
-                  <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.82rem', color: 'var(--text-secondary)', lineHeight: 1.7 }}>
-                    <li>The <strong>{defaultDurationMinutes}-minute countdown timer</strong> will begin as soon as you click Start Exam.</li>
-                    <li>All typed answers and selected options will save automatically in real-time.</li>
-                    <li><strong>Answers and solutions are hidden</strong> until you finish and submit your paper.</li>
-                    <li>You can attach photos of your handwritten answer papers at any time.</li>
-                  </ul>
+                  <button
+                    type="button"
+                    onClick={handleStartExam}
+                    style={{
+                      padding: '0.7rem 1.6rem',
+                      fontSize: '0.95rem',
+                      fontWeight: 700,
+                      background: 'var(--accent-gradient)',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: '10px',
+                      cursor: 'pointer',
+                      boxShadow: '0 4px 20px rgba(139, 92, 246, 0.45)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.45rem',
+                      transition: 'transform 0.15s ease'
+                    }}
+                  >
+                    <span>🚀</span>
+                    <span>Start Exam Timer</span>
+                  </button>
                 </div>
-
-                <button
-                  type="button"
-                  onClick={handleStartExam}
-                  style={{
-                    padding: '0.85rem 2.5rem',
-                    fontSize: '1.05rem',
-                    fontWeight: 700,
-                    background: 'var(--accent-gradient)',
-                    color: '#fff',
-                    border: 'none',
-                    borderRadius: '10px',
-                    cursor: 'pointer',
-                    boxShadow: '0 4px 20px rgba(139, 92, 246, 0.45)',
-                    transition: 'transform 0.15s ease'
-                  }}
-                >
-                  🚀 Start Exam Now
-                </button>
               </div>
-            ) : (
-              <>
+            )}
             {/* EXAMINER MODE: Student's Uploaded Answer Paper Gallery (Top Inspection Strip) */}
             {testViewMode === 'examiner' && (
               <div style={{ marginBottom: '1.25rem', background: 'rgba(139, 92, 246, 0.08)', border: '1px solid rgba(139, 92, 246, 0.25)', borderRadius: '12px', padding: '0.9rem' }}>
@@ -3744,7 +4270,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
             )}
 
             {/* Contained Question Navigator (Collapsible by Question Type & Contained Scroller Strip) */}
-            {questionDisplayMode === 'slide' && parsedQuestions.length > 0 && (
+            {parsedQuestions.length > 0 && (
               <div style={{
                 width: '100%',
                 maxWidth: '100%',
@@ -4173,6 +4699,43 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                         </div>
                       
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                          {/* Student: Request Question Deletion */}
+                          {testViewMode === 'student' && !isExamFinished && (() => {
+                            const testId = viewingModelTest?.testId || viewingModelTest?.id;
+                            const reqForTest = deleteRequests[testId] || {};
+                            const alreadyRequested = reqForTest[q.id];
+                            return (
+                              <button
+                                type="button"
+                                title={alreadyRequested ? 'Deletion already requested — waiting for parent approval' : 'Request this question to be deleted (parent must approve)'}
+                                disabled={!!alreadyRequested}
+                                onClick={async () => {
+                                  if (!alreadyRequested) {
+                                    await handleRequestQuestionDelete(testId, q);
+                                  }
+                                }}
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.25rem',
+                                  padding: '0.2rem 0.55rem',
+                                  borderRadius: '6px',
+                                  fontSize: '0.73rem',
+                                  fontWeight: 600,
+                                  cursor: alreadyRequested ? 'not-allowed' : 'pointer',
+                                  border: `1px solid ${alreadyRequested ? 'rgba(245,158,11,0.45)' : 'rgba(239,68,68,0.35)'}`,
+                                  background: alreadyRequested ? 'rgba(245,158,11,0.1)' : 'rgba(239,68,68,0.08)',
+                                  color: alreadyRequested ? '#fcd34d' : '#f87171',
+                                  transition: 'all 0.2s',
+                                  flexShrink: 0,
+                                  opacity: alreadyRequested ? 0.8 : 1
+                                }}
+                              >
+                                <span>{alreadyRequested ? '⏳' : '🗑️'}</span>
+                                <span>{alreadyRequested ? 'Awaiting Approval' : 'Request Delete'}</span>
+                              </button>
+                            );
+                          })()}
                           {testViewMode === 'student' && isAns && (
                             <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#34d399', background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.25)', padding: '0.2rem 0.6rem', borderRadius: '9999px', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
                               <span>✓</span>
@@ -4830,8 +5393,6 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                 </button>
               </div>
             </div>
-            </>
-          )}
 
           </main>
         </div>
@@ -5399,7 +5960,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                 Quick Presets:
               </label>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
-                {[15, 20, 30, 45, 60, 90, 120, 180].map(mins => (
+                {[15, 20, 30, 45, 60, 90, 120, 150, 180].map(mins => (
                   <button
                     key={mins}
                     type="button"
@@ -5485,6 +6046,618 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN AND ZERO LATEX:
                 Save Time Limit
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Assign / Edit Student Email Modal */}
+      {showAssignEmailModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.75)',
+          backdropFilter: 'blur(6px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+          padding: '1rem'
+        }}>
+          <div style={{
+            background: 'linear-gradient(145deg, #1e1b4b 0%, #0f172a 100%)',
+            border: '1px solid rgba(99, 102, 241, 0.35)',
+            borderRadius: '16px',
+            padding: '1.75rem',
+            width: '100%',
+            maxWidth: '480px',
+            boxShadow: '0 20px 50px rgba(0,0,0,0.6)',
+            textAlign: 'left'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
+              <div>
+                <h3 style={{ margin: '0 0 0.35rem 0', fontSize: '1.25rem', color: '#fff', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span>✉️</span>
+                  <span>{kid?.email ? 'Edit Student Email' : 'Assign Student Email'}</span>
+                </h3>
+                <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                  Assigning an email enables student direct login and allows teachers to assign this student by email.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAssignEmailModal(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-secondary)',
+                  fontSize: '1.5rem',
+                  lineHeight: 1,
+                  cursor: 'pointer',
+                  padding: '0.2rem'
+                }}
+              >
+                &times;
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveStudentEmail} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.86rem', color: '#cbd5e1', fontWeight: 600 }}>
+                  Student Email Address
+                </label>
+                <input
+                  type="email"
+                  required
+                  placeholder="e.g. student@school.edu or student@gmail.com"
+                  value={studentEmailInput}
+                  onChange={(e) => setStudentEmailInput(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '0.75rem 1rem',
+                    background: 'rgba(0, 0, 0, 0.35)',
+                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    borderRadius: '8px',
+                    color: '#fff',
+                    fontSize: '0.95rem'
+                  }}
+                  autoFocus
+                />
+              </div>
+
+              {emailModalError && (
+                <div style={{
+                  padding: '0.65rem 0.85rem',
+                  borderRadius: '8px',
+                  background: 'rgba(239, 68, 68, 0.15)',
+                  border: '1px solid rgba(239, 68, 68, 0.35)',
+                  color: '#fca5a5',
+                  fontSize: '0.84rem'
+                }}>
+                  {emailModalError}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowAssignEmailModal(false)}
+                  style={{
+                    padding: '0.6rem 1.2rem',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    color: '#cbd5e1',
+                    fontSize: '0.88rem',
+                    fontWeight: 600,
+                    cursor: 'pointer'
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingEmail}
+                  style={{
+                    padding: '0.6rem 1.4rem',
+                    borderRadius: '8px',
+                    border: 'none',
+                    background: 'var(--accent-gradient, linear-gradient(135deg, #6366f1 0%, #a855f7 100%))',
+                    color: '#fff',
+                    fontSize: '0.88rem',
+                    fontWeight: 700,
+                    cursor: isSavingEmail ? 'not-allowed' : 'pointer',
+                    opacity: isSavingEmail ? 0.7 : 1,
+                    boxShadow: '0 4px 15px rgba(99, 102, 241, 0.4)'
+                  }}
+                >
+                  {isSavingEmail ? 'Saving...' : 'Save Email'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Invite Teacher / Parent Modal */}
+      {showInviteTeacherModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.75)',
+          backdropFilter: 'blur(6px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+          padding: '1rem'
+        }}>
+          <div style={{
+            background: 'linear-gradient(145deg, #064e3b 0%, #0f172a 100%)',
+            border: '1px solid rgba(16, 185, 129, 0.35)',
+            borderRadius: '16px',
+            padding: '1.75rem',
+            width: '100%',
+            maxWidth: '480px',
+            boxShadow: '0 20px 50px rgba(0,0,0,0.6)',
+            textAlign: 'left'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
+              <div>
+                <h3 style={{ margin: '0 0 0.35rem 0', fontSize: '1.25rem', color: '#fff', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span>🔗</span>
+                  <span>Invite Teacher or Parent</span>
+                </h3>
+                <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                  Invite a teacher or parent using their email. When they sign in, they will receive an invite to assign {kid?.name} to their dashboard.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowInviteTeacherModal(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-secondary)',
+                  fontSize: '1.5rem',
+                  lineHeight: 1,
+                  cursor: 'pointer',
+                  padding: '0.2rem'
+                }}
+              >
+                &times;
+              </button>
+            </div>
+
+            <form onSubmit={handleSendTeacherInvite} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.86rem', color: '#cbd5e1', fontWeight: 600 }}>
+                  Teacher / Parent Email
+                </label>
+                <input
+                  type="email"
+                  required
+                  placeholder="e.g. teacher@school.edu or parent@example.com"
+                  value={teacherEmailInput}
+                  onChange={(e) => setTeacherEmailInput(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '0.75rem 1rem',
+                    background: 'rgba(0, 0, 0, 0.35)',
+                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    borderRadius: '8px',
+                    color: '#fff',
+                    fontSize: '0.95rem'
+                  }}
+                  autoFocus
+                />
+              </div>
+
+              {inviteModalError && (
+                <div style={{
+                  padding: '0.65rem 0.85rem',
+                  borderRadius: '8px',
+                  background: 'rgba(239, 68, 68, 0.15)',
+                  border: '1px solid rgba(239, 68, 68, 0.35)',
+                  color: '#fca5a5',
+                  fontSize: '0.84rem'
+                }}>
+                  {inviteModalError}
+                </div>
+              )}
+
+              {inviteModalSuccess && (
+                <div style={{
+                  padding: '0.65rem 0.85rem',
+                  borderRadius: '8px',
+                  background: 'rgba(16, 185, 129, 0.15)',
+                  border: '1px solid rgba(16, 185, 129, 0.4)',
+                  color: '#6ee7b7',
+                  fontSize: '0.84rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem'
+                }}>
+                  <span>✅</span>
+                  <span>{inviteModalSuccess}</span>
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowInviteTeacherModal(false)}
+                  style={{
+                    padding: '0.6rem 1.2rem',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    color: '#cbd5e1',
+                    fontSize: '0.88rem',
+                    fontWeight: 600,
+                    cursor: 'pointer'
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSendingInvite}
+                  style={{
+                    padding: '0.6rem 1.4rem',
+                    borderRadius: '8px',
+                    border: 'none',
+                    background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                    color: '#fff',
+                    fontSize: '0.88rem',
+                    fontWeight: 700,
+                    cursor: isSendingInvite ? 'not-allowed' : 'pointer',
+                    opacity: isSendingInvite ? 0.7 : 1,
+                    boxShadow: '0 4px 15px rgba(16, 185, 129, 0.4)'
+                  }}
+                >
+                  {isSendingInvite ? 'Sending Invite...' : 'Send Invite'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Set Password Modal */}
+      {showPasswordModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.75)',
+          backdropFilter: 'blur(6px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+          padding: '1rem'
+        }}>
+          <div style={{
+            background: 'linear-gradient(145deg, #1c1a10 0%, #0f172a 100%)',
+            border: '1px solid rgba(245, 158, 11, 0.35)',
+            borderRadius: '16px',
+            padding: '1.75rem',
+            width: '100%',
+            maxWidth: '480px',
+            boxShadow: '0 20px 50px rgba(0,0,0,0.6)',
+            textAlign: 'left'
+          }}>
+            {/* Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem' }}>
+              <div>
+                <h3 style={{ margin: '0 0 0.35rem 0', fontSize: '1.25rem', color: '#fff', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span>🔑</span>
+                  <span>Set Student Password</span>
+                </h3>
+                <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                  Set or update the login password for <strong style={{ color: '#fcd34d' }}>{kid?.name}</strong>'s account.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPasswordModal(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-secondary)',
+                  fontSize: '1.5rem',
+                  lineHeight: 1,
+                  cursor: 'pointer',
+                  padding: '0.2rem'
+                }}
+              >
+                &times;
+              </button>
+            </div>
+
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                setPasswordModalError('');
+                setPasswordModalSuccess('');
+
+                if (newPasswordInput.length < 6) {
+                  setPasswordModalError('Password must be at least 6 characters.');
+                  return;
+                }
+                if (newPasswordInput !== confirmPasswordInput) {
+                  setPasswordModalError('Passwords do not match.');
+                  return;
+                }
+
+                setIsSavingPassword(true);
+                try {
+                  const currentUser = auth.currentUser;
+                  if (!currentUser) throw new Error('No authenticated user found.');
+
+                  // Re-authenticate first if a current password was provided
+                  if (currentPasswordInput) {
+                    const credential = EmailAuthProvider.credential(
+                      currentUser.email,
+                      currentPasswordInput
+                    );
+                    await reauthenticateWithCredential(currentUser, credential);
+                  }
+
+                  await updatePassword(currentUser, newPasswordInput);
+                  setPasswordModalSuccess('Password updated successfully! ✅');
+                  setCurrentPasswordInput('');
+                  setNewPasswordInput('');
+                  setConfirmPasswordInput('');
+                  setTimeout(() => {
+                    setShowPasswordModal(false);
+                    setPasswordModalSuccess('');
+                  }, 2000);
+                } catch (err) {
+                  if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+                    setPasswordModalError('Current password is incorrect.');
+                  } else if (err.code === 'auth/requires-recent-login') {
+                    setPasswordModalError('Session expired. Please sign out and sign back in, then try again.');
+                  } else {
+                    setPasswordModalError(err.message || 'Failed to update password.');
+                  }
+                } finally {
+                  setIsSavingPassword(false);
+                }
+              }}
+              style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}
+            >
+              {/* Current Password */}
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.86rem', color: '#cbd5e1', fontWeight: 600 }}>
+                  Current Password <span style={{ fontWeight: 400, color: 'var(--text-secondary)', fontSize: '0.78rem' }}>(required if already set)</span>
+                </label>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    type={showCurrentPw ? 'text' : 'password'}
+                    placeholder="Enter current password"
+                    value={currentPasswordInput}
+                    onChange={(e) => setCurrentPasswordInput(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '0.75rem 2.75rem 0.75rem 1rem',
+                      background: 'rgba(0, 0, 0, 0.35)',
+                      border: '1px solid rgba(255, 255, 255, 0.15)',
+                      borderRadius: '8px',
+                      color: '#fff',
+                      fontSize: '0.95rem',
+                      boxSizing: 'border-box'
+                    }}
+                    autoFocus
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowCurrentPw(p => !p)}
+                    style={{
+                      position: 'absolute',
+                      right: '0.75rem',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      background: 'none',
+                      border: 'none',
+                      color: 'var(--text-secondary)',
+                      cursor: 'pointer',
+                      fontSize: '1rem',
+                      padding: 0,
+                      lineHeight: 1
+                    }}
+                    tabIndex={-1}
+                  >{showCurrentPw ? '🙈' : '👁️'}</button>
+                </div>
+              </div>
+
+              {/* New Password */}
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.86rem', color: '#cbd5e1', fontWeight: 600 }}>
+                  New Password
+                </label>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    type={showNewPw ? 'text' : 'password'}
+                    required
+                    placeholder="Min. 6 characters"
+                    value={newPasswordInput}
+                    onChange={(e) => setNewPasswordInput(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '0.75rem 2.75rem 0.75rem 1rem',
+                      background: 'rgba(0, 0, 0, 0.35)',
+                      border: '1px solid rgba(255, 255, 255, 0.15)',
+                      borderRadius: '8px',
+                      color: '#fff',
+                      fontSize: '0.95rem',
+                      boxSizing: 'border-box'
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowNewPw(p => !p)}
+                    style={{
+                      position: 'absolute',
+                      right: '0.75rem',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      background: 'none',
+                      border: 'none',
+                      color: 'var(--text-secondary)',
+                      cursor: 'pointer',
+                      fontSize: '1rem',
+                      padding: 0,
+                      lineHeight: 1
+                    }}
+                    tabIndex={-1}
+                  >{showNewPw ? '🙈' : '👁️'}</button>
+                </div>
+                {/* Strength indicator */}
+                {newPasswordInput && (
+                  <div style={{ marginTop: '0.4rem', display: 'flex', gap: '0.25rem', alignItems: 'center' }}>
+                    {[6, 10, 16].map((threshold, i) => (
+                      <div key={i} style={{
+                        height: '3px',
+                        flex: 1,
+                        borderRadius: '99px',
+                        background: newPasswordInput.length >= threshold
+                          ? i === 0 ? '#ef4444' : i === 1 ? '#f59e0b' : '#10b981'
+                          : 'rgba(255,255,255,0.1)',
+                        transition: 'background 0.3s'
+                      }} />
+                    ))}
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginLeft: '0.4rem', whiteSpace: 'nowrap' }}>
+                      {newPasswordInput.length < 6 ? 'Too short' : newPasswordInput.length < 10 ? 'Weak' : newPasswordInput.length < 16 ? 'Good' : 'Strong'}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* Confirm Password */}
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.86rem', color: '#cbd5e1', fontWeight: 600 }}>
+                  Confirm New Password
+                </label>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    type={showConfirmPw ? 'text' : 'password'}
+                    required
+                    placeholder="Re-enter new password"
+                    value={confirmPasswordInput}
+                    onChange={(e) => setConfirmPasswordInput(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '0.75rem 2.75rem 0.75rem 1rem',
+                      background: 'rgba(0, 0, 0, 0.35)',
+                      border: `1px solid ${confirmPasswordInput && confirmPasswordInput !== newPasswordInput ? 'rgba(239,68,68,0.5)' : 'rgba(255,255,255,0.15)'}`,
+                      borderRadius: '8px',
+                      color: '#fff',
+                      fontSize: '0.95rem',
+                      boxSizing: 'border-box'
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPw(p => !p)}
+                    style={{
+                      position: 'absolute',
+                      right: '0.75rem',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      background: 'none',
+                      border: 'none',
+                      color: 'var(--text-secondary)',
+                      cursor: 'pointer',
+                      fontSize: '1rem',
+                      padding: 0,
+                      lineHeight: 1
+                    }}
+                    tabIndex={-1}
+                  >{showConfirmPw ? '🙈' : '👁️'}</button>
+                </div>
+                {confirmPasswordInput && confirmPasswordInput !== newPasswordInput && (
+                  <p style={{ margin: '0.35rem 0 0 0', fontSize: '0.78rem', color: '#fca5a5' }}>Passwords don't match</p>
+                )}
+              </div>
+
+              {/* Error */}
+              {passwordModalError && (
+                <div style={{
+                  padding: '0.65rem 0.85rem',
+                  borderRadius: '8px',
+                  background: 'rgba(239, 68, 68, 0.15)',
+                  border: '1px solid rgba(239, 68, 68, 0.35)',
+                  color: '#fca5a5',
+                  fontSize: '0.84rem'
+                }}>
+                  {passwordModalError}
+                </div>
+              )}
+
+              {/* Success */}
+              {passwordModalSuccess && (
+                <div style={{
+                  padding: '0.65rem 0.85rem',
+                  borderRadius: '8px',
+                  background: 'rgba(16, 185, 129, 0.15)',
+                  border: '1px solid rgba(16, 185, 129, 0.4)',
+                  color: '#6ee7b7',
+                  fontSize: '0.84rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem'
+                }}>
+                  {passwordModalSuccess}
+                </div>
+              )}
+
+              {/* Actions */}
+              <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', marginTop: '0.25rem' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowPasswordModal(false)}
+                  style={{
+                    padding: '0.6rem 1.2rem',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    color: '#cbd5e1',
+                    fontSize: '0.88rem',
+                    fontWeight: 600,
+                    cursor: 'pointer'
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingPassword}
+                  style={{
+                    padding: '0.6rem 1.4rem',
+                    borderRadius: '8px',
+                    border: 'none',
+                    background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+                    color: '#fff',
+                    fontSize: '0.88rem',
+                    fontWeight: 700,
+                    cursor: isSavingPassword ? 'not-allowed' : 'pointer',
+                    opacity: isSavingPassword ? 0.7 : 1,
+                    boxShadow: '0 4px 15px rgba(245, 158, 11, 0.4)'
+                  }}
+                >
+                  {isSavingPassword ? 'Updating...' : 'Set Password'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

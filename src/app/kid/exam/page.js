@@ -7,7 +7,7 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { ref, onValue, set, push, remove } from 'firebase/database';
 import { generateGeminiContent } from '../../../lib/gemini';
 import Link from 'next/link';
-import MarkDistributionField from '../../../components/MarkDistributionField';
+import MarkDistributionField, { cleanAndFormatMarkDistribution } from '../../../components/MarkDistributionField';
 import MarkDistributionView from '../../../components/MarkDistributionView';
 
 function ExamPageContent() {
@@ -22,6 +22,11 @@ function ExamPageContent() {
   const [subject, setSubject] = useState(null);
   const [exam, setExam] = useState(null);
   const [bookUrl, setBookUrl] = useState('');
+
+  // PDF Viewer state: single page fit, scaling, and active page
+  const [currentPdfPage, setCurrentPdfPage] = useState(1);
+  const [pdfScale, setPdfScale] = useState(1);
+  const [pdfViewMode, setPdfViewMode] = useState('single'); // 'single' (fits single page) | 'wide' (full width)
 
   // Mark Distribution state
   const [isEditingMarkDist, setIsEditingMarkDist] = useState(false);
@@ -62,10 +67,14 @@ function ExamPageContent() {
   const [showAnswerKeys, setShowAnswerKeys] = useState({});
   const [copiedSuccess, setCopiedSuccess] = useState(false);
 
-  // Add chapter state
+  // Chapter & Topics state
   const [showAddChapterModal, setShowAddChapterModal] = useState(false);
+  const [editingChapterId, setEditingChapterId] = useState(null);
   const [newChapterTitle, setNewChapterTitle] = useState('');
   const [newChapterPdfPage, setNewChapterPdfPage] = useState('');
+  const [chapterTopics, setChapterTopics] = useState([]); // Array of { id, title, page }
+  const [showBulkTopicInput, setShowBulkTopicInput] = useState(false);
+  const [bulkTopicText, setBulkTopicText] = useState('');
 
   // Timer & Exam completion state
   const [isExamStarted, setIsExamStarted] = useState(false);
@@ -149,18 +158,33 @@ function ExamPageContent() {
   const enrichWithSetNumbers = (questions) => {
     if (!questions || !Array.isArray(questions) || questions.length === 0) return [];
 
-    const sectionOrder = [];
-    const sectionInfo = new Map();
-
-    questions.forEach((q, i) => {
+    const getNormalizedSecKey = (q) => {
       let rawSec = (q.section || '').trim();
       const hasOpts = q.options && q.options.length > 0;
       const isMcq = hasOpts || /mcq|multiple choice/i.test(rawSec);
 
       let secKey = rawSec;
       if (!secKey) {
-        secKey = isMcq ? '1. Multiple Choice Questions (MCQ)' : 'Descriptive Questions';
+        return isMcq ? '1. Multiple Choice Questions (MCQ)' : 'Descriptive Questions';
       }
+      // Remove question-specific suffixes like "(Question 1)", "(Q1)", "- Question 1" so sections group questions cleanly
+      secKey = secKey
+        .replace(/\s*[\(\[]\s*(?:question|q)\s*\d+\s*[\)\]]/gi, '')
+        .replace(/\s*-\s*(?:question|q)\s*\d+\b/gi, '')
+        .trim();
+      if (!secKey) {
+        return isMcq ? '1. Multiple Choice Questions (MCQ)' : 'Descriptive Questions';
+      }
+      return secKey;
+    };
+
+    const sectionOrder = [];
+    const sectionInfo = new Map();
+
+    questions.forEach((q, i) => {
+      const hasOpts = q.options && q.options.length > 0;
+      const isMcq = hasOpts || /mcq|multiple choice/i.test(q.section || '');
+      const secKey = getNormalizedSecKey(q);
 
       if (!sectionInfo.has(secKey)) {
         sectionInfo.set(secKey, {
@@ -209,15 +233,7 @@ function ExamPageContent() {
     const setCounters = {};
 
     return questions.map((q) => {
-      let rawSec = (q.section || '').trim();
-      const hasOpts = q.options && q.options.length > 0;
-      const isMcq = hasOpts || /mcq|multiple choice/i.test(rawSec);
-
-      let secKey = rawSec;
-      if (!secKey) {
-        secKey = isMcq ? '1. Multiple Choice Questions (MCQ)' : 'Descriptive Questions';
-      }
-
+      const secKey = getNormalizedSecKey(q);
       const setNum = sectionToSetNum.get(secKey) || 1;
       setCounters[setNum] = (setCounters[setNum] || 0) + 1;
       const subNum = setCounters[setNum];
@@ -516,24 +532,148 @@ function ExamPageContent() {
   const handleSaveMarkDistribution = async () => {
     if (!user || !kid || !subject || !exam) return;
     const path = `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${subject.id}/examSettings/${exam.id}/markDistribution`;
-    await set(ref(database, path), markDistValue.trim());
+    let toSave = (markDistValue || '').trim();
+    // Auto-clean if raw markdown / LaTeX artifacts are detected
+    if (/\\times|\\text|\$|###|^\s*[-*•]\s*\*\*/m.test(toSave)) {
+      toSave = cleanAndFormatMarkDistribution(toSave);
+      setMarkDistValue(toSave);
+    }
+    await set(ref(database, path), toSave);
     setIsEditingMarkDist(false);
   };
 
-  const handleAddChapter = async (e) => {
-    e.preventDefault();
-    if (!newChapterTitle.trim() || !user || !kid || !subject || !exam) return;
-    const chapRef = ref(database, `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${subject.id}/chapters/${exam.id}`);
-    const newChap = push(chapRef);
-    await set(newChap, {
-      title: newChapterTitle.trim(),
-      pdfPage: newChapterPdfPage.trim(),
-      completed: false,
-      status: 'not_started',
-      createdAt: Date.now()
+  // Parse topics from multi-line or delimited text e.g. "(i) ... (ii) ..." or line-by-line
+  const parseTopicsFromText = (text) => {
+    if (!text || typeof text !== 'string') return [];
+    const trimmed = text.trim();
+    if (!trimmed) return [];
+
+    // Check if it uses Roman numerals or letter markers like (i), (ii), (a), (b), (1), (2)
+    if (/\([ivxlcdm0-9a-z]+\)/i.test(trimmed)) {
+      const parts = trimmed.split(/(?=\([ivxlcdm0-9a-z]+\))/i).map(s => s.trim()).filter(Boolean);
+      if (parts.length > 1) {
+        return parts.map((part, idx) => {
+          const pageMatch = part.match(/(?:p\.?|page)\s*([0-9]+(?:-[0-9]+)?)/i);
+          const title = pageMatch ? part.replace(pageMatch[0], '').replace(/[()\-–—]+$/, '').trim() : part;
+          return {
+            id: `top_${Date.now()}_${idx}`,
+            title: title || part,
+            page: pageMatch ? pageMatch[1] : ''
+          };
+        });
+      }
+    }
+
+    // Otherwise split by newlines or semicolons
+    const lines = trimmed.split(/[\n;]+/).map(l => l.trim()).filter(Boolean);
+    return lines.map((line, idx) => {
+      const pageMatch = line.match(/(?:p\.?|page)\s*([0-9]+(?:-[0-9]+)?)/i);
+      let title = line;
+      let page = '';
+      if (pageMatch) {
+        page = pageMatch[1];
+        title = line.replace(pageMatch[0], '').replace(/[()\-–—:,]+$/, '').trim();
+      }
+      title = title.replace(/^([0-9]+[.)\]]\s*|[-*•]\s*)/, '').trim();
+      return {
+        id: `top_${Date.now()}_${idx}`,
+        title: title || line,
+        page
+      };
     });
+  };
+
+  // Helper to extract clean topics and pdfPage from a chapter object
+  const parseChapterTopicsAndPage = (chap) => {
+    let topics = [];
+    if (Array.isArray(chap.topics) && chap.topics.length > 0) {
+      topics = chap.topics.map((t, i) => (typeof t === 'string' ? { id: `top_${i}`, title: t, page: '' } : { id: t.id || `top_${i}`, title: t.title || '', page: t.page || '' }));
+    }
+    let pdfPage = chap.pdfPage || '';
+
+    // If no explicit topics array, but pdfPage has long text or Roman numerals (e.g. user entered topics in page field)
+    if (topics.length === 0 && pdfPage) {
+      const isActuallyTopics = pdfPage.length > 20 || /\([ivx0-9a-z]+\)/i.test(pdfPage) || pdfPage.includes('\n');
+      if (isActuallyTopics) {
+        topics = parseTopicsFromText(pdfPage);
+        pdfPage = ''; // Don't show long text in page pill
+      }
+    }
+
+    return { topics, pdfPage };
+  };
+
+  const handleOpenAddChapter = () => {
+    setEditingChapterId(null);
     setNewChapterTitle('');
     setNewChapterPdfPage('');
+    setChapterTopics([]);
+    setShowBulkTopicInput(false);
+    setBulkTopicText('');
+    setShowAddChapterModal(true);
+  };
+
+  const handleOpenEditChapter = (chap) => {
+    setEditingChapterId(chap.id);
+    setNewChapterTitle(chap.title || '');
+    const { topics, pdfPage } = parseChapterTopicsAndPage(chap);
+    setNewChapterPdfPage(pdfPage || '');
+    setChapterTopics(topics);
+    setShowBulkTopicInput(false);
+    setBulkTopicText('');
+    setShowAddChapterModal(true);
+  };
+
+  const handleDeleteChapter = async (chapId, chapTitle) => {
+    if (!window.confirm(`Are you sure you want to delete "${chapTitle || 'this chapter'}" from the syllabus?`)) return;
+    if (!user || !kid || !subject || !exam) return;
+    const chapRef = ref(database, `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${subject.id}/chapters/${exam.id}/${chapId}`);
+    await remove(chapRef);
+  };
+
+  const handleSaveChapter = async (e) => {
+    e.preventDefault();
+    if (!newChapterTitle.trim() || !user || !kid || !subject || !exam) return;
+
+    const cleanTopics = chapterTopics
+      .map(t => ({
+        id: t.id || `top_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        title: (t.title || '').trim(),
+        page: (t.page || '').trim()
+      }))
+      .filter(t => t.title.length > 0);
+
+    const basePath = `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${subject.id}/chapters/${exam.id}`;
+
+    if (editingChapterId) {
+      const targetChap = chaptersMap[editingChapterId] || {};
+      const targetRef = ref(database, `${basePath}/${editingChapterId}`);
+      await set(targetRef, {
+        ...targetChap,
+        title: newChapterTitle.trim(),
+        pdfPage: newChapterPdfPage.trim(),
+        topics: cleanTopics,
+        updatedAt: Date.now()
+      });
+    } else {
+      const chapRef = ref(database, basePath);
+      const newChap = push(chapRef);
+      await set(newChap, {
+        title: newChapterTitle.trim(),
+        pdfPage: newChapterPdfPage.trim(),
+        topics: cleanTopics,
+        completed: false,
+        status: 'not_started',
+        createdAt: Date.now()
+      });
+    }
+
+    setEditingChapterId(null);
+    setNewChapterTitle('');
+    setNewChapterPdfPage('');
+    setChapterTopics([]);
+    setShowBulkTopicInput(false);
+    setBulkTopicText('');
     setShowAddChapterModal(false);
   };
 
@@ -559,7 +699,15 @@ function ExamPageContent() {
     setGenerateError('');
 
     try {
-      const selectedChapterTitles = selectedChaptersForTest.map(id => chaptersMap[id]?.title).filter(Boolean);
+      const selectedChapterTitles = selectedChaptersForTest.map(id => {
+        const c = chaptersMap[id];
+        if (!c) return '';
+        const { topics } = parseChapterTopicsAndPage(c);
+        if (topics && topics.length > 0) {
+          return `${c.title} (Topics: ${topics.map(t => t.title + (t.page ? ` [p. ${t.page}]` : '')).join(', ')})`;
+        }
+        return c.title;
+      }).filter(Boolean);
       const promptText = `You are an expert school examiner creating a realistic, high quality Model Test for student: ${kid.name || 'Student'}.
 Generate a comprehensive Model Test with structured questions strictly formatted according to the syllabus and mark distribution.
 
@@ -580,9 +728,10 @@ ${testGuidelines.length > 0 ? testGuidelines.map(g => `- ${g}`).join('\n') : '- 
 ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n` : ''}
 
 CRITICAL RULES FOR GENERATION:
-1. STRICT ADHERENCE TO MARK DISTRIBUTION: You MUST generate individual question items for EVERY section and question count specified in the Mark Distribution above. For instance, if a section specifies "8 questions × 7 marks = 56 Marks from chapters 3, 6, 7, 8, 10", generate all individual questions covering those specific chapters with 7 marks each!
-2. ZERO MARKDOWN AND ZERO LATEX: DO NOT use markdown bold (**), headers (###), backticks (\`), or LaTeX ($). Use standard plain keyboard symbols: "x", "÷", "+", "-", "/", "%". Every question and answer must be clean, readable text.
-3. Return STRICTLY a valid JSON object matching this schema:
+1. MANDATORY - INCLUDE ALL PARTS & SECTIONS: You MUST generate individual question items for EVERY section and question count specified in the Mark Distribution above (e.g. Part 1: MCQ, Part 2: Short Questions, Part 3: Short-Answer, Part 4: Competency-Based / Creative). DO NOT skip or omit Part 1 or Part 2. The output "questions" array MUST include questions for all parts starting from Part 1 to the final part!
+2. STRICT ADHERENCE TO MARK DISTRIBUTION: For instance, if a section specifies "8 questions x 7 marks = 56 Marks from chapters 3, 6, 7, 8, 10", generate all individual questions covering those specific chapters with 7 marks each!
+3. ZERO MARKDOWN AND ZERO LATEX: DO NOT use markdown bold (**), headers (###), backticks (\`), or LaTeX ($). Use standard plain keyboard symbols: "x", "÷", "+", "-", "/", "%". Every question and answer must be clean, readable text.
+4. Return STRICTLY a valid JSON object matching this schema:
 {
   "title": "${modelTestTitle.trim() || `${subject.title} - ${exam.title} Model Test`}",
   "fullMarks": 100,
@@ -590,15 +739,31 @@ CRITICAL RULES FOR GENERATION:
   "questions": [
     {
       "id": 1,
-      "section": "Section name / Question type (e.g. Competency-Based Questions / Section A: MCQ)",
+      "section": "1. Multiple Choice Questions (MCQ)",
       "question": "Clear, complete question text without asterisks or markdown",
-      "marks": 7,
+      "marks": 1,
       "options": ["A) option 1", "B) option 2", "C) option 3", "D) option 4"],
       "answerKey": "Accurate step-by-step solution or answer key"
+    },
+    {
+      "id": 2,
+      "section": "2. Short-Answer Questions",
+      "question": "Clear question text",
+      "marks": 2,
+      "options": [],
+      "answerKey": "Step-by-step solution"
+    },
+    {
+      "id": 3,
+      "section": "3. Competency-Based Questions",
+      "question": "Structured problem question",
+      "marks": 7,
+      "options": [],
+      "answerKey": "Detailed solution rubric"
     }
   ]
 }
-Ensure the "questions" array contains ALL the individual generated questions covering the required mark distribution.`;
+Ensure the "questions" array contains ALL the individual generated questions covering the required mark distribution without skipping any section.`;
 
       const questionsText = await generateGeminiContent(promptText);
 
@@ -936,19 +1101,32 @@ Ensure the "questions" array contains ALL the individual generated questions cov
 
   const getEmbedUrl = (url, page) => {
     if (!url) return '';
-    let processed = url;
+    let processed = url.trim();
     if (processed.includes('drive.google.com')) {
-      processed = processed.replace(/\/view.*$/, '/preview');
-    }
-    if (page) {
-      processed += `#page=${page}`;
+      processed = processed.replace(/\/view(\?.*)?$/, '/preview');
+      if (!processed.includes('/preview')) {
+        processed = processed.replace(/\/edit(\?.*)?$/, '/preview');
+      }
+      if (page) {
+        processed += `#page=${page}`;
+      }
+    } else {
+      const hashParams = [];
+      if (page) hashParams.push(`page=${page}`);
+      hashParams.push('view=Fit');
+      hashParams.push('toolbar=0');
+      hashParams.push('navpanes=0');
+      hashParams.push('scrollbar=0');
+      hashParams.push('pagemode=none');
+      const cleanUrl = processed.split('#')[0];
+      processed = `${cleanUrl}#${hashParams.join('&')}`;
     }
     return processed;
   };
 
   if (loading) {
     return (
-      <main className="view-container">
+      <main className="view-container" style={{ maxWidth: '1200px', width: '100%', margin: '0 auto', padding: '1.5rem clamp(1.25rem, 4vw, 2.5rem)', boxSizing: 'border-box' }}>
         <div className="card" style={{ maxWidth: '900px', width: '100%', padding: '2.5rem', textAlign: 'center' }}>
           <p style={{ color: 'var(--text-secondary)' }}>Loading exam workspace...</p>
         </div>
@@ -958,7 +1136,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
 
   if (!kid || !subject || !exam) {
     return (
-      <main className="view-container">
+      <main className="view-container" style={{ maxWidth: '1200px', width: '100%', margin: '0 auto', padding: '1.5rem clamp(1.25rem, 4vw, 2.5rem)', boxSizing: 'border-box' }}>
         <div className="card" style={{ maxWidth: '900px', width: '100%', padding: '2.5rem', textAlign: 'center' }}>
           <h2>Exam or Subject not found</h2>
           <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
@@ -1031,11 +1209,20 @@ Ensure the "questions" array contains ALL the individual generated questions cov
   };
 
   return (
-    <main className="view-container">
-      <div className="card" style={{ maxWidth: '960px', width: '100%', padding: '2rem 2.5rem' }}>
+    <main
+      className="view-container"
+      style={{
+        maxWidth: '1200px',
+        width: '100%',
+        margin: '0 auto',
+        padding: '1.5rem clamp(1.25rem, 4vw, 2.5rem)',
+        boxSizing: 'border-box'
+      }}
+    >
+      <div className="card" style={{ maxWidth: '100%', width: '100%', padding: 0, margin: 0, background: 'none', border: 'none', borderRadius: 0, boxShadow: 'none', boxSizing: 'border-box' }}>
         
         {/* Breadcrumb Navigation */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '0.6rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '2rem', paddingBottom: '0.85rem', borderBottom: '1px solid rgba(255,255,255,0.06)', flexWrap: 'wrap', gap: '0.6rem', width: '100%' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.88rem', color: 'var(--text-secondary)' }}>
             <Link href={`/kid/profile?id=${searchParams.get("id")}`} style={{ color: 'var(--text-secondary)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '0.35rem', transition: 'color 0.2s' }}>
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
@@ -1047,13 +1234,24 @@ Ensure the "questions" array contains ALL the individual generated questions cov
             <span style={{ color: '#fff', fontWeight: 600 }}>{exam.title}</span>
           </div>
 
-          <Link href={`/kid/profile?id=${searchParams.get("id")}`} style={{ padding: '0.35rem 0.8rem', fontSize: '0.8rem', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--glass-border)', borderRadius: '6px', color: 'var(--text-secondary)', textDecoration: 'none' }}>
+          <Link href={`/kid/profile?id=${searchParams.get("id")}`} style={{ padding: '0.24rem 0.6rem', fontSize: '0.74rem', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--glass-border)', borderRadius: '6px', color: 'var(--text-secondary)', textDecoration: 'none', transition: 'all 0.15s ease' }}>
             ← All Subjects
           </Link>
         </div>
 
         {/* Exam Title & Status Overview Hero */}
-        <div style={{ background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.12), rgba(0,0,0,0.3))', border: '1px solid rgba(139, 92, 246, 0.25)', borderRadius: '16px', padding: '1.75rem', marginBottom: '2rem' }}>
+        <div
+          style={{
+            background: 'none',
+            border: 'none',
+            borderRadius: 0,
+            width: '100%',
+            padding: 0,
+            marginBottom: '3rem',
+            paddingBottom: '2.25rem',
+            borderBottom: '1px solid rgba(255,255,255,0.08)'
+          }}
+        >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.25rem' }}>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.35rem', flexWrap: 'wrap' }}>
@@ -1063,27 +1261,28 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                 <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>•</span>
                 <span style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>{subject.title}</span>
               </div>
-              <h1 style={{ margin: 0, fontSize: '1.9rem', color: '#fff', fontWeight: 700, letterSpacing: '-0.5px' }}>
+              <h1 style={{ margin: 0, fontSize: '2.1rem', color: '#fff', fontWeight: 700, letterSpacing: '-0.5px' }}>
                 {exam.title}
               </h1>
             </div>
 
             {/* Status Selector Dropdown */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-              <span style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>Status:</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Status:</span>
               <select
                 value={examStatus}
                 onChange={(e) => handleUpdateExamStatus(e.target.value)}
                 style={{
-                  padding: '0.4rem 0.85rem',
-                  borderRadius: '20px',
-                  fontSize: '0.82rem',
+                  padding: '0.24rem 0.65rem',
+                  borderRadius: '16px',
+                  fontSize: '0.75rem',
                   fontWeight: 600,
                   border: `1px solid ${examStatus === 'Completed' ? 'rgba(16, 185, 129, 0.4)' : examStatus === 'In Progress' ? 'rgba(139, 92, 246, 0.4)' : 'rgba(234, 179, 8, 0.4)'}`,
                   background: examStatus === 'Completed' ? 'rgba(16, 185, 129, 0.18)' : examStatus === 'In Progress' ? 'rgba(139, 92, 246, 0.2)' : 'rgba(234, 179, 8, 0.18)',
                   color: examStatus === 'Completed' ? '#34d399' : examStatus === 'In Progress' ? '#c084fc' : '#facc15',
                   cursor: 'pointer',
-                  outline: 'none'
+                  outline: 'none',
+                  width: 'auto'
                 }}
               >
                 <option value="Not Started" style={{ background: '#1e1b4b', color: '#facc15' }}>● Not Started</option>
@@ -1096,7 +1295,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
 
           {/* Progress Bar & Stats */}
           <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.45rem', fontSize: '0.83rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', fontSize: '0.85rem' }}>
               <span style={{ color: 'var(--text-secondary)' }}>
                 Syllabus Preparation Progress: <strong style={{ color: '#fff' }}>{progressPercent}%</strong>
               </span>
@@ -1117,24 +1316,24 @@ Ensure the "questions" array contains ALL the individual generated questions cov
             </div>
 
             {/* Quick Metrics */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.8rem', marginTop: '1.25rem' }}>
-              <div style={{ background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '10px', padding: '0.75rem 1rem' }}>
-                <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Chapters in Syllabus</span>
-                <div style={{ fontSize: '1.3rem', fontWeight: 700, color: '#fff', marginTop: '0.2rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.5rem', marginTop: '1.5rem' }}>
+              <div style={{ background: 'none', border: 'none', borderRadius: 0, padding: 0 }}>
+                <span style={{ fontSize: '0.76rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Chapters in Syllabus</span>
+                <div style={{ fontSize: '1.6rem', fontWeight: 700, color: '#fff', marginTop: '0.25rem' }}>
                   {totalChaptersCount}
                 </div>
               </div>
 
-              <div style={{ background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '10px', padding: '0.75rem 1rem' }}>
-                <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Model Tests Generated</span>
-                <div style={{ fontSize: '1.3rem', fontWeight: 700, color: 'var(--accent-primary)', marginTop: '0.2rem' }}>
+              <div style={{ background: 'none', border: 'none', borderRadius: 0, padding: 0 }}>
+                <span style={{ fontSize: '0.76rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Model Tests Generated</span>
+                <div style={{ fontSize: '1.6rem', fontWeight: 700, color: 'var(--accent-primary)', marginTop: '0.25rem' }}>
                   {modelTestsList.length}
                 </div>
               </div>
 
-              <div style={{ background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '10px', padding: '0.75rem 1rem' }}>
-                <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Preparation Status</span>
-                <div style={{ fontSize: '1.1rem', fontWeight: 600, color: examStatus === 'Completed' ? '#34d399' : '#c084fc', marginTop: '0.3rem' }}>
+              <div style={{ background: 'none', border: 'none', borderRadius: 0, padding: 0 }}>
+                <span style={{ fontSize: '0.76rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Preparation Status</span>
+                <div style={{ fontSize: '1.3rem', fontWeight: 600, color: examStatus === 'Completed' ? '#34d399' : '#c084fc', marginTop: '0.35rem' }}>
                   {examStatus}
                 </div>
               </div>
@@ -1143,10 +1342,125 @@ Ensure the "questions" array contains ALL the individual generated questions cov
         </div>
 
         {/* 0. Subject Material Section (Textbook) */}
-        <div style={{ background: 'rgba(255,255,255,0.025)', border: '1px solid var(--glass-border)', borderRadius: '14px', padding: '1.5rem', marginBottom: '2rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.5rem' }}>
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16c0 1.1.9 2 2 2h12a2 2 0 0 0 2-2V8l-6-6z"></path><path d="M14 3v5h5M16 13H8M16 17H8M10 9H8"></path></svg>
-            <h2 style={{ margin: 0, fontSize: '1.15rem', color: '#fff', fontWeight: 600 }}>Subject Material (PDF)</h2>
+        <div id="subject-pdf-section" style={{ background: 'none', border: 'none', borderRadius: 0, padding: 0, marginBottom: '3rem', width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', paddingBottom: '0.75rem', borderBottom: '1px solid rgba(255,255,255,0.08)', flexWrap: 'wrap', gap: '0.75rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16c0 1.1.9 2 2 2h12a2 2 0 0 0 2-2V8l-6-6z"></path><path d="M14 3v5h5M16 13H8M16 17H8M10 9H8"></path></svg>
+              <h2 style={{ margin: 0, fontSize: '1.2rem', color: '#fff', fontWeight: 600 }}>Subject Material (PDF)</h2>
+              <span style={{ fontSize: '0.72rem', padding: '0.12rem 0.5rem', borderRadius: '12px', background: 'rgba(139, 92, 246, 0.15)', color: 'var(--accent-primary)', fontWeight: 600 }}>
+                {pdfViewMode === 'single' ? 'Single Page View' : 'Full Width View'}
+              </span>
+            </div>
+
+            {subject.bookUrl && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                {/* View Mode Toggle */}
+                <div style={{ display: 'inline-flex', background: 'rgba(0,0,0,0.3)', borderRadius: '8px', padding: '2px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                  <button
+                    type="button"
+                    onClick={() => setPdfViewMode('single')}
+                    style={{
+                      padding: '0.2rem 0.55rem',
+                      fontSize: '0.72rem',
+                      fontWeight: 600,
+                      borderRadius: '6px',
+                      border: 'none',
+                      background: pdfViewMode === 'single' ? 'var(--accent-primary)' : 'transparent',
+                      color: pdfViewMode === 'single' ? '#fff' : 'var(--text-secondary)',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.3rem',
+                      transition: 'all 0.15s ease'
+                    }}
+                    title="Single Page Mode (fits exactly 1 page in viewport)"
+                  >
+                    <span>📄</span>
+                    <span>Single Page</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPdfViewMode('wide')}
+                    style={{
+                      padding: '0.2rem 0.55rem',
+                      fontSize: '0.72rem',
+                      fontWeight: 600,
+                      borderRadius: '6px',
+                      border: 'none',
+                      background: pdfViewMode === 'wide' ? 'var(--accent-primary)' : 'transparent',
+                      color: pdfViewMode === 'wide' ? '#fff' : 'var(--text-secondary)',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.3rem',
+                      transition: 'all 0.15s ease'
+                    }}
+                    title="Full Width Mode"
+                  >
+                    <span>↔️</span>
+                    <span>Full Width</span>
+                  </button>
+                </div>
+
+                {/* Scale buttons */}
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', background: 'rgba(0,0,0,0.3)', borderRadius: '8px', padding: '2px 5px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                  <button
+                    type="button"
+                    onClick={() => setPdfScale(prev => Math.max(0.7, parseFloat((prev - 0.1).toFixed(1))))}
+                    style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', padding: '0.1rem 0.3rem', fontSize: '0.78rem', fontWeight: 700 }}
+                    title="Zoom Out"
+                  >
+                    −
+                  </button>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', minWidth: '34px', textAlign: 'center' }}>
+                    {Math.round(pdfScale * 100)}%
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setPdfScale(prev => Math.min(1.4, parseFloat((prev + 0.1).toFixed(1))))}
+                    style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', padding: '0.1rem 0.3rem', fontSize: '0.78rem', fontWeight: 700 }}
+                    title="Zoom In"
+                  >
+                    +
+                  </button>
+                  {pdfScale !== 1 && (
+                    <button
+                      type="button"
+                      onClick={() => setPdfScale(1)}
+                      style={{ background: 'none', border: 'none', color: 'var(--accent-primary)', cursor: 'pointer', fontSize: '0.68rem', padding: '0 0.15rem' }}
+                      title="Reset Zoom"
+                    >
+                      Reset
+                    </button>
+                  )}
+                </div>
+
+                {/* Pop out link */}
+                <a
+                  href={getEmbedUrl(subject.bookUrl, currentPdfPage)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.3rem',
+                    background: 'rgba(255,255,255,0.06)',
+                    color: '#fff',
+                    textDecoration: 'none',
+                    padding: '0.22rem 0.55rem',
+                    borderRadius: '6px',
+                    fontSize: '0.74rem',
+                    fontWeight: 500,
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    transition: 'all 0.15s ease'
+                  }}
+                  title="Open Textbook in New Tab"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                  <span>Pop Out</span>
+                </a>
+              </div>
+            )}
           </div>
 
           {!subject.bookUrl ? (
@@ -1155,90 +1469,219 @@ Ensure the "questions" array contains ALL the individual generated questions cov
               <span style={{ fontSize: '0.85rem', opacity: 0.7, textAlign: 'center', maxWidth: '300px' }}>Go to the Subject Settings to configure a Book URL.</span>
             </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-                  {isStudentView ? `Subject Textbook` : `Embedded PDF`}
-                </span>
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                width: '100%',
+                background: 'none',
+                borderRadius: 0,
+                padding: 0,
+                border: 'none'
+              }}
+            >
+              {/* Single page viewport-optimized frame */}
+              <div
+                style={{
+                  position: 'relative',
+                  width: pdfViewMode === 'single' ? 'min(100%, calc(82vh * 0.73))' : '100%',
+                  height: 'clamp(520px, 82vh, 880px)',
+                  maxHeight: '85vh',
+                  borderRadius: '10px',
+                  overflow: 'hidden',
+                  background: '#121214',
+                  boxShadow: '0 8px 30px rgba(0,0,0,0.45)',
+                  border: '1px solid rgba(255,255,255,0.08)',
+                  display: 'flex',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  transition: 'width 0.25s ease'
+                }}
+              >
+                <iframe
+                  key={`${getEmbedUrl(subject.bookUrl, currentPdfPage)}-${pdfScale}`}
+                  src={getEmbedUrl(subject.bookUrl, currentPdfPage)}
+                  width="100%"
+                  height="100%"
+                  title="Subject PDF Viewer"
+                  style={{
+                    width: pdfScale === 1 ? '100%' : `${100 / pdfScale}%`,
+                    height: pdfScale === 1 ? '100%' : `${100 / pdfScale}%`,
+                    transform: pdfScale === 1 ? 'none' : `scale(${pdfScale})`,
+                    transformOrigin: 'top center',
+                    border: 'none',
+                    background: '#fff'
+                  }}
+                />
               </div>
-              
-              {isStudentView ? (
-                <div style={{ display: 'flex', justifyContent: 'center', padding: '2rem', background: 'rgba(0,0,0,0.2)', border: '1px dashed var(--glass-border)', borderRadius: '12px' }}>
-                  <a href={getEmbedUrl(subject.bookUrl)} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', background: 'var(--accent-primary)', color: '#fff', textDecoration: 'none', padding: '0.7rem 1.2rem', borderRadius: '8px', fontWeight: '600', fontSize: '0.95rem', transition: 'transform 0.2s', boxShadow: '0 4px 12px rgba(124, 58, 237, 0.4)' }} onMouseOver={(e) => e.currentTarget.style.transform='translateY(-2px)'} onMouseOut={(e) => e.currentTarget.style.transform='translateY(0)'}>
-                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
-                    Open Textbook
-                  </a>
-                </div>
-              ) : (
-                <iframe src={getEmbedUrl(subject.bookUrl)} width="100%" height="500px" style={{ border: 'none', borderRadius: '12px', background: '#fff' }} title="Subject PDF"></iframe>
-              )}
+
+              {/* Informative footer */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', marginTop: '0.65rem', padding: '0 0.35rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                <span style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+                  Viewing single page viewport. Use scale controls or click chapter pages below to navigate.
+                </span>
+                {currentPdfPage > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => setCurrentPdfPage(1)}
+                    style={{ background: 'none', border: 'none', color: 'var(--accent-primary)', fontSize: '0.74rem', cursor: 'pointer', padding: 0 }}
+                  >
+                    Jump to Cover (p. 1)
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </div>
 
         {/* 1. Mark Distribution Section */}
-        <div style={{ background: 'rgba(255,255,255,0.025)', border: '1px solid var(--glass-border)', borderRadius: '14px', padding: '1.5rem', marginBottom: '2rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.9rem' }}>
+        <div style={{ background: 'none', border: 'none', borderRadius: 0, padding: 0, marginBottom: '3rem', width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', paddingBottom: '0.75rem', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 20V10"></path><path d="M12 20V4"></path><path d="M6 20v-6"></path></svg>
-              <h2 style={{ margin: 0, fontSize: '1.15rem', color: '#fff', fontWeight: 600 }}>Mark Distribution</h2>
+              <h2 style={{ margin: 0, fontSize: '1.2rem', color: '#fff', fontWeight: 600 }}>Mark Distribution</h2>
             </div>
 
             {!isEditingMarkDist && (
               <button
                 type="button"
                 onClick={() => setIsEditingMarkDist(true)}
-                style={{ padding: '0.35rem 0.8rem', fontSize: '0.8rem', background: 'rgba(139, 92, 246, 0.15)', color: 'var(--accent-primary)', border: '1px solid rgba(139, 92, 246, 0.3)', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.35rem', fontWeight: 500 }}
+                title={markDistValue ? 'Edit Distribution' : 'Set Mark Distribution'}
+                style={{
+                  width: '26px',
+                  height: '26px',
+                  padding: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: 'rgba(139, 92, 246, 0.12)',
+                  color: 'var(--accent-primary)',
+                  border: '1px solid rgba(139, 92, 246, 0.28)',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease',
+                  flexShrink: 0
+                }}
+                onMouseOver={(e) => { e.currentTarget.style.background = 'rgba(139,92,246,0.25)'; e.currentTarget.style.borderColor = 'rgba(139,92,246,0.55)'; }}
+                onMouseOut={(e) => { e.currentTarget.style.background = 'rgba(139,92,246,0.12)'; e.currentTarget.style.borderColor = 'rgba(139,92,246,0.28)'; }}
               >
-                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
-                <span>{markDistValue ? 'Edit Distribution' : 'Set Mark Distribution'}</span>
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
               </button>
             )}
           </div>
 
           {isEditingMarkDist ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-              <textarea
-                value={markDistValue}
-                onChange={(e) => setMarkDistValue(e.target.value)}
-                placeholder={`e.g.\nMCQ: 20 marks\nShort Questions: 30 marks\nCreative Questions: 50 marks\nTotal: 100 marks`}
-                rows={5}
-                style={{ width: '100%', padding: '0.75rem', background: 'rgba(0,0,0,0.35)', border: '1px solid var(--accent-primary)', borderRadius: '8px', color: '#fff', fontSize: '0.9rem', resize: 'vertical' }}
-              />
-
-              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem' }}>
+                <span style={{ fontSize: '0.76rem', color: 'var(--text-secondary)' }}>
+                  Enter or paste syllabus mark distribution (Markdown and LaTeX are auto-cleaned)
+                </span>
                 <button
                   type="button"
-                  onClick={() => setMarkDistValue("MCQ: 20 marks\nShort Questions: 30 marks\nCreative/Descriptive: 50 marks\nTotal: 100 marks")}
-                  style={{ padding: '0.25rem 0.65rem', fontSize: '0.75rem', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--glass-border)', borderRadius: '4px', color: 'var(--text-secondary)', cursor: 'pointer' }}
+                  onClick={() => {
+                    const cleaned = cleanAndFormatMarkDistribution(markDistValue);
+                    setMarkDistValue(cleaned);
+                  }}
+                  style={{
+                    padding: '0.24rem 0.65rem',
+                    fontSize: '0.74rem',
+                    fontWeight: 600,
+                    background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.25) 0%, rgba(99, 102, 241, 0.25) 100%)',
+                    border: '1px solid rgba(139, 92, 246, 0.45)',
+                    borderRadius: '5px',
+                    color: '#c4b5fd',
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.3rem',
+                    transition: 'all 0.15s ease'
+                  }}
+                  title="Clean markdown symbols, LaTeX math ($ \times), remove duplicate headers, and format into neat question items"
                 >
-                  + 100 Marks Standard
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setMarkDistValue("MCQ: 15 marks\nShort Questions: 15 marks\nCreative Questions: 20 marks\nTotal: 50 marks")}
-                  style={{ padding: '0.25rem 0.65rem', fontSize: '0.75rem', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--glass-border)', borderRadius: '4px', color: 'var(--text-secondary)', cursor: 'pointer' }}
-                >
-                  + 50 Marks CT
+                  <span>✨</span>
+                  <span>Clean & Organize</span>
                 </button>
               </div>
 
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.25rem' }}>
-                <button
-                  type="button"
-                  onClick={() => setIsEditingMarkDist(false)}
-                  style={{ padding: '0.45rem 0.9rem', fontSize: '0.82rem', background: 'rgba(255,255,255,0.06)', border: 'none', borderRadius: '6px', color: '#fff', cursor: 'pointer' }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSaveMarkDistribution}
-                  className="primary"
-                  style={{ padding: '0.45rem 1rem', fontSize: '0.82rem', borderRadius: '6px', cursor: 'pointer' }}
-                >
-                  Save Distribution
-                </button>
+              <textarea
+                value={markDistValue}
+                onChange={(e) => setMarkDistValue(e.target.value)}
+                placeholder={`e.g.\nPart-A: Reading Test (25 Marks)\n1. Matching Words: 1 × 5 = 5 marks\n   - Match words from Column A with meanings in Column B\n2. True or False: 1 × 5 = 5 marks\nTotal: 100 marks`}
+                rows={9}
+                style={{
+                  width: '100%',
+                  padding: '0.7rem',
+                  background: 'rgba(0,0,0,0.4)',
+                  border: '1px solid var(--accent-primary)',
+                  borderRadius: '8px',
+                  color: '#f8fafc',
+                  fontSize: '0.82rem',
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                  lineHeight: 1.5,
+                  resize: 'vertical'
+                }}
+              />
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const cleaned = cleanAndFormatMarkDistribution(markDistValue);
+                      setMarkDistValue(cleaned);
+                    }}
+                    style={{
+                      padding: '0.22rem 0.6rem',
+                      fontSize: '0.74rem',
+                      fontWeight: 600,
+                      background: 'rgba(139, 92, 246, 0.2)',
+                      border: '1px solid rgba(139, 92, 246, 0.4)',
+                      borderRadius: '5px',
+                      color: '#c4b5fd',
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.25rem'
+                    }}
+                  >
+                    <span>✨</span>
+                    <span>Clean & Organize</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setMarkDistValue("MCQ: 20 marks\nShort Questions: 30 marks\nCreative/Descriptive: 50 marks\nTotal: 100 marks")}
+                    style={{ padding: '0.2rem 0.52rem', fontSize: '0.72rem', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--glass-border)', borderRadius: '4px', color: 'var(--text-secondary)', cursor: 'pointer' }}
+                  >
+                    + 100 Marks Standard
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMarkDistValue("MCQ: 15 marks\nShort Questions: 15 marks\nCreative Questions: 20 marks\nTotal: 50 marks")}
+                    style={{ padding: '0.2rem 0.52rem', fontSize: '0.72rem', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--glass-border)', borderRadius: '4px', color: 'var(--text-secondary)', cursor: 'pointer' }}
+                  >
+                    + 50 Marks CT
+                  </button>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.45rem' }}>
+                  <button
+                    type="button"
+                    onClick={() => setIsEditingMarkDist(false)}
+                    style={{ padding: '0.26rem 0.65rem', fontSize: '0.75rem', background: 'rgba(255,255,255,0.06)', border: 'none', borderRadius: '6px', color: '#fff', cursor: 'pointer' }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveMarkDistribution}
+                    className="primary"
+                    style={{ padding: '0.26rem 0.75rem', fontSize: '0.75rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}
+                  >
+                    Save Distribution
+                  </button>
+                </div>
               </div>
             </div>
           ) : (
@@ -1251,99 +1694,221 @@ Ensure the "questions" array contains ALL the individual generated questions cov
           )}
         </div>
 
-        {/* 2. Syllabus & Chapters Accordion Section */}
-        <div style={{ background: 'rgba(255,255,255,0.025)', border: '1px solid var(--glass-border)', borderRadius: '14px', padding: '1.5rem', marginBottom: '2rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+        {/* 2. Syllabus & Chapters Section */}
+        <div style={{ marginBottom: '2.5rem', width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.6rem', paddingBottom: '0.75rem', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
-              <h2 style={{ margin: 0, fontSize: '1.15rem', color: '#fff', fontWeight: 600 }}>
+              <h2 style={{ margin: 0, fontSize: '1.2rem', color: '#fff', fontWeight: 600 }}>
                 Syllabus & Chapters ({totalChaptersCount})
               </h2>
             </div>
 
             <button
               type="button"
-              onClick={() => setShowAddChapterModal(true)}
-              style={{ padding: '0.35rem 0.8rem', fontSize: '0.8rem', background: 'rgba(139, 92, 246, 0.15)', color: 'var(--accent-primary)', border: '1px solid rgba(139, 92, 246, 0.3)', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.35rem', fontWeight: 500 }}
+              onClick={handleOpenAddChapter}
+              style={{ padding: '0.25rem 0.65rem', fontSize: '0.75rem', background: 'rgba(139, 92, 246, 0.15)', color: 'var(--accent-primary)', border: '1px solid rgba(139, 92, 246, 0.3)', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.3rem', fontWeight: 500, transition: 'all 0.15s ease' }}
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
               <span>Add Chapter</span>
             </button>
           </div>
 
           {chaptersList.length > 0 ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
               {chaptersList.map((chap, idx) => {
                 const isCompleted = chap.completed || chap.status === 'completed';
                 const chapSlug = chap.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
                 const queryParentId = searchParams.get("parentId");
                 const parentIdQuery = queryParentId ? `?parentId=${queryParentId}` : '';
                 const readHref = `/kid/chapter?id=${searchParams.get("id")}&subject=${subjectSlug}&chapter=${chapSlug}${parentIdQuery.replace('?', '&')}`;
+                const { topics: displayTopics, pdfPage: displayPdfPage } = parseChapterTopicsAndPage(chap);
 
                 return (
                   <div
                     key={chap.id || idx}
                     style={{
                       display: 'flex',
-                      alignItems: 'center',
+                      alignItems: 'flex-start',
                       justifyContent: 'space-between',
-                      padding: '0.85rem 1rem',
-                      background: isCompleted ? 'rgba(16, 185, 129, 0.05)' : 'rgba(255,255,255,0.03)',
-                      border: `1px solid ${isCompleted ? 'rgba(16, 185, 129, 0.25)' : 'rgba(255,255,255,0.06)'}`,
-                      borderRadius: '10px',
+                      padding: '0.85rem 0',
+                      background: 'none',
+                      border: 'none',
+                      borderBottom: idx === chaptersList.length - 1 ? 'none' : '1px solid rgba(255,255,255,0.07)',
                       gap: '0.75rem',
-                      flexWrap: 'wrap',
+                      width: '100%',
                       transition: 'all 0.15s'
                     }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flex: 1, minWidth: '220px' }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', flex: 1, minWidth: 0 }}>
                       {/* Checkbox for chapter completion */}
                       <button
                         type="button"
                         onClick={() => handleToggleChapterComplete(chap.id, isCompleted)}
                         style={{
-                          width: '22px',
-                          height: '22px',
-                          borderRadius: '6px',
-                          border: `1.5px solid ${isCompleted ? '#10b981' : 'rgba(255,255,255,0.25)'}`,
+                          width: '20px',
+                          height: '20px',
+                          marginTop: '2px',
+                          borderRadius: '5px',
+                          border: `1.5px solid ${isCompleted ? '#10b981' : 'rgba(255,255,255,0.28)'}`,
                           background: isCompleted ? '#10b981' : 'transparent',
                           color: '#fff',
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
                           cursor: 'pointer',
-                          fontSize: '0.75rem',
+                          fontSize: '0.72rem',
                           fontWeight: 700,
-                          flexShrink: 0
+                          flexShrink: 0,
+                          transition: 'all 0.2s',
+                          padding: 0
                         }}
                         title={isCompleted ? 'Mark as incomplete' : 'Mark as completed'}
                       >
                         {isCompleted && '✓'}
                       </button>
 
-                      <div style={{ textAlign: 'left' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                          <span style={{ fontSize: '0.96rem', fontWeight: 600, color: isCompleted ? '#34d399' : '#fff' }}>
+                      <div style={{ textAlign: 'left', flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: '0.94rem', fontWeight: 600, color: isCompleted ? '#34d399' : '#fff' }}>
                             {chap.title}
                           </span>
-                          {chap.pdfPage && (
-                            <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.06)', padding: '0.1rem 0.45rem', borderRadius: '4px' }}>
-                              p. {chap.pdfPage}
-                            </span>
+                          {displayPdfPage && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const cleanNum = parseInt(String(displayPdfPage).match(/\d+/)?.[0] || '1', 10);
+                                setCurrentPdfPage(cleanNum);
+                                const pdfEl = document.getElementById('subject-pdf-section');
+                                if (pdfEl) pdfEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                              }}
+                              style={{
+                                fontSize: '0.68rem',
+                                color: 'var(--accent-primary)',
+                                background: 'rgba(139, 92, 246, 0.12)',
+                                border: '1px solid rgba(139, 92, 246, 0.28)',
+                                padding: '0.1rem 0.42rem',
+                                borderRadius: '4px',
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.2rem',
+                                transition: 'all 0.15s ease'
+                              }}
+                              title={`Jump PDF viewer to page ${displayPdfPage}`}
+                            >
+                              <span>📄 p. {displayPdfPage}</span>
+                            </button>
                           )}
                         </div>
-                        <span style={{ fontSize: '0.75rem', color: isCompleted ? '#34d399' : 'var(--text-secondary)', opacity: 0.85 }}>
+
+                        {/* Topics / Subtopics list if any */}
+                        {displayTopics && displayTopics.length > 0 && (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', marginTop: '0.45rem' }}>
+                            {displayTopics.map((top, tIdx) => (
+                              <span
+                                key={top.id || tIdx}
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.35rem',
+                                  fontSize: '0.74rem',
+                                  padding: '0.18rem 0.48rem',
+                                  borderRadius: '5px',
+                                  background: 'rgba(255, 255, 255, 0.05)',
+                                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                                  color: '#e2e8f0',
+                                  lineHeight: 1.3
+                                }}
+                              >
+                                <span style={{ opacity: 0.85 }}>{top.title}</span>
+                                {top.page && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const cleanNum = parseInt(String(top.page).match(/\d+/)?.[0] || '1', 10);
+                                      setCurrentPdfPage(cleanNum);
+                                      const pdfEl = document.getElementById('subject-pdf-section');
+                                      if (pdfEl) pdfEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                    }}
+                                    title={`Jump PDF to page ${top.page}`}
+                                    style={{
+                                      fontSize: '0.65rem',
+                                      padding: '0.05rem 0.32rem',
+                                      borderRadius: '3px',
+                                      background: 'rgba(139, 92, 246, 0.28)',
+                                      color: '#d8b4fe',
+                                      border: 'none',
+                                      cursor: 'pointer',
+                                      fontWeight: 600,
+                                      lineHeight: 1.2
+                                    }}
+                                  >
+                                    p. {top.page}
+                                  </button>
+                                )}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+
+                        <span style={{ fontSize: '0.74rem', color: isCompleted ? '#34d399' : 'var(--text-secondary)', opacity: 0.85, marginTop: '0.3rem', display: 'block' }}>
                           {isCompleted ? 'Status: Mastered & Completed' : 'Status: To Study / In Progress'}
                         </span>
                       </div>
                     </div>
 
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexShrink: 0 }}>
+                      {/* Edit Chapter Button */}
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEditChapter(chap)}
+                        style={{
+                          padding: '0.24rem 0.55rem',
+                          fontSize: '0.72rem',
+                          background: 'rgba(255,255,255,0.06)',
+                          color: '#e2e8f0',
+                          border: '1px solid rgba(255,255,255,0.12)',
+                          borderRadius: '5px',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.25rem',
+                          transition: 'all 0.15s'
+                        }}
+                        title="Edit chapter title, page and topics"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+                        <span>Edit</span>
+                      </button>
+
+                      {/* Delete Chapter Button */}
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteChapter(chap.id, chap.title)}
+                        style={{
+                          padding: '0.24rem 0.45rem',
+                          fontSize: '0.72rem',
+                          background: 'rgba(239, 68, 68, 0.1)',
+                          color: '#f87171',
+                          border: '1px solid rgba(239, 68, 68, 0.25)',
+                          borderRadius: '5px',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          transition: 'all 0.15s'
+                        }}
+                        title="Delete chapter"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                      </button>
+
                       <Link
                         href={readHref}
                         style={{
-                          padding: '0.4rem 0.85rem',
-                          fontSize: '0.82rem',
+                          padding: '0.26rem 0.65rem',
+                          fontSize: '0.75rem',
                           fontWeight: 500,
                           background: 'rgba(139, 92, 246, 0.15)',
                           color: 'var(--accent-primary)',
@@ -1352,10 +1917,11 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                           textDecoration: 'none',
                           display: 'flex',
                           alignItems: 'center',
-                          gap: '0.35rem'
+                          gap: '0.35rem',
+                          transition: 'all 0.15s ease'
                         }}
                       >
-                        <span>{isStudentView ? 'Study Chapter' : 'Generate Questions'}</span>
+                        <span>{isStudentView ? 'Study' : 'Questions'}</span>
                         <span>{isStudentView ? '📖' : '⚡'}</span>
                       </Link>
                     </div>
@@ -1364,8 +1930,8 @@ Ensure the "questions" array contains ALL the individual generated questions cov
               })}
             </div>
           ) : (
-            <div style={{ padding: '1.25rem', textAlign: 'center', background: 'rgba(0,0,0,0.2)', borderRadius: '10px' }}>
-              <p style={{ margin: 0, fontSize: '0.88rem', color: 'var(--text-secondary)' }}>
+            <div style={{ padding: '2rem 1rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+              <p style={{ margin: 0, fontSize: '0.9rem' }}>
                 No chapters added to this syllabus yet. Click <strong>Add Chapter</strong> to organize the exam curriculum.
               </p>
             </div>
@@ -1373,11 +1939,11 @@ Ensure the "questions" array contains ALL the individual generated questions cov
         </div>
 
         {/* 3. Model Tests Workspace */}
-        <div style={{ background: 'rgba(255,255,255,0.025)', border: '1px solid var(--glass-border)', borderRadius: '14px', padding: '1.5rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.2rem', flexWrap: 'wrap', gap: '0.6rem' }}>
+        <div style={{ background: 'none', border: 'none', borderRadius: 0, padding: 0, marginBottom: '3rem', width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', paddingBottom: '0.75rem', borderBottom: '1px solid rgba(255,255,255,0.08)', flexWrap: 'wrap', gap: '0.6rem' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
-              <h2 style={{ margin: 0, fontSize: '1.15rem', color: '#fff', fontWeight: 600 }}>
+              <h2 style={{ margin: 0, fontSize: '1.2rem', color: '#fff', fontWeight: 600 }}>
                 Model Tests ({modelTestsList.length})
               </h2>
             </div>
@@ -1386,16 +1952,16 @@ Ensure the "questions" array contains ALL the individual generated questions cov
               type="button"
               onClick={handleOpenGenerator}
               className="primary"
-              style={{ padding: '0.45rem 1.1rem', fontSize: '0.85rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem', borderRadius: '8px', cursor: 'pointer' }}
+              style={{ padding: '0.28rem 0.72rem', fontSize: '0.76rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem', borderRadius: '6px', cursor: 'pointer' }}
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
               <span>Generate Model Test</span>
             </button>
           </div>
 
           {modelTestsList.length > 0 ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-              {modelTestsList.map(test => {
+            <div style={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
+              {modelTestsList.map((test, idx) => {
                 const displayScore = test.examinerGrading?.totalAwarded !== undefined 
                   ? `${test.examinerGrading.totalAwarded}/${test.examinerGrading.totalMax || 100}`
                   : (test.result && test.result !== '40/100' && test.result !== 'Pending' ? test.result : '0');
@@ -1408,31 +1974,33 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'space-between',
-                      padding: '0.9rem 1.1rem',
-                      background: 'rgba(255,255,255,0.03)',
-                      border: '1px solid rgba(255,255,255,0.07)',
-                      borderRadius: '10px',
+                      padding: '0.85rem 0',
+                      background: 'none',
+                      border: 'none',
+                      borderBottom: idx === modelTestsList.length - 1 ? 'none' : '1px solid rgba(255,255,255,0.07)',
+                      borderRadius: 0,
                       flexWrap: 'wrap',
-                      gap: '0.75rem'
+                      gap: '0.65rem',
+                      width: '100%'
                     }}
                   >
                     <div style={{ textAlign: 'left' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.2rem', flexWrap: 'wrap' }}>
-                        <span style={{ fontSize: '0.98rem', fontWeight: 600, color: '#fff' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.2rem', flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: '0.94rem', fontWeight: 600, color: '#fff' }}>
                           {test.title || `Model Test - ${test.date}`}
                         </span>
                         {test.difficulty && (
-                          <span style={{ fontSize: '0.7rem', padding: '0.12rem 0.5rem', borderRadius: '10px', background: 'rgba(139, 92, 246, 0.2)', color: 'var(--accent-primary)', fontWeight: 600 }}>
+                          <span style={{ fontSize: '0.68rem', padding: '0.1rem 0.45rem', borderRadius: '10px', background: 'rgba(139, 92, 246, 0.2)', color: 'var(--accent-primary)', fontWeight: 600 }}>
                             {test.difficulty}
                           </span>
                         )}
                         {test.uploadedPages && test.uploadedPages.length > 0 && (
-                          <span style={{ fontSize: '0.7rem', padding: '0.12rem 0.5rem', borderRadius: '10px', background: 'rgba(59,130,246,0.18)', color: '#60a5fa', fontWeight: 600 }}>
+                          <span style={{ fontSize: '0.68rem', padding: '0.1rem 0.45rem', borderRadius: '10px', background: 'rgba(59,130,246,0.18)', color: '#60a5fa', fontWeight: 600 }}>
                             📄 {test.uploadedPages.length} {test.uploadedPages.length === 1 ? 'Page' : 'Pages'}
                           </span>
                         )}
                       </div>
-                      <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', gap: '0.45rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', display: 'flex', gap: '0.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
                         <span>📅 {test.date || 'No date'}</span>
                         {test.chapters && test.chapters.length > 0 && (
                           <span>• {test.chapters.length} chapters covered</span>
@@ -1443,7 +2011,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                       </div>
                     </div>
 
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                       {/* Interactive Time Limit Button */}
                       <button
                         type="button"
@@ -1456,8 +2024,8 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                           setTempDurationValue(test.duration || 60);
                         }}
                         style={{
-                          padding: '0.38rem 0.75rem',
-                          fontSize: '0.82rem',
+                          padding: '0.24rem 0.58rem',
+                          fontSize: '0.74rem',
                           background: 'rgba(56, 189, 248, 0.12)',
                           color: '#38bdf8',
                           border: '1px solid rgba(56, 189, 248, 0.35)',
@@ -1465,7 +2033,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                           cursor: 'pointer',
                           display: 'flex',
                           alignItems: 'center',
-                          gap: '0.35rem',
+                          gap: '0.3rem',
                           fontWeight: 600,
                           transition: 'all 0.15s ease'
                         }}
@@ -1473,16 +2041,16 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                       >
                         <span>⏱️</span>
                         <span>{test.duration ? `${test.duration}m` : 'Set Time'}</span>
-                        <span style={{ fontSize: '0.7rem', opacity: 0.75 }}>✏️</span>
+                        <span style={{ fontSize: '0.68rem', opacity: 0.75 }}>✏️</span>
                       </button>
 
                       {/* Result Badge */}
                       <span
                         style={{
-                          fontSize: '0.84rem',
+                          fontSize: '0.74rem',
                           fontWeight: 600,
-                          padding: '0.3rem 0.75rem',
-                          borderRadius: '20px',
+                          padding: '0.2rem 0.58rem',
+                          borderRadius: '16px',
                           background: isGraded ? 'rgba(16, 185, 129, 0.15)' : 'rgba(234, 179, 8, 0.15)',
                           border: `1px solid ${isGraded ? 'rgba(16, 185, 129, 0.35)' : 'rgba(234, 179, 8, 0.35)'}`,
                           color: isGraded ? '#34d399' : '#facc15'
@@ -1495,9 +2063,9 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                       <button
                         type="button"
                         onClick={() => openTestViewer({ subjectId: subject.id, examId: exam.id, testId: test.id, ...test })}
-                        style={{ padding: '0.38rem 0.85rem', fontSize: '0.82rem', background: 'rgba(139, 92, 246, 0.18)', color: 'var(--accent-primary)', border: '1px solid rgba(139, 92, 246, 0.35)', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.35rem', fontWeight: 600 }}
+                        style={{ padding: '0.25rem 0.65rem', fontSize: '0.74rem', background: 'rgba(139, 92, 246, 0.18)', color: 'var(--accent-primary)', border: '1px solid rgba(139, 92, 246, 0.35)', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.3rem', fontWeight: 600 }}
                       >
-                        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
                         <span>Open Test</span>
                       </button>
 
@@ -1505,10 +2073,10 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                       <button
                         type="button"
                         onClick={() => handleDeleteModelTest(test.id)}
-                        style={{ padding: '0.38rem', background: 'rgba(239, 68, 68, 0.08)', color: '#ef4444', border: 'none', borderRadius: '6px', cursor: 'pointer' }}
+                        style={{ padding: '0.25rem 0.35rem', background: 'rgba(239, 68, 68, 0.08)', color: '#ef4444', border: 'none', borderRadius: '6px', cursor: 'pointer' }}
                         title="Delete test"
                       >
-                        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                       </button>
                     </div>
                   </div>
@@ -1526,46 +2094,249 @@ Ensure the "questions" array contains ALL the individual generated questions cov
 
       </div>
 
-      {/* Add Chapter Modal */}
+      {/* Add / Edit Chapter & Topics Modal */}
       {showAddChapterModal && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '1rem' }}>
-          <div className="card" style={{ maxWidth: '420px', width: '100%', padding: '1.5rem', textAlign: 'left' }}>
-            <h3 style={{ marginTop: 0, marginBottom: '1rem', color: '#fff' }}>Add Chapter to Syllabus</h3>
-            <form onSubmit={handleAddChapter} style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.82)', backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 120, padding: '1rem' }}>
+          <div className="card" style={{ maxWidth: '580px', width: '100%', maxHeight: '88vh', display: 'flex', flexDirection: 'column', padding: '1.4rem', textAlign: 'left', borderRadius: '12px', background: '#131127', border: '1px solid rgba(255,255,255,0.12)', boxShadow: '0 20px 50px rgba(0,0,0,0.7)' }}>
+            
+            {/* Modal Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: '0.65rem', flexShrink: 0 }}>
               <div>
-                <label style={{ display: 'block', fontSize: '0.82rem', color: 'var(--text-secondary)', marginBottom: '0.3rem' }}>Chapter Title</label>
-                <input
-                  type="text"
-                  value={newChapterTitle}
-                  onChange={(e) => setNewChapterTitle(e.target.value)}
-                  placeholder="e.g. Chapter 4: Fractions & Decimals"
-                  required
-                  style={{ width: '100%', padding: '0.6rem', fontSize: '0.9rem', background: 'rgba(0,0,0,0.35)', border: '1px solid var(--glass-border)', borderRadius: '6px', color: '#fff' }}
-                  autoFocus
-                />
+                <h3 style={{ margin: 0, fontSize: '1.15rem', color: '#fff', fontWeight: 600 }}>
+                  {editingChapterId ? 'Edit Chapter & Topics' : 'Add Chapter / Unit'}
+                </h3>
+                <span style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+                  Organize syllabus units, subtopics, and textbook pages
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAddChapterModal(false)}
+                style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1.2rem', padding: '0.2rem 0.4rem', lineHeight: 1 }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Form Scrollable Body */}
+            <form onSubmit={handleSaveChapter} style={{ display: 'flex', flexDirection: 'column', flex: 1, overflowY: 'auto', gap: '1rem', paddingRight: '0.2rem' }}>
+              
+              {/* Chapter Title & Page Range */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 140px', gap: '0.75rem' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 500, color: 'var(--text-secondary)', marginBottom: '0.3rem' }}>
+                    Chapter / Unit Title *
+                  </label>
+                  <input
+                    type="text"
+                    value={newChapterTitle}
+                    onChange={(e) => setNewChapterTitle(e.target.value)}
+                    placeholder="e.g. Grammar, Paragraph, Unit 11-20"
+                    required
+                    style={{ width: '100%', padding: '0.55rem 0.7rem', fontSize: '0.88rem', background: 'rgba(0,0,0,0.35)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '6px', color: '#fff' }}
+                    autoFocus
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 500, color: 'var(--text-secondary)', marginBottom: '0.3rem' }}>
+                    Page Range (Opt.)
+                  </label>
+                  <input
+                    type="text"
+                    value={newChapterPdfPage}
+                    onChange={(e) => setNewChapterPdfPage(e.target.value)}
+                    placeholder="e.g. 54-106"
+                    style={{ width: '100%', padding: '0.55rem 0.7rem', fontSize: '0.88rem', background: 'rgba(0,0,0,0.35)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '6px', color: '#fff' }}
+                  />
+                </div>
               </div>
 
-              <div>
-                <label style={{ display: 'block', fontSize: '0.82rem', color: 'var(--text-secondary)', marginBottom: '0.3rem' }}>Textbook Page (Optional)</label>
-                <input
-                  type="text"
-                  value={newChapterPdfPage}
-                  onChange={(e) => setNewChapterPdfPage(e.target.value)}
-                  placeholder="e.g. 42"
-                  style={{ width: '100%', padding: '0.6rem', fontSize: '0.9rem', background: 'rgba(0,0,0,0.35)', border: '1px solid var(--glass-border)', borderRadius: '6px', color: '#fff' }}
-                />
+              {/* Topics / Subtopics Section */}
+              <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '0.85rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#e2e8f0' }}>
+                      Topics & Syllabus Items ({chapterTopics.length})
+                    </label>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                      Add individual topics, essays, or rules with their own page numbers
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <button
+                      type="button"
+                      onClick={() => setShowBulkTopicInput(!showBulkTopicInput)}
+                      style={{
+                        padding: '0.24rem 0.55rem',
+                        fontSize: '0.72rem',
+                        background: showBulkTopicInput ? 'rgba(139, 92, 246, 0.25)' : 'rgba(255,255,255,0.06)',
+                        color: showBulkTopicInput ? 'var(--accent-primary)' : '#e2e8f0',
+                        border: '1px solid rgba(255,255,255,0.12)',
+                        borderRadius: '5px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.25rem'
+                      }}
+                    >
+                      <span>📋</span>
+                      <span>{showBulkTopicInput ? 'Hide Bulk' : 'Bulk Paste'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setChapterTopics([
+                          ...chapterTopics,
+                          { id: `top_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`, title: '', page: '' }
+                        ]);
+                      }}
+                      style={{
+                        padding: '0.24rem 0.6rem',
+                        fontSize: '0.72rem',
+                        background: 'rgba(139, 92, 246, 0.15)',
+                        color: 'var(--accent-primary)',
+                        border: '1px solid rgba(139, 92, 246, 0.3)',
+                        borderRadius: '5px',
+                        cursor: 'pointer',
+                        fontWeight: 600,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.2rem'
+                      }}
+                    >
+                      <span>+</span>
+                      <span>Add Topic</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Bulk Paste Box */}
+                {showBulkTopicInput && (
+                  <div style={{ background: 'rgba(0,0,0,0.35)', border: '1px dashed rgba(139, 92, 246, 0.4)', borderRadius: '8px', padding: '0.75rem', marginBottom: '0.75rem' }}>
+                    <div style={{ fontSize: '0.74rem', color: '#c4b5fd', marginBottom: '0.4rem', lineHeight: 1.4 }}>
+                      💡 Paste multiple topics or Roman numeral lists (e.g. <code>(i) Parts of Speech (ii) Tense p. 54</code> or each topic on a new line). We will auto-extract titles and page numbers.
+                    </div>
+                    <textarea
+                      rows={3}
+                      value={bulkTopicText}
+                      onChange={(e) => setBulkTopicText(e.target.value)}
+                      placeholder="(i) Parts of Speech with classifications (ii) Tense p. 54 (iii) Prepositions p. 58"
+                      style={{ width: '100%', padding: '0.5rem', fontSize: '0.82rem', background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px', color: '#fff', resize: 'vertical' }}
+                    />
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.4rem', marginTop: '0.4rem' }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBulkTopicText('');
+                          setShowBulkTopicInput(false);
+                        }}
+                        style={{ padding: '0.2rem 0.5rem', fontSize: '0.72rem', background: 'transparent', color: 'var(--text-secondary)', border: 'none', cursor: 'pointer' }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!bulkTopicText.trim()) return;
+                          const parsed = parseTopicsFromText(bulkTopicText);
+                          if (parsed.length > 0) {
+                            setChapterTopics([...chapterTopics, ...parsed]);
+                            setBulkTopicText('');
+                            setShowBulkTopicInput(false);
+                          }
+                        }}
+                        style={{ padding: '0.22rem 0.65rem', fontSize: '0.72rem', background: 'var(--accent-primary)', color: '#fff', border: 'none', borderRadius: '5px', cursor: 'pointer', fontWeight: 600 }}
+                      >
+                        Parse & Append Topics
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Topic Items List */}
+                {chapterTopics.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', maxHeight: '240px', overflowY: 'auto', paddingRight: '0.2rem' }}>
+                    {chapterTopics.map((top, tIdx) => (
+                      <div
+                        key={top.id || tIdx}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.4rem',
+                          background: 'rgba(255,255,255,0.03)',
+                          border: '1px solid rgba(255,255,255,0.08)',
+                          borderRadius: '6px',
+                          padding: '0.35rem 0.5rem'
+                        }}
+                      >
+                        <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', width: '22px', textAlign: 'center', flexShrink: 0, fontWeight: 600 }}>
+                          #{tIdx + 1}
+                        </span>
+
+                        <input
+                          type="text"
+                          value={top.title}
+                          onChange={(e) => {
+                            const updated = [...chapterTopics];
+                            updated[tIdx] = { ...updated[tIdx], title: e.target.value };
+                            setChapterTopics(updated);
+                          }}
+                          placeholder="Topic / item title (e.g. Tense and Verb forms)"
+                          style={{ flex: 1, padding: '0.35rem 0.5rem', fontSize: '0.82rem', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', color: '#fff' }}
+                        />
+
+                        <input
+                          type="text"
+                          value={top.page || ''}
+                          onChange={(e) => {
+                            const updated = [...chapterTopics];
+                            updated[tIdx] = { ...updated[tIdx], page: e.target.value };
+                            setChapterTopics(updated);
+                          }}
+                          placeholder="p. 54"
+                          style={{ width: '70px', padding: '0.35rem 0.4rem', fontSize: '0.82rem', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', color: '#fff', textAlign: 'center' }}
+                          title="Textbook page number for this topic"
+                        />
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const updated = chapterTopics.filter((_, i) => i !== tIdx);
+                            setChapterTopics(updated);
+                          }}
+                          style={{ padding: '0.25rem 0.4rem', background: 'transparent', color: '#f87171', border: 'none', cursor: 'pointer', fontSize: '0.85rem', lineHeight: 1 }}
+                          title="Remove topic"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ padding: '1rem', textAlign: 'center', background: 'rgba(255,255,255,0.02)', border: '1px dashed rgba(255,255,255,0.08)', borderRadius: '8px', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
+                    No topics added yet. Click <strong>+ Add Topic</strong> or <strong>📋 Bulk Paste</strong> to include specific syllabus items.
+                  </div>
+                )}
               </div>
 
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
+              {/* Modal Actions Footer */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem', paddingTop: '0.75rem', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
                 <button
                   type="button"
                   onClick={() => setShowAddChapterModal(false)}
-                  style={{ padding: '0.5rem 1rem', background: 'rgba(255,255,255,0.08)', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' }}
+                  style={{ padding: '0.38rem 0.85rem', fontSize: '0.8rem', background: 'rgba(255,255,255,0.08)', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' }}
                 >
                   Cancel
                 </button>
-                <button type="submit" className="primary" style={{ padding: '0.5rem 1.2rem', borderRadius: '6px', cursor: 'pointer' }}>
-                  Add Chapter
+                <button
+                  type="submit"
+                  className="primary"
+                  style={{ padding: '0.38rem 1rem', fontSize: '0.8rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}
+                >
+                  {editingChapterId ? 'Save Changes' : 'Add Chapter'}
                 </button>
               </div>
             </form>
@@ -1636,7 +2407,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
               {/* Quick Preset Pills for Duration */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', marginTop: '-0.35rem' }}>
                 <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>Quick Time:</span>
-                {[15, 30, 45, 60, 90, 120].map(mins => (
+                {[15, 30, 45, 60, 90, 120, 150, 180].map(mins => (
                   <button
                     key={mins}
                     type="button"
@@ -1824,14 +2595,14 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                 onClick={handleGenerateModelTest}
                 disabled={isGeneratingTest}
                 className="primary"
-                style={{ flex: 1, padding: '0.75rem', borderRadius: '8px', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem', cursor: isGeneratingTest ? 'not-allowed' : 'pointer' }}
+                style={{ flex: 1, padding: '0.45rem 1rem', fontSize: '0.82rem', borderRadius: '6px', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem', cursor: isGeneratingTest ? 'not-allowed' : 'pointer' }}
               >
                 {isGeneratingTest ? 'Generating with Gemini AI...' : '✨ Generate Model Test'}
               </button>
               <button
                 type="button"
                 onClick={() => setShowGeneratorModal(false)}
-                style={{ padding: '0.75rem 1.4rem', background: 'rgba(255,255,255,0.06)', border: '1px solid var(--glass-border)', borderRadius: '8px', color: '#fff', cursor: 'pointer' }}
+                style={{ padding: '0.45rem 1.1rem', fontSize: '0.82rem', background: 'rgba(255,255,255,0.06)', border: '1px solid var(--glass-border)', borderRadius: '6px', color: '#fff', cursor: 'pointer' }}
               >
                 Cancel
               </button>
@@ -2115,146 +2886,83 @@ Ensure the "questions" array contains ALL the individual generated questions cov
               </div>
             )}
 
-            {/* Student Exam Not Started Screen */}
-            {testViewMode === 'student' && !isExamStarted && !isExamFinished ? (
+            {/* Student Exam Not Started Screen / Banner */}
+            {testViewMode === 'student' && !isExamStarted && !isExamFinished && (
               <div style={{
-                background: 'rgba(15, 23, 42, 0.85)',
-                border: '1px solid rgba(139, 92, 246, 0.3)',
-                borderRadius: '16px',
-                padding: '2.5rem',
-                textAlign: 'center',
-                maxWidth: '680px',
-                margin: '2rem auto',
-                boxShadow: '0 10px 40px rgba(0,0,0,0.5)'
+                background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.16) 0%, rgba(56, 189, 248, 0.12) 100%)',
+                border: '1px solid rgba(139, 92, 246, 0.4)',
+                borderRadius: '14px',
+                padding: '1.25rem 1.6rem',
+                marginBottom: '1.5rem',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: '1.2rem',
+                boxShadow: '0 8px 30px rgba(0,0,0,0.3)'
               }}>
-                <div style={{ fontSize: '3rem', marginBottom: '0.75rem' }}>📝</div>
-                <h2 style={{ fontSize: '1.6rem', color: '#fff', margin: '0 0 0.5rem 0' }}>
-                  Ready to take {viewingModelTest.title || 'Model Test'}?
-                </h2>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.92rem', marginBottom: '1.5rem', lineHeight: 1.6 }}>
-                  This exam contains <strong>{modalQuestions.length} Questions</strong> with a total of <strong>{modalTotalMax} Marks</strong>.
-                </p>
-
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.8rem', marginBottom: '1.4rem', textAlign: 'center' }}>
-                  <div style={{ background: 'rgba(255,255,255,0.04)', padding: '0.75rem', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.08)' }}>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Questions</div>
-                    <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#fff' }}>{modalQuestions.length}</div>
+                <div style={{ flex: '1 1 280px', minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.35rem' }}>
+                    <span style={{ fontSize: '1.5rem' }}>📝</span>
+                    <h2 style={{ fontSize: '1.2rem', color: '#fff', margin: 0, fontWeight: 700 }}>
+                      Ready to take {viewingModelTest.title || 'Model Test'}?
+                    </h2>
                   </div>
-                  <div style={{ background: 'rgba(255,255,255,0.04)', padding: '0.75rem', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.08)' }}>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Total Marks</div>
-                    <div style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--accent-primary)' }}>{modalTotalMax}</div>
-                  </div>
-                  <div style={{ background: 'rgba(56, 189, 248, 0.1)', padding: '0.75rem', borderRadius: '10px', border: '1px solid rgba(56, 189, 248, 0.35)' }}>
-                    <div style={{ fontSize: '0.75rem', color: '#7dd3fc', fontWeight: 600 }}>Time Limit</div>
-                    <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#38bdf8' }}>{defaultDurationMinutes} Min</div>
-                  </div>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.86rem', margin: 0, lineHeight: 1.5 }}>
+                    Contains <strong>{modalQuestions.length} Questions</strong> ({modalTotalMax} Marks). You can browse and navigate the question sets below, adjust your exam duration, and start when ready!
+                  </p>
                 </div>
 
-                {/* Interactive Exam Time Limit Configuration */}
-                <div style={{
-                  background: 'linear-gradient(135deg, rgba(56, 189, 248, 0.08) 0%, rgba(139, 92, 246, 0.08) 100%)',
-                  border: '1px solid rgba(56, 189, 248, 0.28)',
-                  borderRadius: '12px',
-                  padding: '1.1rem',
-                  marginBottom: '1.6rem',
-                  textAlign: 'left'
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.65rem', flexWrap: 'wrap', gap: '0.4rem' }}>
-                    <label style={{ fontSize: '0.9rem', fontWeight: 700, color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                      <span>⏱️</span>
-                      <span>Set Exam Duration / Time Limit:</span>
-                    </label>
-                    <span style={{ fontSize: '0.8rem', color: '#cbd5e1' }}>
-                      Selected: <strong style={{ color: '#fff', fontSize: '0.95rem' }}>{defaultDurationMinutes} Minutes</strong>
-                    </span>
-                  </div>
-
-                  {/* Preset Pills */}
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem', marginBottom: '0.75rem' }}>
-                    {[15, 20, 30, 45, 60, 90, 120, 180].map(mins => (
-                      <button
-                        key={mins}
-                        type="button"
-                        onClick={() => handleUpdateExamDuration(mins)}
-                        style={{
-                          padding: '0.35rem 0.75rem',
-                          borderRadius: '8px',
-                          fontSize: '0.8rem',
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                          background: defaultDurationMinutes === mins ? '#38bdf8' : 'rgba(255,255,255,0.06)',
-                          color: defaultDurationMinutes === mins ? '#0f172a' : '#cbd5e1',
-                          border: `1px solid ${defaultDurationMinutes === mins ? '#38bdf8' : 'rgba(255,255,255,0.12)'}`,
-                          boxShadow: defaultDurationMinutes === mins ? '0 0 10px rgba(56, 189, 248, 0.4)' : 'none',
-                          transition: 'all 0.15s ease'
-                        }}
-                      >
-                        {mins < 60 ? `${mins}m` : `${mins / 60}h${mins % 60 ? ` ${mins % 60}m` : ''}`}
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* Custom minute input */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Custom time:</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={360}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', flexWrap: 'wrap' }}>
+                  {/* Duration Selector */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'rgba(0,0,0,0.4)', padding: '0.35rem 0.75rem', borderRadius: '8px', border: '1px solid rgba(56, 189, 248, 0.3)' }}>
+                    <span style={{ fontSize: '0.85rem' }}>⏱️</span>
+                    <select
                       value={defaultDurationMinutes}
                       onChange={(e) => handleUpdateExamDuration(e.target.value)}
                       style={{
-                        width: '80px',
-                        padding: '0.35rem 0.65rem',
-                        background: 'rgba(0,0,0,0.5)',
-                        border: '1px solid rgba(56, 189, 248, 0.45)',
-                        borderRadius: '6px',
+                        background: 'transparent',
+                        border: 'none',
                         color: '#38bdf8',
-                        fontSize: '0.9rem',
+                        fontSize: '0.86rem',
                         fontWeight: 700,
-                        textAlign: 'center'
+                        cursor: 'pointer',
+                        outline: 'none'
                       }}
-                    />
-                    <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>minutes</span>
-                    <span style={{ fontSize: '0.74rem', color: '#94a3b8', marginLeft: 'auto' }}>
-                      💡 You can also adjust time or add +5m during exam.
-                    </span>
+                    >
+                      {[15, 20, 30, 45, 60, 90, 120, 150, 180].map(mins => (
+                        <option key={mins} value={mins} style={{ background: '#0f172a', color: '#fff' }}>
+                          {mins} Mins
+                        </option>
+                      ))}
+                    </select>
                   </div>
-                </div>
 
-                <div style={{ background: 'rgba(0,0,0,0.3)', borderRadius: '10px', padding: '1rem', marginBottom: '2rem', textAlign: 'left', border: '1px solid rgba(255,255,255,0.06)' }}>
-                  <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#f1f5f9', marginBottom: '0.4rem' }}>
-                    ⚠️ Exam Rules & Instructions:
-                  </div>
-                  <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.82rem', color: 'var(--text-secondary)', lineHeight: 1.7 }}>
-                    <li>The <strong>{defaultDurationMinutes}-minute countdown timer</strong> will begin as soon as you click Start Exam.</li>
-                    <li>All typed answers and selected options will save automatically in real-time.</li>
-                    <li><strong>Answers and solutions are hidden</strong> until you finish and submit your paper.</li>
-                    <li>You can attach photos of your handwritten answer papers at any time.</li>
-                  </ul>
+                  <button
+                    type="button"
+                    onClick={handleStartExam}
+                    style={{
+                      padding: '0.7rem 1.6rem',
+                      fontSize: '0.95rem',
+                      fontWeight: 700,
+                      background: 'var(--accent-gradient)',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: '10px',
+                      cursor: 'pointer',
+                      boxShadow: '0 4px 20px rgba(139, 92, 246, 0.45)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.45rem',
+                      transition: 'transform 0.15s ease'
+                    }}
+                  >
+                    <span>🚀</span>
+                    <span>Start Exam Timer</span>
+                  </button>
                 </div>
-
-                <button
-                  type="button"
-                  onClick={handleStartExam}
-                  style={{
-                    padding: '0.85rem 2.5rem',
-                    fontSize: '1.05rem',
-                    fontWeight: 700,
-                    background: 'var(--accent-gradient)',
-                    color: '#fff',
-                    border: 'none',
-                    borderRadius: '10px',
-                    cursor: 'pointer',
-                    boxShadow: '0 4px 20px rgba(139, 92, 246, 0.45)',
-                    transition: 'transform 0.15s ease'
-                  }}
-                >
-                  🚀 Start Exam Now
-                </button>
               </div>
-            ) : (
-              <>
+            )}
             {/* Uploaded Answer Paper Gallery */}
             {testViewMode === 'examiner' && (
               <div style={{ marginBottom: '1.25rem', background: 'rgba(139, 92, 246, 0.08)', border: '1px solid rgba(139, 92, 246, 0.25)', borderRadius: '12px', padding: '0.9rem' }}>
@@ -2381,7 +3089,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
             )}
 
             {/* Contained Question Navigator (Collapsible by Question Type & Contained Scroller Strip) */}
-            {questionDisplayMode === 'slide' && modalQuestions.length > 0 && (
+            {modalQuestions.length > 0 && (
               <div style={{
                 width: '100%',
                 maxWidth: '100%',
@@ -3433,9 +4141,6 @@ Ensure the "questions" array contains ALL the individual generated questions cov
               </div>
             </div>
 
-            </>
-          )}
-
           </main>
         </div>
       )}
@@ -3515,7 +4220,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                 Quick Presets:
               </label>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
-                {[15, 20, 30, 45, 60, 90, 120, 180].map(mins => (
+                {[15, 20, 30, 45, 60, 90, 120, 150, 180].map(mins => (
                   <button
                     key={mins}
                     type="button"
@@ -3566,17 +4271,17 @@ Ensure the "questions" array contains ALL the individual generated questions cov
               </div>
             </div>
 
-            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+            <div style={{ display: 'flex', gap: '0.6rem', justifyContent: 'flex-end' }}>
               <button
                 type="button"
                 onClick={() => setEditingDurationModal(null)}
                 style={{
-                  padding: '0.6rem 1.2rem',
-                  borderRadius: '8px',
+                  padding: '0.35rem 0.85rem',
+                  borderRadius: '6px',
                   border: '1px solid rgba(255,255,255,0.15)',
                   background: 'rgba(255,255,255,0.05)',
                   color: '#cbd5e1',
-                  fontSize: '0.88rem',
+                  fontSize: '0.8rem',
                   fontWeight: 600,
                   cursor: 'pointer'
                 }}
@@ -3587,12 +4292,12 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                 type="button"
                 onClick={handleSaveSpecificTestDuration}
                 style={{
-                  padding: '0.6rem 1.4rem',
-                  borderRadius: '8px',
+                  padding: '0.35rem 1rem',
+                  borderRadius: '6px',
                   border: 'none',
                   background: 'var(--accent-gradient, linear-gradient(135deg, #6366f1 0%, #a855f7 100%))',
                   color: '#fff',
-                  fontSize: '0.88rem',
+                  fontSize: '0.8rem',
                   fontWeight: 700,
                   cursor: 'pointer',
                   boxShadow: '0 4px 15px rgba(99, 102, 241, 0.4)'
