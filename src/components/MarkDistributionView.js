@@ -107,7 +107,7 @@ export default function MarkDistributionView({
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem', textAlign: 'left', width: '100%' }}>
       {/* Top Controls & Metrics Banner */}
       <div
         style={{
@@ -116,11 +116,12 @@ export default function MarkDistributionView({
           alignItems: 'center',
           flexWrap: 'wrap',
           gap: '0.5rem',
-          paddingBottom: '0.35rem'
+          paddingBottom: '0.35rem',
+          textAlign: 'left'
         }}
       >
         {/* KPI Chips */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap', textAlign: 'left' }}>
           {totalMarks > 0 && (
             <div
               style={{
@@ -232,7 +233,7 @@ export default function MarkDistributionView({
 
       {/* Visual Weightage Bar */}
       {showWeightageBar && totalMarks > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', textAlign: 'left' }}>
           <div
             style={{
               display: 'flex',
@@ -261,13 +262,13 @@ export default function MarkDistributionView({
           </div>
 
           {/* Mini Legend */}
-          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', fontSize: '0.72rem', color: '#94a3b8' }}>
+          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', fontSize: '0.72rem', color: '#94a3b8', textAlign: 'left' }}>
             {parsed.items.map((item, idx) => {
               const color = sectionColors[idx % sectionColors.length];
               const pct = totalMarks ? Math.round(((item.marks || 0) / totalMarks) * 100) : 0;
               return (
-                <div key={idx} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: color }} />
+                <div key={idx} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', textAlign: 'left' }}>
+                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: color, flexShrink: 0 }} />
                   <span style={{ color: '#cbd5e1' }}>#{item.index} {item.title}</span>
                   {item.marks !== null && (
                     <span style={{ color: '#64748b' }}>({item.marks}m • {pct}%)</span>
@@ -285,7 +286,8 @@ export default function MarkDistributionView({
           style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(auto-fill, minmax(min(260px, 100%), 1fr))',
-            gap: '0.6rem'
+            gap: '0.6rem',
+            textAlign: 'left'
           }}
         >
           {parsed.items.map((item, idx) => {
@@ -303,12 +305,14 @@ export default function MarkDistributionView({
                   padding: '0.7rem 0.85rem',
                   display: 'flex',
                   flexDirection: 'column',
+                  alignItems: 'stretch',
+                  textAlign: 'left',
                   gap: '0.5rem',
                   transition: 'all 0.15s ease'
                 }}
               >
                 {/* Row 1: Index badge + Title on the same line */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'nowrap', minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'nowrap', minWidth: 0, textAlign: 'left' }}>
                   <span
                     style={{
                       fontSize: '0.68rem',
@@ -335,7 +339,8 @@ export default function MarkDistributionView({
                       textOverflow: 'ellipsis',
                       whiteSpace: 'nowrap',
                       flex: 1,
-                      minWidth: 0
+                      minWidth: 0,
+                      textAlign: 'left'
                     }}
                     title={item.title}
                   >
@@ -354,6 +359,7 @@ export default function MarkDistributionView({
                       borderRadius: '4px',
                       padding: '0.1rem 0.35rem',
                       alignSelf: 'flex-start',
+                      textAlign: 'left',
                       marginTop: '-0.2rem',
                       lineHeight: 1.2
                     }}
@@ -363,7 +369,7 @@ export default function MarkDistributionView({
                 )}
 
                 {/* Row 2: Marks pill + weightage on a separate line */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', textAlign: 'left' }}>
                   {item.marks !== null ? (
                     <span
                       style={{
@@ -401,7 +407,7 @@ export default function MarkDistributionView({
 
                 {/* Calculation / Formula Chip */}
                 {item.formula && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', textAlign: 'left' }}>
                     <span style={{ fontSize: '0.72rem', color: '#94a3b8' }}>Structure:</span>
                     <span
                       style={{
@@ -422,7 +428,7 @@ export default function MarkDistributionView({
 
                 {/* Notes, Chapter Scope & Instructions */}
                 {item.notes.length > 0 && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', marginTop: 'auto' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', marginTop: 'auto', textAlign: 'left' }}>
                     {item.notes.map((note, nIdx) => {
                       const chapters = extractChapters(note);
                       return (
@@ -435,11 +441,13 @@ export default function MarkDistributionView({
                             borderLeft: '2px solid rgba(99, 102, 241, 0.5)',
                             display: 'flex',
                             flexDirection: 'column',
+                            alignItems: 'flex-start',
+                            textAlign: 'left',
                             gap: '0.3rem'
                           }}
                         >
                           {chapters && (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexWrap: 'wrap' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexWrap: 'wrap', textAlign: 'left' }}>
                               <span style={{ fontSize: '0.7rem', color: '#94a3b8', display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
                                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                   <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
@@ -464,7 +472,7 @@ export default function MarkDistributionView({
                               ))}
                             </div>
                           )}
-                          <span style={{ fontSize: '0.76rem', color: '#cbd5e1', lineHeight: 1.4 }}>
+                          <span style={{ fontSize: '0.76rem', color: '#cbd5e1', lineHeight: 1.4, textAlign: 'left', display: 'block', width: '100%' }}>
                             {note}
                           </span>
                         </div>

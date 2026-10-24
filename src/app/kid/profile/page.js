@@ -1,9 +1,9 @@
 "use client";
 
-import { Suspense, useEffect, useState, useRef } from 'react';
+import { Suspense, useEffect, useState, useRef, useMemo } from 'react';
 import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { auth, database } from '../../../lib/firebase';
-import { generateGeminiContent } from '../../../lib/gemini';
+import { generateGeminiContent, autoReviewExamWithAI } from '../../../lib/gemini';
 import { onAuthStateChanged, signOut, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth';
 import { ref, get, push, set, onValue, remove } from 'firebase/database';
 import Link from 'next/link';
@@ -60,6 +60,7 @@ function KidProfileContent() {
   const [customInstructions, setCustomInstructions] = useState('');
   const [isGeneratingTest, setIsGeneratingTest] = useState(false);
   const [generateError, setGenerateError] = useState('');
+  const [selectedBookIdsForTest, setSelectedBookIdsForTest] = useState([]);
 
   // Model test viewer, sliding & grading state
   const [viewingModelTest, setViewingModelTest] = useState(null);
@@ -77,6 +78,8 @@ function KidProfileContent() {
   const [isSavingGrading, setIsSavingGrading] = useState(false);
   const [notificationMsg, setNotificationMsg] = useState('');
   const [showAnswerKeys, setShowAnswerKeys] = useState({});
+  const [isAiReviewing, setIsAiReviewing] = useState(false);
+  const [aiReviewingQId, setAiReviewingQId] = useState(null);
 
   const [editingResultTestId, setEditingResultTestId] = useState(null);
   const [tempResultInput, setTempResultInput] = useState('');
@@ -105,6 +108,7 @@ function KidProfileContent() {
   const [navigatorViewMode, setNavigatorViewMode] = useState('collapsible'); // 'collapsible' or 'scroller'
   const [selectedSetFilter, setSelectedSetFilter] = useState('all');
   const [collapsedSets, setCollapsedSets] = useState({});
+  const [isNavigatorCollapsed, setIsNavigatorCollapsed] = useState(false);
   const pillsScrollRef = useRef(null);
 
   // Student email assignment & Teacher invite state
@@ -837,6 +841,120 @@ function KidProfileContent() {
     }
   };
 
+  // Helper to extract timestamp from test (handles createdAt or decodes Firebase push ID)
+  const getTestCreatedAt = (test, allowDateFallback = false) => {
+    if (!test) return 0;
+    if (typeof test.createdAt === 'number' && !isNaN(test.createdAt) && test.createdAt > 0) {
+      return test.createdAt;
+    }
+    if (test.createdAt) {
+      const parsed = new Date(test.createdAt).getTime();
+      if (!isNaN(parsed) && parsed > 0) return parsed;
+    }
+    // Fallback: extract millisecond timestamp from Firebase push ID (starts with - and length >= 8)
+    if (test.id && typeof test.id === 'string' && test.id.length >= 8 && test.id.startsWith('-')) {
+      const PUSH_CHARS = "-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz";
+      let time = 0;
+      let valid = true;
+      for (let i = 0; i < 8; i++) {
+        const c = test.id.charAt(i);
+        const val = PUSH_CHARS.indexOf(c);
+        if (val === -1) { valid = false; break; }
+        time = time * 64 + val;
+      }
+      if (valid && time > 1577836800000 && time < 2524608000000) {
+        return time;
+      }
+    }
+    if (allowDateFallback && test.date) {
+      const d = new Date(test.date).getTime();
+      if (!isNaN(d) && d > 0) return d;
+    }
+    return 0;
+  };
+
+  // Helper to format human-readable generation time (e.g. "3:45 PM")
+  const formatGeneratedTime = (test) => {
+    if (!test) return null;
+    if (test.generatedTime) return test.generatedTime;
+    const ts = getTestCreatedAt(test, false);
+    if (ts > 1577836800000) {
+      try {
+        const d = new Date(ts);
+        return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+      } catch (_) {
+        return null;
+      }
+    }
+    return null;
+  };
+
+  // Helper to auto-number duplicate titles (e.g. "Model Test - Oct 22, 2026 #2")
+  const getNextNumberedTitle = (desiredTitle, existingTests = []) => {
+    if (!desiredTitle) return '';
+    const trimmed = desiredTitle.trim();
+    const existingTitles = existingTests.map(t => (t.title || '').trim()).filter(Boolean);
+
+    const hasExact = existingTitles.some(t => t.toLowerCase() === trimmed.toLowerCase());
+    if (!hasExact) return trimmed;
+
+    const cleanBase = trimmed.replace(/\s*#\d+$/, '').replace(/\s*\(\d+\)$/, '').trim();
+    let countWithBase = 0;
+    let maxNum = 1;
+    for (const t of existingTitles) {
+      const tBase = t.replace(/\s*#\d+$/, '').replace(/\s*\(\d+\)$/, '').trim();
+      if (tBase.toLowerCase() === cleanBase.toLowerCase()) {
+        countWithBase++;
+        const match = t.match(/#(\d+)$/) || t.match(/\((\d+)\)$/);
+        if (match) {
+          const num = parseInt(match[1], 10);
+          if (num > maxNum) maxNum = num;
+        }
+      }
+    }
+    const nextNum = Math.max(maxNum + 1, countWithBase + 1);
+    return `${cleanBase} #${nextNum}`;
+  };
+
+  // Multi-book helper
+  const getSubjectBooks = (subj) => {
+    if (!subj) return [];
+    if (subj.books && typeof subj.books === 'object' && Object.keys(subj.books).length > 0) {
+      const arr = Object.entries(subj.books).map(([id, b]) => ({
+        id,
+        title: b.title || 'Textbook',
+        url: (b.url || '').trim(),
+        isGovtTextbook: Boolean(b.isGovtTextbook)
+      })).filter(b => b.url);
+      if (arr.length > 0) return arr;
+    }
+    if (subj.bookUrl && typeof subj.bookUrl === 'string' && subj.bookUrl.trim()) {
+      return [{
+        id: 'default_book',
+        title: 'Govt Textbook',
+        url: subj.bookUrl.trim(),
+        isGovtTextbook: true
+      }];
+    }
+    return [];
+  };
+
+  // Target existing model tests & questions count for Anti-Duplication engine transparency
+  const targetExistingTests = useMemo(() => {
+    if (!modelTestTarget?.subject?.modelTests || !modelTestTarget?.exam?.id) return [];
+    const raw = modelTestTarget.subject.modelTests[modelTestTarget.exam.id] || {};
+    return Object.entries(raw).map(([id, t]) => ({ id, ...t }));
+  }, [modelTestTarget]);
+
+  const targetExistingQuestionsCount = useMemo(() => {
+    let count = 0;
+    targetExistingTests.forEach(test => {
+      const parsed = parseQuestionsData(test.questions);
+      count += parsed.length;
+    });
+    return count;
+  }, [targetExistingTests]);
+
   // Open Popover to generate model test
   const openModelTestGenerator = (subject, exam) => {
     const today = new Date().toISOString().split('T')[0];
@@ -845,12 +963,18 @@ function KidProfileContent() {
     
     const chaptersObj = (subject.chapters && subject.chapters[exam.id]) || {};
     const allChapIds = Object.keys(chaptersObj);
+    const existingRaw = (subject.modelTests && subject.modelTests[exam.id]) || {};
+    const existingList = Object.entries(existingRaw).map(([id, t]) => ({ id, ...t }));
+    const baseTitle = `Model Test - ${formattedToday}`;
+    const nextTitle = getNextNumberedTitle(baseTitle, existingList);
+    const books = getSubjectBooks(subject);
 
     setModelTestTarget({ subject, exam });
     setModelTestDate(today);
-    setModelTestTitle(`Model Test - ${formattedToday}`);
+    setModelTestTitle(nextTitle);
     setModelTestResult('0');
     setSelectedChaptersForTest(allChapIds);
+    setSelectedBookIdsForTest(books.map(b => b.id));
     setTestMarkDistribution(currentDist);
     setTestDifficulty('Standard');
     setTestGuidelines(['Follow best practice', 'Standard curriculum']);
@@ -884,6 +1008,88 @@ function KidProfileContent() {
       const { subject, exam } = modelTestTarget;
       const chaptersObj = (subject.chapters && subject.chapters[exam.id]) || {};
       const selectedChapterTitles = selectedChaptersForTest.map(id => chaptersObj[id]?.title).filter(Boolean);
+      const allSubjectBooks = getSubjectBooks(subject);
+      const checkedBooks = allSubjectBooks.filter(b => selectedBookIdsForTest.includes(b.id));
+      const govtBook = checkedBooks.find(b => b.isGovtTextbook) || checkedBooks[0] || null;
+      const govtTextbookUrl = govtBook ? govtBook.url : (subject?.bookUrl || '').trim();
+
+      // Collect all previously generated questions from existing model tests to strictly avoid similarity & repetition
+      const existingRaw = (subject.modelTests && subject.modelTests[exam.id]) || {};
+      const existingList = Object.entries(existingRaw).map(([id, t]) => ({ id, ...t }));
+      const existingQuestionsList = [];
+      const usedPassageSnippets = new Set();
+
+      existingList.forEach(test => {
+        const parsed = parseQuestionsData(test.questions);
+        parsed.forEach(q => {
+          const rawQ = (q.question || '').trim();
+          if (rawQ) {
+            existingQuestionsList.push({
+              testTitle: test.title || test.date || 'Previous Model Test',
+              section: q.section || '',
+              question: rawQ
+            });
+
+            const doubleNewline = rawQ.split(/\n\n+/);
+            if (doubleNewline.length > 1 && (doubleNewline[0].toLowerCase().includes('read the') || doubleNewline[0].toLowerCase().includes('passage'))) {
+              usedPassageSnippets.add(doubleNewline[0].replace(/\s+/g, ' ').slice(0, 160));
+            }
+          }
+        });
+      });
+
+      // Also collect questions from selected chapters practice banks
+      selectedChaptersForTest.forEach(chId => {
+        const ch = chaptersObj[chId];
+        if (ch && Array.isArray(ch.questions)) {
+          ch.questions.forEach(cq => {
+            const rawQ = cleanText(cq.question || cq.prompt || '');
+            if (rawQ) {
+              existingQuestionsList.push({
+                testTitle: `Chapter: ${ch.title}`,
+                section: cq.type || 'Practice Question',
+                question: rawQ
+              });
+            }
+          });
+        }
+      });
+
+      // Format anti-duplication instruction
+      const antiDuplicationSection = existingQuestionsList.length > 0 ? `
+================================================================================
+CRITICAL ANTI-DUPLICATION & ZERO-SIMILARITY MANDATE:
+The student has ALREADY taken previous model tests covering this syllabus and has already completed the following ${existingQuestionsList.length} questions.
+EVERY SINGLE QUESTION IN THIS NEW MODEL TEST MUST BE COMPLETELY FRESH, UNIQUE, AND UNLIKE ANY OF THE QUESTIONS LISTED BELOW.
+
+STRICT NON-SIMILARITY REQUIREMENTS:
+1. ABSOLUTELY NO REPETITION: Do NOT generate any question that is identical, similar, or an obvious variation of any question listed below.
+2. NO SHALLOW REPHRASING: Do NOT take an existing question and merely swap names, minor numbers, or synonyms into the same question template.
+3. SEEN PASSAGE ROTATION: If this model test has a Seen Passage (Reading Comprehension):
+   - You MUST select a COMPLETELY DIFFERENT authentic story/lesson/unit from the official Government Textbook ("${govtBook ? govtBook.title : 'Official Textbook'}") than any passage used in previous tests.
+   ${usedPassageSnippets.size > 0 ? `- Previously used passages to strictly avoid:\n${Array.from(usedPassageSnippets).map(p => `     * "${p}..."`).join('\n')}` : ''}
+   - For example: if a previous test used Maria ("Life is Beautiful"), YOU ARE STRICTLY FORBIDDEN from using Maria again. Instead, choose from other textbook lessons such as: Raju the Firefighter (Unit 9), Babul and Cyclone Aila (Unit 24), Saikat's Family (Unit 3), A Visit to the Liberation War Museum (Unit 19), The Olympic Games (Unit 17), St. Martin's Island (Unit 12), Eat Healthy (Unit 6), etc.
+4. NOVEL GRAMMAR & VOCABULARY:
+   - For Fill in the Blanks, Rearrange, WH-questions, Prepositions, Right Form of Verbs, and Punctuation: use brand-new sentence structures, different vocabulary words, and different grammatical contexts.
+5. MATHEMATICS & SCIENCE DIVERSITY:
+   - Use completely different numerical numbers, different formulas, different scenarios, and different real-world problem settings.
+6. FRESH PERSPECTIVES:
+   - Explore untested topics, different question angles, and novel problem contexts from the selected chapters.
+
+LIST OF ${existingQuestionsList.length} PREVIOUS QUESTIONS TO STRICTLY EXCLUDE (DO NOT MAKE SIMILAR QUESTIONS):
+${existingQuestionsList.map((item, idx) => {
+  let text = item.question;
+  const parts = text.split(/\n\n+/);
+  if (parts.length > 1 && (parts[0].toLowerCase().includes('read the') || parts[0].toLowerCase().includes('passage'))) {
+    text = `[Passage: ${parts[0].slice(0, 90)}...] Q: ${parts[parts.length - 1]}`;
+  }
+  if (text.length > 220) text = text.slice(0, 215) + '...';
+  return `${idx + 1}. [${item.section || 'Question'}] "${text}" (${item.testTitle})`;
+}).join('\n')}
+================================================================================
+` : `
+NOTE: This is the first model test for this exam. Ensure questions have rich, comprehensive, and balanced coverage across all selected syllabus chapters.
+`;
 
       const prompt = `You are an expert school examiner creating a realistic, high quality Model Test for a student in ${kid.grade || 'Primary / Middle school'}.
 Generate a comprehensive Model Test with structured questions strictly formatted according to the syllabus and mark distribution.
@@ -891,6 +1097,10 @@ Generate a comprehensive Model Test with structured questions strictly formatted
 Subject: ${subject.title}
 Exam Type: ${exam.title}
 Model Test Date: ${modelTestDate || 'Today'}
+${kid.grade ? `Class / Grade: ${kid.grade}\n` : ''}Selected Reference Books (from Subject Material PDF section):
+${checkedBooks.length > 0
+  ? checkedBooks.map((b, idx) => `${idx + 1}. ${b.title}${b.isGovtTextbook ? ' [Official Government Textbook]' : ''}: ${b.url}`).join('\n')
+  : '- None selected (use standard curriculum)'}
 
 Syllabus Chapters:
 ${selectedChapterTitles.length > 0 ? selectedChapterTitles.map(t => `- ${t}`).join('\n') : '- Entire course curriculum'}
@@ -904,12 +1114,24 @@ ${testGuidelines.length > 0 ? testGuidelines.map(g => `- ${g}`).join('\n') : '- 
 
 ${customInstructions.trim() ? `Specific Custom Instructions from Teacher:\n${customInstructions.trim()}\n` : ''}
 
+${antiDuplicationSection}
+
 CRITICAL INSTRUCTION - ZERO MARKDOWN, ZERO LATEX, AND MUST GENERATE ALL PARTS:
-1. MANDATORY - INCLUDE ALL PARTS & SECTIONS: You MUST generate questions for EVERY SINGLE PART / SECTION described in the Mark Distribution above (e.g., Part 1: MCQ, Part 2: Short Questions, Part 3: Short-Answer, Part 4: Competency-Based). NEVER skip or omit Part 1 or Part 2. The output "questions" array MUST include questions for all parts starting from Part 1 to the final part!
-2. DO NOT use ANY markdown formatting (NO asterisks like **, NO headers like ####, NO bullet asterisks *, NO backticks).
-3. DO NOT use LaTeX formatting (NO dollar signs $, NO \times, NO \frac, NO \div). Use standard plain keyboard symbols: "x", "÷", "+", "-", "/", "%".
-4. Every question must be clean, readable plain text for a school student without any code or markdown artifacts.
-5. Return strictly a valid JSON object matching this schema:
+1. GOVERNMENT TEXTBOOK MANDATE (FROM SUBJECT MATERIAL PDF SECTION):
+   ${checkedBooks.length > 0 ? `You MUST take instructions, content, and lessons from the checked books from the Subject Material (PDF) section:\n${checkedBooks.map(b => `   - "${b.title}"${b.isGovtTextbook ? ' (Official Government Textbook)' : ''}: ${b.url}`).join('\n')}` : ''}
+   ${govtBook ? `- Primary Government Textbook: "${govtBook.title}" (URL: ${govtBook.url}).
+   - For all reading comprehension sections, Seen Passages, dialogues, lessons, and textbook questions (e.g. Part-A: Seen Passage / Questions 1 to 4 for "English for Today, Class Five"):
+     a) The text/dialogue MUST be an authentic passage or dialogue directly taken from the official Government Textbook ("${govtBook.title}").
+     b) NEVER fabricate or make up imaginary passages when the syllabus specifies a Seen Passage from the government textbook. Use authentic textbook stories, dialogues, characters, and lessons.
+     c) ROTATE LESSONS: Do NOT reuse the same passage or characters as previous tests. Pick a fresh story/unit from the textbook (e.g. Raju the Firefighter, Babul & Cyclone Aila, Saikat's Family, A Visit to the Liberation War Museum, The Olympic Games, St. Martin's Island, Eat Healthy, etc.).
+     d) All Seen Passage comprehension questions (MCQs, Fill in the blanks, True/False, and Short Questions) must strictly test the student's understanding of this authentic government textbook passage.
+     e) If chapters or syllabus items include "English For Today book of Subject Material (PDF)" or specific chapter units, strictly cover the lessons and vocabulary from this official government textbook.` : ''}
+2. MANDATORY - INCLUDE ALL PARTS & SECTIONS: You MUST generate questions for EVERY SINGLE PART / SECTION described in the Mark Distribution above (e.g., Part 1: MCQ, Part 2: Short Questions, Part 3: Short-Answer, Part 4: Competency-Based). NEVER skip or omit Part 1 or Part 2. The output "questions" array MUST include questions for all parts starting from Part 1 to the final part!
+3. DO NOT use ANY markdown formatting (NO asterisks like **, NO headers like ####, NO bullet asterisks *, NO backticks).
+4. DO NOT use LaTeX formatting (NO dollar signs $, NO \\times, NO \\frac, NO \\div). Use standard plain keyboard symbols: "x", "÷", "+", "-", "/", "%".
+5. Every question must be clean, readable plain text for a school student without any code or markdown artifacts.
+6. PASSAGE EFFICIENCY: For reading comprehension sections (Seen or Unseen Passages), provide the full reading text in the FIRST question of that passage section. For subsequent questions in that same section, refer to "Based on the passage above" instead of repeating the entire multi-paragraph text.
+7. Return strictly a valid JSON object matching this schema:
 {
   "title": "${modelTestTitle.trim() || `${subject.title} - ${exam.title} Model Test`}",
   "fullMarks": 100,
@@ -943,7 +1165,7 @@ CRITICAL INSTRUCTION - ZERO MARKDOWN, ZERO LATEX, AND MUST GENERATE ALL PARTS:
 }
 Ensure the "questions" array contains ALL questions across EVERY section described in the Mark Distribution.`;
 
-      const questionsText = await generateGeminiContent(prompt);
+      const questionsText = await generateGeminiContent(prompt, { temperature: 0.85 });
 
       // Update exam mark distribution if changed in modal
       if (testMarkDistribution.trim()) {
@@ -951,11 +1173,19 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
       }
 
       // Save Model Test in Firebase
+      const rawUserTitle = modelTestTitle.trim() || `Model Test - ${modelTestDate || 'Today'}`;
+      const finalTitle = getNextNumberedTitle(rawUserTitle, existingList);
+      const now = Date.now();
+      const generatedTime = new Date(now).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+
       const testsRef = ref(database, `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${subject.id}/modelTests/${exam.id}`);
       const newTestRef = push(testsRef);
       const testData = {
-        title: modelTestTitle.trim() || `Model Test - ${modelTestDate}`,
+        title: finalTitle,
         date: modelTestDate,
+        generatedTime: generatedTime,
+        govtBookUrl: govtTextbookUrl,
+        checkedBooks: checkedBooks.map(b => ({ id: b.id, title: b.title, url: b.url, isGovtTextbook: b.isGovtTextbook })),
         result: modelTestResult.trim() || '0',
         duration: Number(modelTestDuration) || 60,
         difficulty: testDifficulty,
@@ -967,16 +1197,17 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
         studentAnswers: {},
         uploadedPages: [],
         examinerGrading: null,
-        createdAt: Date.now()
+        createdAt: now
       };
       await set(newTestRef, testData);
 
       setModelTestTarget(null);
       openTestViewer({
+        ...testData,
         subjectId: subject.id,
         examId: exam.id,
         testId: newTestRef.key,
-        ...testData
+        displayTitle: finalTitle
       });
     } catch (err) {
       console.error('Error generating model test:', err);
@@ -1460,6 +1691,112 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
     saveExaminerGrading(updatedMarks, updatedNotes, overallExaminerFeedback, qId);
   };
 
+  // AI Auto Review & Marking for all questions before final teacher review
+  const handleAiAutoReview = async () => {
+    if (!viewingModelTest) return;
+    const qList = parseQuestionsData(viewingModelTest.questions);
+    if (!qList || qList.length === 0) {
+      alert("No questions found in this model test to evaluate.");
+      return;
+    }
+
+    if (!isExamFinished) {
+      const proceed = window.confirm("The student has not officially submitted this exam yet.\n\nDo you want to submit the exam now and run AI auto-review?");
+      if (!proceed) return;
+      await handleFinishAndSubmitExam();
+    }
+
+    setIsAiReviewing(true);
+    setNotificationMsg("🤖 AI is reviewing and marking all answers against the rubric. Please wait...");
+
+    try {
+      const subj = subjects.find(s => s.id === viewingModelTest.subjectId);
+      const ex = exams.find(e => e.id === viewingModelTest.examId);
+
+      const evaluationResult = await autoReviewExamWithAI({
+        questions: qList,
+        studentAnswers: studentAnswers,
+        subjectTitle: subj?.title || viewingModelTest.subjectTitle || '',
+        examTitle: ex?.title || viewingModelTest.title || '',
+        kidGrade: kid?.grade || ''
+      });
+
+      const newAwardedMarks = { ...awardedMarks };
+      const newExaminerNotes = { ...examinerNotes };
+
+      if (Array.isArray(evaluationResult.evaluations)) {
+        evaluationResult.evaluations.forEach(ev => {
+          const matchedQ = qList.find(q => String(q.id) === String(ev.questionId));
+          const max = matchedQ ? (Number(matchedQ.marks) || 5) : 5;
+          const mark = Math.min(Math.max(0, Number(ev.awardedMarks) || 0), max);
+          newAwardedMarks[ev.questionId] = mark;
+          if (ev.feedback) {
+            newExaminerNotes[ev.questionId] = ev.feedback;
+          }
+        });
+      }
+
+      const overallFeedback = evaluationResult.overallFeedback || overallExaminerFeedback || '';
+
+      setAwardedMarks(newAwardedMarks);
+      setExaminerNotes(newExaminerNotes);
+      if (overallFeedback) {
+        setOverallExaminerFeedback(overallFeedback);
+      }
+
+      // Switch to examiner mode so teacher can review the results immediately
+      setTestViewMode('examiner');
+
+      // Save to Firebase
+      await saveExaminerGrading(newAwardedMarks, newExaminerNotes, overallFeedback);
+
+      const totalAwarded = Object.values(newAwardedMarks).reduce((a, b) => a + (Number(b) || 0), 0);
+      const totalMax = qList.reduce((a, b) => a + (Number(b.marks) || 0), 0) || 100;
+      setNotificationMsg(`✓ AI Auto-Marking Complete! Awarded ${totalAwarded}/${totalMax} Marks. Pre-filled for your final review.`);
+      setTimeout(() => setNotificationMsg(''), 6000);
+    } catch (err) {
+      console.error("AI Auto Review Error:", err);
+      alert("AI Review Failed: " + (err.message || 'Unknown error. Please check your Gemini API key.'));
+      setNotificationMsg('');
+    } finally {
+      setIsAiReviewing(false);
+    }
+  };
+
+  // AI evaluation for a single question
+  const handleAiGradeSingleQuestion = async (q) => {
+    if (!q || !viewingModelTest) return;
+    setAiReviewingQId(q.id);
+    try {
+      const subj = subjects.find(s => s.id === viewingModelTest.subjectId);
+      const ex = exams.find(e => e.id === viewingModelTest.examId);
+
+      const res = await autoReviewExamWithAI({
+        questions: [q],
+        studentAnswers: studentAnswers,
+        subjectTitle: subj?.title || viewingModelTest.subjectTitle || '',
+        examTitle: ex?.title || viewingModelTest.title || '',
+        kidGrade: kid?.grade || ''
+      });
+
+      if (res && Array.isArray(res.evaluations) && res.evaluations.length > 0) {
+        const ev = res.evaluations[0];
+        const max = Number(q.marks) || 5;
+        const mark = Math.min(Math.max(0, Number(ev.awardedMarks) || 0), max);
+        const feedback = ev.feedback || '';
+        
+        handleAwardMarkAndConfirm(q.id, mark, max, feedback);
+        setNotificationMsg(`✓ AI evaluated Q${q.displayNumber || q.id}: ${mark}/${max} marks awarded.`);
+        setTimeout(() => setNotificationMsg(''), 4000);
+      }
+    } catch (err) {
+      console.error('Error in single question AI grade:', err);
+      alert('AI Grading failed for this question: ' + (err.message || 'Unknown error'));
+    } finally {
+      setAiReviewingQId(null);
+    }
+  };
+
   const handleSaveExaminerGrading = async (parsedQuestions) => {
     if (!viewingModelTest || !user || !kid) return;
     setIsSavingGrading(true);
@@ -1561,17 +1898,253 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
     return Array.from(map.values());
   })();
 
+  const isSetCollapsed = (setNum) => {
+    if (collapsedSets[setNum] !== undefined) {
+      return Boolean(collapsedSets[setNum]);
+    }
+    // Default: When there are multiple sets, keep only the currently active question's set open, others collapsed!
+    const activeSetNum = parsedQuestions[currentSlideIndex]?.setNumber;
+    return questionSets.length > 1 ? setNum !== activeSetNum : false;
+  };
+
   const toggleSetCollapse = (setNum) => {
+    const currentlyCollapsed = isSetCollapsed(setNum);
     setCollapsedSets(prev => ({
       ...prev,
-      [setNum]: !prev[setNum]
+      [setNum]: !currentlyCollapsed
     }));
+  };
+
+  const handleCollapseAllSets = () => {
+    const all = {};
+    questionSets.forEach(s => { all[s.setNumber] = true; });
+    setCollapsedSets(all);
+  };
+
+  const handleExpandAllSets = () => {
+    const all = {};
+    questionSets.forEach(s => { all[s.setNumber] = false; });
+    setCollapsedSets(all);
   };
 
   const handleScrollPills = (direction) => {
     if (!pillsScrollRef.current) return;
     const distance = direction === 'left' ? -260 : 260;
     pillsScrollRef.current.scrollBy({ left: distance, behavior: 'smooth' });
+  };
+
+  const getQuestionGradingStatus = (q) => {
+    const isAns = Boolean(studentAnswers[q.id]?.trim());
+    const isGrd = awardedMarks[q.id] !== undefined && awardedMarks[q.id] !== '';
+    const qMax = Number(q.marks) || 5;
+    const awd = isGrd ? Number(awardedMarks[q.id]) : null;
+
+    if (isGrd) {
+      if (awd >= qMax) {
+        return {
+          isGrd: true,
+          isAns,
+          awd,
+          qMax,
+          status: 'correct',
+          color: '#34d399',
+          bg: 'rgba(16, 185, 129, 0.15)',
+          border: 'rgba(16, 185, 129, 0.35)',
+          symbol: '✓',
+          markText: `[${awd}/${qMax}]`,
+          studentTag: `✓ [${awd}/${qMax}]`,
+          examinerTag: `[${awd}/${qMax}]`,
+          badgeText: `✓ Correct (${awd}/${qMax})`,
+          examinerBadgeText: `✓ Awarded: ${awd}/${qMax}`,
+          badgeBg: 'rgba(16, 185, 129, 0.15)',
+          badgeBorder: 'rgba(16, 185, 129, 0.3)',
+          badgeColor: '#34d399'
+        };
+      } else if (awd > 0) {
+        return {
+          isGrd: true,
+          isAns,
+          awd,
+          qMax,
+          status: 'partial',
+          color: '#facc15',
+          bg: 'rgba(234, 179, 8, 0.15)',
+          border: 'rgba(234, 179, 8, 0.35)',
+          symbol: '~',
+          markText: `[${awd}/${qMax}]`,
+          studentTag: `~ [${awd}/${qMax}]`,
+          examinerTag: `[${awd}/${qMax}]`,
+          badgeText: `~ Partial (${awd}/${qMax})`,
+          examinerBadgeText: `~ Partial: ${awd}/${qMax}`,
+          badgeBg: 'rgba(234, 179, 8, 0.15)',
+          badgeBorder: 'rgba(234, 179, 8, 0.3)',
+          badgeColor: '#facc15'
+        };
+      } else {
+        // awd === 0 -> Incorrect!
+        return {
+          isGrd: true,
+          isAns,
+          awd: 0,
+          qMax,
+          status: 'incorrect',
+          color: '#f87171',
+          bg: 'rgba(239, 68, 68, 0.15)',
+          border: 'rgba(239, 68, 68, 0.35)',
+          symbol: '✗',
+          markText: `[0/${qMax}]`,
+          studentTag: `✗ [0/${qMax}]`,
+          examinerTag: `[0/${qMax}]`,
+          badgeText: `✗ Incorrect (0/${qMax})`,
+          examinerBadgeText: `✗ Incorrect: 0/${qMax}`,
+          badgeBg: 'rgba(239, 68, 68, 0.15)',
+          badgeBorder: 'rgba(239, 68, 68, 0.3)',
+          badgeColor: '#f87171'
+        };
+      }
+    }
+
+    if (isExamFinished) {
+      // Check MCQ auto key if available
+      const hasOptions = Array.isArray(q.options) && q.options.length > 0;
+      if (hasOptions && q.answerKey && isAns) {
+        const studentAns = studentAnswers[q.id].trim();
+        const matchedOpt = q.options.find(opt => 
+          studentAns === opt.trim() || 
+          (opt.trim().length >= 2 && studentAns.startsWith(opt.trim().slice(0, 2)))
+        );
+        const isCorrectKey = matchedOpt && (
+          q.answerKey.toLowerCase().includes(matchedOpt.slice(0, 2).toLowerCase()) ||
+          q.answerKey.toLowerCase().includes(matchedOpt.toLowerCase())
+        );
+        if (isCorrectKey) {
+          return {
+            isGrd: false,
+            isAns: true,
+            awd: qMax,
+            qMax,
+            status: 'correct',
+            color: '#34d399',
+            bg: 'rgba(16, 185, 129, 0.15)',
+            border: 'rgba(16, 185, 129, 0.35)',
+            symbol: '✓',
+            markText: `[${qMax}/${qMax}]`,
+            studentTag: `✓ [${qMax}/${qMax}]`,
+            examinerTag: `✓ [${qMax}/${qMax}]`,
+            badgeText: `✓ Correct (${qMax}/${qMax})`,
+            examinerBadgeText: `✓ Key Match (${qMax}/${qMax})`,
+            badgeBg: 'rgba(16, 185, 129, 0.15)',
+            badgeBorder: 'rgba(16, 185, 129, 0.3)',
+            badgeColor: '#34d399'
+          };
+        } else {
+          return {
+            isGrd: false,
+            isAns: true,
+            awd: 0,
+            qMax,
+            status: 'incorrect',
+            color: '#f87171',
+            bg: 'rgba(239, 68, 68, 0.15)',
+            border: 'rgba(239, 68, 68, 0.35)',
+            symbol: '✗',
+            markText: `[0/${qMax}]`,
+            studentTag: `✗ [0/${qMax}]`,
+            examinerTag: `✗ [0/${qMax}]`,
+            badgeText: `✗ Incorrect (0/${qMax})`,
+            examinerBadgeText: `✗ Wrong Option (0/${qMax})`,
+            badgeBg: 'rgba(239, 68, 68, 0.15)',
+            badgeBorder: 'rgba(239, 68, 68, 0.3)',
+            badgeColor: '#f87171'
+          };
+        }
+      }
+
+      if (isAns) {
+        return {
+          isGrd: false,
+          isAns: true,
+          awd: null,
+          qMax,
+          status: 'pending',
+          color: '#38bdf8',
+          bg: 'rgba(56, 189, 248, 0.12)',
+          border: 'rgba(56, 189, 248, 0.3)',
+          symbol: '•',
+          markText: `[Pending]`,
+          studentTag: `• [Pending]`,
+          examinerTag: `[Pending]`,
+          badgeText: `⏳ Under Review`,
+          examinerBadgeText: `⏳ Pending Marking`,
+          badgeBg: 'rgba(56, 189, 248, 0.15)',
+          badgeBorder: 'rgba(56, 189, 248, 0.3)',
+          badgeColor: '#38bdf8'
+        };
+      }
+
+      return {
+        isGrd: false,
+        isAns: false,
+        awd: 0,
+        qMax,
+        status: 'unanswered',
+        color: 'rgba(248, 113, 113, 0.7)',
+        bg: 'rgba(239, 68, 68, 0.05)',
+        border: 'rgba(239, 68, 68, 0.2)',
+        symbol: '○',
+        markText: `[0/${qMax}]`,
+        studentTag: `○ [0/${qMax}]`,
+        examinerTag: `○ [0/${qMax}]`,
+        badgeText: `○ Unanswered`,
+        examinerBadgeText: `○ Unanswered (0/${qMax})`,
+        badgeBg: 'rgba(239, 68, 68, 0.1)',
+        badgeBorder: 'rgba(239, 68, 68, 0.25)',
+        badgeColor: '#f87171'
+      };
+    }
+
+    // Active test in progress (!isExamFinished)
+    if (isAns) {
+      return {
+        isGrd: false,
+        isAns: true,
+        awd: null,
+        qMax,
+        status: 'answered',
+        color: '#34d399',
+        bg: 'rgba(16, 185, 129, 0.15)',
+        border: 'rgba(16, 185, 129, 0.3)',
+        symbol: '✓',
+        markText: `✓`,
+        studentTag: `✓`,
+        examinerTag: `✓`,
+        badgeText: `✓ Answered`,
+        examinerBadgeText: `✓ Answered`,
+        badgeBg: 'rgba(16, 185, 129, 0.15)',
+        badgeBorder: 'rgba(16, 185, 129, 0.25)',
+        badgeColor: '#34d399'
+      };
+    }
+
+    return {
+      isGrd: false,
+      isAns: false,
+      awd: null,
+      qMax,
+      status: 'empty',
+      color: 'var(--text-secondary)',
+      bg: 'rgba(255, 255, 255, 0.03)',
+      border: 'rgba(255, 255, 255, 0.08)',
+      symbol: '',
+      markText: ``,
+      studentTag: ``,
+      examinerTag: ``,
+      badgeText: `○ Not Answered`,
+      examinerBadgeText: `⏳ Pending Marking`,
+      badgeBg: 'rgba(255, 255, 255, 0.06)',
+      badgeBorder: 'rgba(255, 255, 255, 0.08)',
+      badgeColor: 'var(--text-secondary)'
+    };
   };
 
   return (
@@ -1984,7 +2557,7 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                 const examStatus = examSetting.status || (examProgress === 100 && examTotalChaps > 0 ? 'Completed' : (examProgress > 0 ? 'In Progress' : 'Not Started'));
 
                 const rawTests = (subject.modelTests && subject.modelTests[exam.id]) || {};
-                const testList = Object.entries(rawTests).map(([tId, t]) => {
+                const rawMappedTests = Object.entries(rawTests).map(([tId, t]) => {
                   let scoreDisplay = 'Pending';
                   let percent = null;
                   let isGraded = false;
@@ -2016,7 +2589,31 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                     percent,
                     isGraded
                   };
-                }).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+                });
+
+                const titleCounts = {};
+                for (const t of rawMappedTests) {
+                  const rawTitle = (t.title || `Model Test - ${t.date || 'Practice'}`).trim();
+                  titleCounts[rawTitle] = (titleCounts[rawTitle] || 0) + 1;
+                }
+                const chronological = [...rawMappedTests].sort((a, b) => getTestCreatedAt(a, true) - getTestCreatedAt(b, true));
+                const titleSeq = {};
+                const displayTitleMap = {};
+                for (const t of chronological) {
+                  const rawTitle = (t.title || `Model Test - ${t.date || 'Practice'}`).trim();
+                  if (titleCounts[rawTitle] > 1) {
+                    titleSeq[rawTitle] = (titleSeq[rawTitle] || 0) + 1;
+                    displayTitleMap[t.id] = `${rawTitle} #${titleSeq[rawTitle]}`;
+                  } else {
+                    displayTitleMap[t.id] = rawTitle;
+                  }
+                }
+
+                const testList = rawMappedTests.map(t => ({
+                  ...t,
+                  displayTitle: displayTitleMap[t.id] || t.title,
+                  genTime: formatGeneratedTime(t)
+                })).sort((a, b) => getTestCreatedAt(b, true) - getTestCreatedAt(a, true));
 
                 const testCount = testList.length;
                 totalChapters += examTotalChaps;
@@ -3019,10 +3616,15 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                                       >
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem', minWidth: 0 }}>
                                           <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                            {test.title || `Test - ${test.date || 'Practice'}`}
+                                            {test.displayTitle || test.title || `Test - ${test.date || 'Practice'}`}
                                           </span>
                                           <span style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>
-                                            {test.date ? `📅 ${test.date}` : 'Practice'} • <strong style={{ color: '#38bdf8' }}>⏱️ {test.duration ? `${test.duration}m` : '60m'}</strong>
+                                            {test.date ? `📅 ${test.date}` : 'Practice'}
+                                            {test.genTime && (
+                                              <span style={{ color: '#cbd5e1' }}> • 🕒 {test.genTime}</span>
+                                            )}
+                                            <span> • </span>
+                                            <strong style={{ color: '#38bdf8' }}>⏱️ {test.duration ? `${test.duration}m` : '60m'}</strong>
                                           </span>
                                         </div>
 
@@ -3035,7 +3637,7 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                                                 testId: test.id,
                                                 subjectId: subject.id,
                                                 examId: ex.id,
-                                                title: test.title || `Model Test - ${test.date || 'Practice'}`,
+                                                title: test.displayTitle || test.title || `Model Test - ${test.date || 'Practice'}`,
                                                 currentDuration: test.duration || 60
                                               });
                                               setTempDurationValue(test.duration || 60);
@@ -3077,7 +3679,7 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
 
                                           <button
                                             type="button"
-                                            onClick={() => openTestViewer({ subjectId: subject.id, examId: ex.id, testId: test.id, ...test })}
+                                            onClick={() => openTestViewer({ ...test, subjectId: subject.id, examId: ex.id, testId: test.id, displayTitle: test.displayTitle || test.title, generatedTime: test.genTime || test.generatedTime })}
                                             style={{
                                               background: 'rgba(139, 92, 246, 0.15)',
                                               border: '1px solid rgba(139, 92, 246, 0.3)',
@@ -3231,6 +3833,147 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                   {generateError}
                 </div>
               )}
+
+              {/* Anti-Duplication Active Banner */}
+              {targetExistingTests.length > 0 && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.65rem',
+                  background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.12) 0%, rgba(6, 182, 212, 0.08) 100%)',
+                  border: '1px solid rgba(16, 185, 129, 0.35)',
+                  borderRadius: '10px',
+                  padding: '0.65rem 0.85rem',
+                  fontSize: '0.78rem',
+                  color: '#a7f3d0',
+                  lineHeight: 1.45
+                }}>
+                  <span style={{ fontSize: '1.15rem', flexShrink: 0 }}>🛡️</span>
+                  <div>
+                    <strong style={{ color: '#34d399' }}>Zero-Duplication Engine Active:</strong>{' '}
+                    <span>All {targetExistingQuestionsCount > 0 ? <strong>{targetExistingQuestionsCount}</strong> : ''} previous questions across your <strong>{targetExistingTests.length}</strong> existing model {targetExistingTests.length === 1 ? 'test' : 'tests'} are strictly excluded. Gemini will rotate Seen Passages and generate 100% fresh, non-repetitive questions.</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Reference Books to Include with Interactive Checkboxes */}
+              {(() => {
+                const books = getSubjectBooks(modelTestTarget?.subject);
+                const allSelected = books.length > 0 && books.every(b => selectedBookIdsForTest.includes(b.id));
+
+                return (
+                  <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '10px', padding: '0.85rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>
+                      <label style={{ fontSize: '0.82rem', fontWeight: 600, color: '#e2e8f0', margin: 0, display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                        <span>📚</span>
+                        <span>Reference Books for Generation</span>
+                        {books.length > 0 && (
+                          <span style={{ fontSize: '0.7rem', padding: '0.1rem 0.45rem', borderRadius: '10px', background: 'rgba(99, 102, 241, 0.15)', border: '1px solid rgba(99, 102, 241, 0.3)', color: '#a5b4fc', fontWeight: 600 }}>
+                            {selectedBookIdsForTest.length} of {books.length} selected
+                          </span>
+                        )}
+                      </label>
+                      {books.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (allSelected) {
+                              setSelectedBookIdsForTest([]);
+                            } else {
+                              setSelectedBookIdsForTest(books.map(b => b.id));
+                            }
+                          }}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: 'var(--accent-primary, #818cf8)',
+                            fontSize: '0.74rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            padding: '0.1rem 0.3rem',
+                            textDecoration: 'underline'
+                          }}
+                        >
+                          {allSelected ? 'Deselect All' : 'Select All'}
+                        </button>
+                      )}
+                    </div>
+
+                    {books.length === 0 ? (
+                      <div style={{ padding: '0.65rem 0.85rem', background: 'rgba(234, 179, 8, 0.08)', border: '1px solid rgba(234, 179, 8, 0.2)', borderRadius: '8px', fontSize: '0.75rem', color: '#facc15' }}>
+                        No books linked in Subject Material. Generation will use standard curriculum.
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+                        {books.map(b => {
+                          const isChecked = selectedBookIdsForTest.includes(b.id);
+                          return (
+                            <label
+                              key={b.id}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                padding: '0.45rem 0.7rem',
+                                borderRadius: '8px',
+                                background: isChecked ? 'rgba(99, 102, 241, 0.12)' : 'rgba(255,255,255,0.02)',
+                                border: `1px solid ${isChecked ? 'rgba(99, 102, 241, 0.35)' : 'rgba(255,255,255,0.06)'}`,
+                                cursor: 'pointer',
+                                transition: 'all 0.15s ease'
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', minWidth: 0 }}>
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setSelectedBookIdsForTest(prev => [...prev, b.id]);
+                                    } else {
+                                      setSelectedBookIdsForTest(prev => prev.filter(id => id !== b.id));
+                                    }
+                                  }}
+                                  style={{ width: '15px', height: '15px', accentColor: 'var(--accent-primary, #6366f1)', cursor: 'pointer' }}
+                                />
+                                <span style={{ fontSize: '0.8rem', fontWeight: isChecked ? 600 : 500, color: isChecked ? '#fff' : 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {b.title}
+                                </span>
+                                {b.isGovtTextbook && (
+                                  <span style={{ fontSize: '0.66rem', padding: '0.08rem 0.4rem', borderRadius: '4px', background: 'rgba(245, 158, 11, 0.2)', color: '#fcd34d', border: '1px solid rgba(245, 158, 11, 0.35)', fontWeight: 600, flexShrink: 0 }}>
+                                    🏛️ Govt Textbook (Seen Passage Source)
+                                  </span>
+                                )}
+                              </div>
+
+                              {b.url && (
+                                <a
+                                  href={b.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  style={{
+                                    color: '#818cf8',
+                                    fontWeight: 500,
+                                    fontSize: '0.72rem',
+                                    textDecoration: 'underline',
+                                    flexShrink: 0,
+                                    marginLeft: '0.5rem'
+                                  }}
+                                >
+                                  Open PDF ↗
+                                </a>
+                              )}
+                            </label>
+                          );
+                        })}
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
+                          💡 Checked books provide passage readings, lessons, and textbook reference for AI question generation.
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* 1. Syllabus Chapters Selection */}
               <div>
@@ -3597,7 +4340,7 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
 
               <div>
                 <h2 style={{ margin: 0, fontSize: '1.2rem', color: '#fff', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                  <span>{viewingModelTest.title || 'Model Test'}</span>
+                  <span>{viewingModelTest.displayTitle || viewingModelTest.title || 'Model Test'}</span>
                   {viewingModelTest.difficulty && (
                     <span style={{ padding: '0.1rem 0.5rem', borderRadius: '8px', background: 'rgba(139, 92, 246, 0.2)', color: 'var(--accent-primary)', fontWeight: 600, fontSize: '0.72rem' }}>
                       {viewingModelTest.difficulty}
@@ -3606,6 +4349,11 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                 </h2>
                 <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                   <span>📅 {viewingModelTest.date || 'Today'}</span>
+                  {(viewingModelTest.generatedTime || formatGeneratedTime(viewingModelTest)) && (
+                    <span style={{ color: '#e2e8f0', display: 'inline-flex', alignItems: 'center', gap: '0.2rem' }}>
+                      • 🕒 {viewingModelTest.generatedTime || formatGeneratedTime(viewingModelTest)}
+                    </span>
+                  )}
                   <span>• Total Marks: {totalMaxMarks}</span>
                 </div>
               </div>
@@ -3771,6 +4519,41 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                   {!isExamFinished ? '🔒 Examiner' : '📝 Examiner'}
                 </button>
               </div>
+
+              {/* AI Auto Review & Mark Button */}
+              <button
+                type="button"
+                onClick={handleAiAutoReview}
+                disabled={isAiReviewing}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.45rem',
+                  padding: '0.4rem 0.85rem',
+                  fontSize: '0.82rem',
+                  fontWeight: 700,
+                  background: isAiReviewing ? 'rgba(168, 85, 247, 0.4)' : 'linear-gradient(135deg, #8b5cf6 0%, #d946ef 100%)',
+                  border: '1px solid rgba(255,255,255,0.25)',
+                  borderRadius: '6px',
+                  color: '#fff',
+                  cursor: isAiReviewing ? 'not-allowed' : 'pointer',
+                  boxShadow: '0 2px 10px rgba(168, 85, 247, 0.35)',
+                  transition: 'all 0.2s ease'
+                }}
+                title="Run AI Auto-Review & Marking across all answers before final teacher review"
+              >
+                {isAiReviewing ? (
+                  <>
+                    <span style={{ width: '0.85rem', height: '0.85rem', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', borderRadius: '50%', display: 'inline-block', animation: 'spin 1s linear infinite' }} />
+                    <span>AI Reviewing...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>🤖</span>
+                    <span>AI Auto Review</span>
+                  </>
+                )}
+              </button>
 
               {/* Current Result Pill */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
@@ -3982,7 +4765,40 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                     </div>
                   </div>
                 </div>
-                <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    onClick={handleAiAutoReview}
+                    disabled={isAiReviewing}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.45rem',
+                      padding: '0.45rem 1.05rem',
+                      fontSize: '0.84rem',
+                      fontWeight: 700,
+                      background: isAiReviewing ? 'rgba(139, 92, 246, 0.4)' : 'linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%)',
+                      border: '1px solid rgba(255, 255, 255, 0.3)',
+                      color: '#fff',
+                      borderRadius: '8px',
+                      cursor: isAiReviewing ? 'not-allowed' : 'pointer',
+                      boxShadow: '0 4px 14px rgba(139, 92, 246, 0.4)',
+                      transition: 'all 0.2s ease'
+                    }}
+                    title="Auto-evaluate all student answers with AI before final teacher review"
+                  >
+                    {isAiReviewing ? (
+                      <>
+                        <span style={{ width: '0.8rem', height: '0.8rem', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', borderRadius: '50%', display: 'inline-block', animation: 'spin 1s linear infinite' }} />
+                        <span>AI Reviewing & Marking...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>🤖</span>
+                        <span>AI Auto Review & Mark</span>
+                      </>
+                    )}
+                  </button>
                   <span style={{ fontSize: '0.85rem', color: '#34d399', background: 'rgba(16, 185, 129, 0.2)', padding: '0.3rem 0.8rem', borderRadius: '12px', fontWeight: 700 }}>
                     ⏱️ Time Taken: {formatDuration(elapsedSeconds)}
                   </span>
@@ -4201,6 +5017,28 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                     ? `${answeredQuestionsCount}/${parsedQuestions.length} Answered` 
                     : `${gradedQuestionsCount}/${parsedQuestions.length} Graded • Total Awarded: ${currentAwardedMarksSum}/${totalMaxMarks}`}
                 </span>
+                <button
+                  type="button"
+                  onClick={handleAiAutoReview}
+                  disabled={isAiReviewing}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.35rem',
+                    padding: '0.2rem 0.65rem',
+                    fontSize: '0.76rem',
+                    fontWeight: 700,
+                    background: isAiReviewing ? 'rgba(168, 85, 247, 0.4)' : 'linear-gradient(135deg, #9333ea 0%, #db2777 100%)',
+                    border: '1px solid rgba(255,255,255,0.25)',
+                    borderRadius: '12px',
+                    color: '#fff',
+                    cursor: isAiReviewing ? 'not-allowed' : 'pointer',
+                    boxShadow: '0 2px 8px rgba(147, 51, 234, 0.3)'
+                  }}
+                  title="Run AI Auto-Review & Marking across all questions before final teacher review"
+                >
+                  {isAiReviewing ? '⏳ AI Marking...' : '🤖 AI Review & Mark'}
+                </button>
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
@@ -4252,6 +5090,27 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                     ☰ All List
                   </button>
                 </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsNavigatorCollapsed(prev => !prev)}
+                  style={{
+                    padding: '0.22rem 0.65rem',
+                    fontSize: '0.75rem',
+                    fontWeight: 600,
+                    border: '1px solid ' + (isNavigatorCollapsed ? 'rgba(139, 92, 246, 0.4)' : 'rgba(255,255,255,0.12)'),
+                    borderRadius: '6px',
+                    background: isNavigatorCollapsed ? 'rgba(139, 92, 246, 0.2)' : 'rgba(255,255,255,0.06)',
+                    color: isNavigatorCollapsed ? '#d8b4fe' : 'var(--text-secondary)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.3rem'
+                  }}
+                  title="Toggle Question Sets Navigator visibility"
+                >
+                  🧭 {isNavigatorCollapsed ? '▼ Show Sets' : '▲ Hide Sets'}
+                </button>
               </div>
             </div>
 
@@ -4269,8 +5128,61 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
               </div>
             )}
 
-            {/* Contained Question Navigator (Collapsible by Question Type & Contained Scroller Strip) */}
-            {parsedQuestions.length > 0 && (
+            {/* Contained Question Navigator: Collapsed Single-Line View */}
+            {parsedQuestions.length > 0 && isNavigatorCollapsed && (
+              <div
+                onClick={() => setIsNavigatorCollapsed(false)}
+                style={{
+                  width: '100%',
+                  maxWidth: '100%',
+                  boxSizing: 'border-box',
+                  background: 'rgba(15, 23, 42, 0.75)',
+                  border: '1px solid rgba(255, 255, 255, 0.08)',
+                  borderRadius: '10px',
+                  padding: '0.5rem 0.85rem',
+                  marginBottom: '1rem',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  cursor: 'pointer',
+                  boxShadow: '0 2px 10px rgba(0,0,0,0.2)'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: '0.9rem' }}>🧭</span>
+                  <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#fff' }}>
+                    Question Navigator ({parsedQuestions.length} Questions • {questionSets.length} Sets)
+                  </span>
+                  {parsedQuestions[currentSlideIndex] && (
+                    <span style={{ fontSize: '0.74rem', color: '#c4b5fd', background: 'rgba(139, 92, 246, 0.15)', border: '1px solid rgba(139, 92, 246, 0.25)', padding: '0.12rem 0.5rem', borderRadius: '6px' }}>
+                      Current: Q{parsedQuestions[currentSlideIndex].displayNumber} (Set {parsedQuestions[currentSlideIndex].setNumber})
+                    </span>
+                  )}
+                  <span style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+                    {testViewMode === 'student' ? `${answeredQuestionsCount}/${parsedQuestions.length} Answered` : `${gradedQuestionsCount}/${parsedQuestions.length} Graded`}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); setIsNavigatorCollapsed(false); }}
+                  style={{
+                    padding: '0.22rem 0.65rem',
+                    fontSize: '0.74rem',
+                    fontWeight: 600,
+                    background: 'rgba(139, 92, 246, 0.2)',
+                    border: '1px solid rgba(139, 92, 246, 0.35)',
+                    borderRadius: '6px',
+                    color: '#d8b4fe',
+                    cursor: 'pointer'
+                  }}
+                >
+                  ▼ Show Sets
+                </button>
+              </div>
+            )}
+
+            {/* Contained Question Navigator: Expanded View (Collapsible by Question Type & Contained Scroller Strip) */}
+            {parsedQuestions.length > 0 && !isNavigatorCollapsed && (
               <div style={{
                 width: '100%',
                 maxWidth: '100%',
@@ -4317,6 +5229,10 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                       const isFilterActive = selectedSetFilter === s.setNumber;
                       const isCurrentActive = parsedQuestions[currentSlideIndex]?.setNumber === s.setNumber;
                       const sAnswered = s.questions.filter(q => Boolean(studentAnswers[q.id]?.trim())).length;
+                      const sGraded = s.questions.filter(q => awardedMarks[q.id] !== undefined && awardedMarks[q.id] !== '').length;
+                      const sAwarded = s.questions.reduce((sum, q) => sum + (Number(awardedMarks[q.id]) || 0), 0);
+                      const sTotalMarks = s.questions.reduce((sum, q) => sum + (Number(q.marks) || 5), 0);
+                      const setScoreColor = sAwarded === 0 ? '#f87171' : (sAwarded < sTotalMarks ? '#facc15' : '#34d399');
 
                       return (
                         <button
@@ -4344,16 +5260,23 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                           }}
                         >
                           <span>Set {s.setNumber}: {s.title}</span>
-                          <span style={{ fontSize: '0.68rem', opacity: 0.8, color: sAnswered === s.questions.length ? '#34d399' : 'inherit' }}>
-                            ({sAnswered}/{s.questions.length})
+                          <span style={{
+                            fontSize: '0.68rem',
+                            opacity: 0.9,
+                            fontWeight: 700,
+                            color: testViewMode === 'examiner'
+                              ? (sGraded === s.questions.length ? setScoreColor : (sGraded > 0 ? '#38bdf8' : 'inherit'))
+                              : (isExamFinished && sGraded > 0 ? setScoreColor : (sAnswered === s.questions.length ? '#34d399' : 'inherit'))
+                          }}>
+                            {testViewMode === 'examiner' ? `(${sGraded}/${s.questions.length})` : `(${sAnswered}/${s.questions.length})`}
                           </span>
                         </button>
                       );
                     })}
                   </div>
 
-                  {/* Mode Selector & Scroller Arrow Controls */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  {/* Mode Selector & Collapse All/Expand All & Scroller Arrow Controls */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
                     <div style={{ display: 'flex', background: 'rgba(0,0,0,0.4)', borderRadius: '6px', padding: '2px', border: '1px solid rgba(255,255,255,0.08)' }}>
                       <button
                         type="button"
@@ -4390,6 +5313,63 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                         ↔ Scroller Strip
                       </button>
                     </div>
+
+                    {navigatorViewMode === 'collapsible' && (
+                      <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center' }}>
+                        <button
+                          type="button"
+                          onClick={handleCollapseAllSets}
+                          style={{
+                            padding: '0.22rem 0.55rem',
+                            fontSize: '0.72rem',
+                            fontWeight: 600,
+                            background: 'rgba(255,255,255,0.06)',
+                            border: '1px solid rgba(255,255,255,0.12)',
+                            borderRadius: '5px',
+                            color: '#cbd5e1',
+                            cursor: 'pointer'
+                          }}
+                          title="Collapse all question sets"
+                        >
+                          ▲ Collapse All
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleExpandAllSets}
+                          style={{
+                            padding: '0.22rem 0.55rem',
+                            fontSize: '0.72rem',
+                            fontWeight: 600,
+                            background: 'rgba(255,255,255,0.06)',
+                            border: '1px solid rgba(255,255,255,0.12)',
+                            borderRadius: '5px',
+                            color: '#cbd5e1',
+                            cursor: 'pointer'
+                          }}
+                          title="Expand all question sets"
+                        >
+                          ▼ Expand All
+                        </button>
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => setIsNavigatorCollapsed(true)}
+                      style={{
+                        padding: '0.22rem 0.55rem',
+                        fontSize: '0.72rem',
+                        fontWeight: 600,
+                        background: 'rgba(255,255,255,0.06)',
+                        border: '1px solid rgba(255,255,255,0.12)',
+                        borderRadius: '5px',
+                        color: 'var(--text-secondary)',
+                        cursor: 'pointer'
+                      }}
+                      title="Collapse entire Question Navigator box"
+                    >
+                      ▲ Hide Sets
+                    </button>
 
                     {navigatorViewMode === 'scroller' && (
                       <div style={{ display: 'flex', gap: '0.25rem' }}>
@@ -4437,9 +5417,13 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                     {questionSets
                       .filter(s => selectedSetFilter === 'all' || selectedSetFilter === s.setNumber)
                       .map(s => {
-                        const isCollapsed = Boolean(collapsedSets[s.setNumber]);
+                        const isCollapsed = isSetCollapsed(s.setNumber);
                         const isSetCurrent = parsedQuestions[currentSlideIndex]?.setNumber === s.setNumber;
                         const sAnswered = s.questions.filter(q => Boolean(studentAnswers[q.id]?.trim())).length;
+                        const sGraded = s.questions.filter(q => awardedMarks[q.id] !== undefined && awardedMarks[q.id] !== '').length;
+                        const sAwarded = s.questions.reduce((sum, q) => sum + (Number(awardedMarks[q.id]) || 0), 0);
+                        const sTotalMarks = s.questions.reduce((sum, q) => sum + (Number(q.marks) || 5), 0);
+                        const setScoreColor = sAwarded === 0 ? '#f87171' : (sAwarded < sTotalMarks ? '#facc15' : '#34d399');
 
                         return (
                           <div
@@ -4461,15 +5445,29 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                                 padding: '0.45rem 0.75rem',
                                 cursor: 'pointer',
                                 background: isSetCurrent ? 'rgba(139, 92, 246, 0.14)' : 'rgba(255,255,255,0.02)',
-                                userSelect: 'none'
+                                userSelect: 'none',
+                                transition: 'background 0.15s ease'
                               }}
                             >
                               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                                 <span style={{ fontSize: '0.82rem', fontWeight: 700, color: isSetCurrent ? '#fff' : '#e2e8f0' }}>
                                   Set {s.setNumber}: {s.title}
                                 </span>
-                                <span style={{ fontSize: '0.7rem', color: sAnswered === s.questions.length ? '#34d399' : 'var(--text-secondary)', background: 'rgba(255,255,255,0.06)', padding: '0.1rem 0.45rem', borderRadius: '10px' }}>
-                                  {sAnswered}/{s.questions.length} Answered
+                                <span style={{
+                                  fontSize: '0.7rem',
+                                  fontWeight: 600,
+                                  color: testViewMode === 'examiner'
+                                    ? (sGraded === s.questions.length ? setScoreColor : (sGraded > 0 ? '#38bdf8' : 'var(--text-secondary)'))
+                                    : (isExamFinished && sGraded > 0 ? setScoreColor : (sAnswered === s.questions.length ? '#34d399' : 'var(--text-secondary)')),
+                                  background: 'rgba(255,255,255,0.06)',
+                                  padding: '0.1rem 0.45rem',
+                                  borderRadius: '10px'
+                                }}>
+                                  {testViewMode === 'examiner'
+                                    ? `${sGraded}/${s.questions.length} Graded • ${sAwarded}/${sTotalMarks} Marks`
+                                    : (isExamFinished && sGraded > 0
+                                        ? `${sAwarded}/${sTotalMarks} Marks (${sAnswered}/${s.questions.length} Ans)`
+                                        : `${sAnswered}/${s.questions.length} Answered`)}
                                 </span>
                                 {isSetCurrent && (
                                   <span style={{ fontSize: '0.65rem', background: 'rgba(16, 185, 129, 0.2)', color: '#34d399', padding: '0.1rem 0.4rem', borderRadius: '4px', fontWeight: 700 }}>
@@ -4477,7 +5475,18 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                                   </span>
                                 )}
                               </div>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', color: 'var(--text-secondary)', fontSize: '0.72rem' }}>
+                              <div style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.35rem',
+                                color: isCollapsed ? '#cbd5e1' : 'var(--accent-primary)',
+                                background: isCollapsed ? 'rgba(255,255,255,0.06)' : 'rgba(139, 92, 246, 0.15)',
+                                border: '1px solid ' + (isCollapsed ? 'rgba(255,255,255,0.1)' : 'rgba(139, 92, 246, 0.3)'),
+                                padding: '0.18rem 0.55rem',
+                                borderRadius: '6px',
+                                fontSize: '0.72rem',
+                                fontWeight: 600
+                              }}>
                                 <span>{isCollapsed ? '▼ Expand' : '▲ Collapse'}</span>
                               </div>
                             </div>
@@ -4492,10 +5501,7 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                               }}>
                                 {s.questions.map(q => {
                                   const isActive = q.globalIndex === currentSlideIndex;
-                                  const isAns = Boolean(studentAnswers[q.id]?.trim());
-                                  const isGrd = awardedMarks[q.id] !== undefined && awardedMarks[q.id] !== '';
-                                  const awd = awardedMarks[q.id];
-                                  const qMax = Number(q.marks) || 5;
+                                  const stat = getQuestionGradingStatus(q);
 
                                   return (
                                     <button
@@ -4513,28 +5519,39 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                                         fontSize: '0.78rem',
                                         fontWeight: 700,
                                         cursor: 'pointer',
-                                        border: isActive ? '1.5px solid var(--accent-primary)' : '1px solid rgba(255,255,255,0.08)',
+                                        border: isActive
+                                          ? '1.5px solid var(--accent-primary)'
+                                          : `1px solid ${stat.border}`,
                                         background: isActive
                                           ? 'rgba(139, 92, 246, 0.35)'
-                                          : (testViewMode === 'student'
-                                              ? (isAns ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.03)')
-                                              : (isGrd ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.03)')),
-                                        color: isActive
-                                          ? '#fff'
-                                          : (testViewMode === 'student'
-                                              ? (isAns ? '#34d399' : 'var(--text-secondary)')
-                                              : (isGrd ? '#34d399' : 'var(--text-secondary)')),
+                                          : stat.bg,
+                                        color: isActive ? '#fff' : stat.color,
                                         display: 'flex',
                                         alignItems: 'center',
                                         gap: '0.3rem',
                                         boxShadow: isActive ? '0 0 10px rgba(139, 92, 246, 0.35)' : 'none',
                                         transition: 'all 0.12s ease'
                                       }}
-                                      title={`Question ${q.displayNumber} (${q.cleanSectionTitle || cleanText(q.section)})`}
+                                      title={`Question ${q.displayNumber} (${q.cleanSectionTitle || cleanText(q.section)}) - ${stat.badgeText}`}
                                     >
                                       <span>{q.displayNumber || `Q${q.globalIndex + 1}`}</span>
-                                      {testViewMode === 'student' && isAns && <span style={{ fontSize: '0.72rem', color: '#34d399' }}>✓</span>}
-                                      {testViewMode === 'examiner' && isGrd && <span style={{ fontSize: '0.68rem', color: '#34d399' }}>[{awd}/{qMax}]</span>}
+                                      {testViewMode === 'examiner' ? (
+                                        stat.examinerTag ? (
+                                          <span style={{ fontSize: '0.68rem', color: stat.color, fontWeight: 700 }}>
+                                            {stat.examinerTag}
+                                          </span>
+                                        ) : null
+                                      ) : (
+                                        isExamFinished ? (
+                                          stat.studentTag ? (
+                                            <span style={{ fontSize: '0.7rem', color: stat.color, fontWeight: 700 }}>
+                                              {stat.studentTag}
+                                            </span>
+                                          ) : null
+                                        ) : (
+                                          stat.isAns && <span style={{ fontSize: '0.72rem', color: '#34d399' }}>✓</span>
+                                        )
+                                      )}
                                     </button>
                                   );
                                 })}
@@ -4566,10 +5583,7 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                       const originalIdx = parsedQuestions.findIndex(orig => orig.id === q.id);
                       const qIdx = originalIdx !== -1 ? originalIdx : filteredIdx;
                       const isActive = qIdx === currentSlideIndex;
-                      const isAns = Boolean(studentAnswers[q.id]?.trim());
-                      const isGrd = awardedMarks[q.id] !== undefined && awardedMarks[q.id] !== '';
-                      const awd = awardedMarks[q.id];
-                      const qMax = Number(q.marks) || 5;
+                      const stat = getQuestionGradingStatus(q);
 
                       return (
                         <button
@@ -4588,28 +5602,39 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                             fontSize: '0.8rem',
                             fontWeight: 700,
                             cursor: 'pointer',
-                            border: isActive ? '1.5px solid var(--accent-primary)' : '1px solid rgba(255,255,255,0.08)',
+                            border: isActive
+                              ? '1.5px solid var(--accent-primary)'
+                              : `1px solid ${stat.border}`,
                             background: isActive
                               ? 'rgba(139, 92, 246, 0.35)'
-                              : (testViewMode === 'student'
-                                  ? (isAns ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.03)')
-                                  : (isGrd ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.03)')),
-                            color: isActive
-                              ? '#fff'
-                              : (testViewMode === 'student'
-                                  ? (isAns ? '#34d399' : 'var(--text-secondary)')
-                                  : (isGrd ? '#34d399' : 'var(--text-secondary)')),
+                              : stat.bg,
+                            color: isActive ? '#fff' : stat.color,
                             display: 'flex',
                             alignItems: 'center',
                             gap: '0.3rem',
                             boxShadow: isActive ? '0 0 10px rgba(139, 92, 246, 0.35)' : 'none',
                             transition: 'all 0.12s ease'
                           }}
-                          title={`Question ${q.displayNumber} (${q.cleanSectionTitle || cleanText(q.section)})`}
+                          title={`Question ${q.displayNumber} (${q.cleanSectionTitle || cleanText(q.section)}) - ${stat.badgeText}`}
                         >
                           <span>{q.displayNumber || `Q${qIdx + 1}`}</span>
-                          {testViewMode === 'student' && isAns && <span style={{ fontSize: '0.72rem', color: '#34d399' }}>✓</span>}
-                          {testViewMode === 'examiner' && isGrd && <span style={{ fontSize: '0.68rem', color: '#34d399' }}>[{awd}/{qMax}]</span>}
+                          {testViewMode === 'examiner' ? (
+                            stat.examinerTag ? (
+                              <span style={{ fontSize: '0.68rem', color: stat.color, fontWeight: 700 }}>
+                                {stat.examinerTag}
+                              </span>
+                            ) : null
+                          ) : (
+                            isExamFinished ? (
+                              stat.studentTag ? (
+                                <span style={{ fontSize: '0.7rem', color: stat.color, fontWeight: 700 }}>
+                                  {stat.studentTag}
+                                </span>
+                              ) : null
+                            ) : (
+                              stat.isAns && <span style={{ fontSize: '0.72rem', color: '#34d399' }}>✓</span>
+                            )
+                          )}
                         </button>
                       );
                     })}
@@ -4736,17 +5761,42 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                               </button>
                             );
                           })()}
-                          {testViewMode === 'student' && isAns && (
-                            <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#34d399', background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.25)', padding: '0.2rem 0.6rem', borderRadius: '9999px', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
-                              <span>✓</span>
-                              <span>Answered</span>
-                            </span>
-                          )}
-                          {testViewMode === 'examiner' && (
-                            <span style={{ fontSize: '0.75rem', fontWeight: 600, color: isGrd ? '#34d399' : '#facc15', background: isGrd ? 'rgba(16, 185, 129, 0.15)' : 'rgba(234, 179, 8, 0.15)', border: `1px solid ${isGrd ? 'rgba(16, 185, 129, 0.3)' : 'rgba(234, 179, 8, 0.3)'}`, padding: '0.2rem 0.6rem', borderRadius: '9999px' }}>
-                              {isGrd ? `✓ Awarded: ${awarded}/${qMarks}` : 'Pending Marking'}
-                            </span>
-                          )}
+                          {(() => {
+                            const currentQStat = getQuestionGradingStatus(q);
+                            return testViewMode === 'student' ? (
+                              <span style={{
+                                fontSize: '0.75rem',
+                                fontWeight: 600,
+                                color: currentQStat.badgeColor,
+                                background: currentQStat.badgeBg,
+                                border: `1px solid ${currentQStat.badgeBorder}`,
+                                padding: '0.2rem 0.65rem',
+                                borderRadius: '9999px',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.25rem'
+                              }}>
+                                <span>{currentQStat.symbol || '○'}</span>
+                                <span>{currentQStat.badgeText}</span>
+                              </span>
+                            ) : (
+                              <span style={{
+                                fontSize: '0.75rem',
+                                fontWeight: 600,
+                                color: currentQStat.badgeColor,
+                                background: currentQStat.badgeBg,
+                                border: `1px solid ${currentQStat.badgeBorder}`,
+                                padding: '0.2rem 0.65rem',
+                                borderRadius: '9999px',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.25rem'
+                              }}>
+                                <span>{currentQStat.symbol || '⏳'}</span>
+                                <span>{currentQStat.examinerBadgeText}</span>
+                              </span>
+                            );
+                          })()}
                           <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#f1f5f9', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)', padding: '0.2rem 0.65rem', borderRadius: '9999px' }}>
                             [{qMarks} Marks]
                           </span>
@@ -5069,6 +6119,39 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                         </div>
                       )}
 
+                      {/* AFTER FINISH: Show Score & Teacher's Note to Student */}
+                      {isExamFinished && testViewMode === 'student' && isGrd && (
+                        <div style={{
+                          marginTop: '0.85rem',
+                          background: Number(awarded) === 0 ? 'rgba(239, 68, 68, 0.08)' : (Number(awarded) < qMarks ? 'rgba(234, 179, 8, 0.08)' : 'rgba(16, 185, 129, 0.08)'),
+                          border: `1px solid ${Number(awarded) === 0 ? 'rgba(239, 68, 68, 0.25)' : (Number(awarded) < qMarks ? 'rgba(234, 179, 8, 0.25)' : 'rgba(16, 185, 129, 0.25)')}`,
+                          borderRadius: '10px',
+                          padding: '0.85rem 1rem'
+                        }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.4rem' }}>
+                            <div style={{
+                              fontSize: '0.88rem',
+                              fontWeight: 700,
+                              color: Number(awarded) === 0 ? '#f87171' : (Number(awarded) < qMarks ? '#facc15' : '#34d399'),
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.4rem'
+                            }}>
+                              <span>{Number(awarded) === 0 ? '✗' : (Number(awarded) < qMarks ? '~' : '✓')}</span>
+                              <span>Score: {awarded} / {qMarks} Marks</span>
+                              <span style={{ fontSize: '0.75rem', fontWeight: 500, opacity: 0.85 }}>
+                                ({Number(awarded) === 0 ? 'Incorrect' : (Number(awarded) < qMarks ? 'Partially Correct' : 'Full Marks')})
+                              </span>
+                            </div>
+                          </div>
+                          {examinerNotes[q.id] && (
+                            <div style={{ fontSize: '0.82rem', color: '#cbd5e1', marginTop: '0.4rem', borderTop: '1px dashed rgba(255,255,255,0.1)', paddingTop: '0.4rem' }}>
+                              💬 <strong style={{ color: '#fff' }}>Teacher's Note:</strong> {examinerNotes[q.id]}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                       {/* EXAMINER EVALUATION BLOCK FOR THIS QUESTION */}
                       {testViewMode === 'examiner' && (
                         <div style={{ marginTop: '0.95rem', background: 'rgba(139, 92, 246, 0.06)', border: '1px solid rgba(139, 92, 246, 0.2)', borderRadius: '10px', padding: '0.85rem 1rem' }}>
@@ -5102,13 +6185,41 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                                 value={awarded}
                                 onChange={(e) => handleAwardMark(q.id, e.target.value, qMarks)}
                                 placeholder="0"
-                                style={{ width: '60px', padding: '0.3rem 0.5rem', fontSize: '0.88rem', fontWeight: 700, color: '#34d399', textAlign: 'center', background: 'rgba(0,0,0,0.5)', border: '1px solid var(--accent-primary)', borderRadius: '6px' }}
+                                style={{
+                                  width: '60px',
+                                  padding: '0.3rem 0.5rem',
+                                  fontSize: '0.88rem',
+                                  fontWeight: 700,
+                                  color: isGrd ? (Number(awarded) === 0 ? '#f87171' : (Number(awarded) < qMarks ? '#facc15' : '#34d399')) : 'var(--text-secondary)',
+                                  textAlign: 'center',
+                                  background: 'rgba(0,0,0,0.5)',
+                                  border: `1px solid ${isGrd ? (Number(awarded) === 0 ? 'rgba(239, 68, 68, 0.5)' : (Number(awarded) < qMarks ? 'rgba(234, 179, 8, 0.5)' : 'rgba(16, 185, 129, 0.5)')) : 'var(--accent-primary)'}`,
+                                  borderRadius: '6px'
+                                }}
                               />
                               <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>/ {qMarks} Marks</span>
                             </div>
 
                             {/* Quick award shortcuts */}
                             <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                              <button
+                                type="button"
+                                onClick={() => handleAiGradeSingleQuestion(q)}
+                                disabled={aiReviewingQId === q.id || isAiReviewing}
+                                style={{
+                                  padding: '0.22rem 0.65rem',
+                                  fontSize: '0.75rem',
+                                  fontWeight: 600,
+                                  background: 'rgba(168, 85, 247, 0.2)',
+                                  border: '1px solid rgba(168, 85, 247, 0.45)',
+                                  color: '#d8b4fe',
+                                  borderRadius: '4px',
+                                  cursor: (aiReviewingQId === q.id || isAiReviewing) ? 'not-allowed' : 'pointer'
+                                }}
+                                title="Use AI to check this specific question and suggest marks & note"
+                              >
+                                {aiReviewingQId === q.id ? '⏳ Checking...' : '🤖 AI Mark Q'}
+                              </button>
                               <button
                                 type="button"
                                 onClick={() => handleAwardMarkAndConfirm(q.id, qMarks, qMarks)}
@@ -5317,16 +6428,52 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                     </p>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => handleSaveExaminerGrading(parsedQuestions)}
-                    disabled={isSavingGrading}
-                    className="primary"
-                    style={{ padding: '0.6rem 1.3rem', borderRadius: '8px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: isSavingGrading ? 'not-allowed' : 'pointer' }}
-                  >
-                    <span>✅</span>
-                    <span>{isSavingGrading ? 'Publishing Result...' : `Finish Checking & Set Result (${currentAwardedMarksSum}/${totalMaxMarks})`}</span>
-                  </button>
+                  <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      onClick={handleAiAutoReview}
+                      disabled={isAiReviewing}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.45rem',
+                        padding: '0.55rem 1rem',
+                        fontSize: '0.82rem',
+                        fontWeight: 700,
+                        background: isAiReviewing ? 'rgba(147, 51, 234, 0.4)' : 'linear-gradient(135deg, #7c3aed 0%, #db2777 100%)',
+                        border: '1px solid rgba(255, 255, 255, 0.25)',
+                        borderRadius: '8px',
+                        color: '#fff',
+                        cursor: isAiReviewing ? 'not-allowed' : 'pointer',
+                        boxShadow: '0 4px 12px rgba(124, 58, 237, 0.35)',
+                        transition: 'all 0.2s ease'
+                      }}
+                      title="Run or re-run AI auto-marking on all questions"
+                    >
+                      {isAiReviewing ? (
+                        <>
+                          <span style={{ width: '0.8rem', height: '0.8rem', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', borderRadius: '50%', display: 'inline-block', animation: 'spin 1s linear infinite' }} />
+                          <span>AI Marking in Progress...</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>🤖</span>
+                          <span>Re-Run AI Auto-Review</span>
+                        </>
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleSaveExaminerGrading(parsedQuestions)}
+                      disabled={isSavingGrading}
+                      className="primary"
+                      style={{ padding: '0.6rem 1.3rem', borderRadius: '8px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: isSavingGrading ? 'not-allowed' : 'pointer' }}
+                    >
+                      <span>✅</span>
+                      <span>{isSavingGrading ? 'Publishing Result...' : `Finish Checking & Set Result (${currentAwardedMarksSum}/${totalMaxMarks})`}</span>
+                    </button>
+                  </div>
                 </div>
 
                 <div>
