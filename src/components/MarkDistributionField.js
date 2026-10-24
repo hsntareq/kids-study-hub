@@ -1,36 +1,37 @@
 'use client';
 
 import React, { useState, useMemo } from 'react';
+import { organizeMarkDistributionWithAI } from '../lib/gemini';
 
 /**
  * Cleans and organizes raw pasted text containing markdown, LaTeX math,
- * and bulleted question items into clean, human-readable standard format.
+ * and question items into clean, human-readable standard format.
+ * Intelligently recognizes Parts, context instructions, unnumbered questions,
+ * and formula calculations.
  */
 export function cleanAndFormatMarkDistribution(raw) {
   if (!raw || !raw.trim()) return '';
 
-  let text = raw;
+  let text = raw
+    .replace(/\\times/g, '×')
+    .replace(/\\text\{\s*marks?\s*\}/gi, 'marks')
+    .replace(/\\text\{([^}]+)\}/g, '$1')
+    .replace(/\$([^\$]+)\$/g, '$1')
+    .replace(/\\cdot/g, '·')
+    .replace(/\\div/g, '÷');
 
-  // 1. Clean LaTeX math artifacts
-  text = text.replace(/\\times/g, '×');
-  text = text.replace(/\\text\{\s*marks?\s*\}/gi, 'marks');
-  text = text.replace(/\\text\{([^}]+)\}/g, '$1');
-  text = text.replace(/\$([^\$]+)\$/g, '$1');
-  text = text.replace(/\\cdot/g, '·');
-  text = text.replace(/\\div/g, '÷');
-
-  const lines = text.split('\n');
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
   const resultLines = [];
   let detectedTotal = null;
+  let qCounter = 0;
 
-  for (let rawLine of lines) {
-    let line = rawLine.trim();
-    if (!line) continue;
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i];
 
     // Ignore horizontal rules
     if (/^[-–—_*]{3,}$/.test(line)) continue;
 
-    // Strip markdown formatting for metadata checking
+    // Strip markdown formatting for checks
     const cleanLineForCheck = line.replace(/[*_#]+/g, '').trim();
 
     // Detect full marks / total (e.g. "**Full Marks:** 100" or "Total: 100 Marks")
@@ -40,66 +41,94 @@ export function cleanAndFormatMarkDistribution(raw) {
       continue;
     }
 
-    // Ignore general exam header lines like "Class 5: English..." or "Time: 2 Hours..."
+    // Ignore general exam header lines
     if (/^(class\s*\d+|time\s*:|grade\s*\d+|subject\s*:|exam\s*:)/i.test(cleanLineForCheck.replace(/^[#*–—\s]+/, ''))) {
       continue;
     }
 
-    // Check for Section / Part headers like "#### Part–A: Reading Test (25 Marks)" or "Part A:"
+    // Check for Section / Part headers like "Part–A: Seen Passage (25 Marks)"
     const partMatch = line.match(/^(?:#{1,6}\s*|\[)?(?:part|section|group)\s*[-–—:]?\s*([A-Za-z0-9][^\n:\]]*)(?::\s*([^\n\]]+))?\]?/i);
     if (partMatch) {
-      let partTitle = line.replace(/^#{1,6}\s*/, '').replace(/\*\*/g, '').replace(/^\*\s*/, '').trim();
+      let partTitle = line.replace(/^#{1,6}\s*/, '').replace(/^[\[\]]+|[\[\]]+$/g, '').replace(/\*\*/g, '').trim();
       if (resultLines.length > 0) resultLines.push('');
-      resultLines.push(`[${partTitle.replace(/[\[\]]/g, '')}]`);
+      resultLines.push(partTitle);
       continue;
     }
 
-    // Check for bulleted or standard numbered questions
-    // e.g. * **1. Matching Words (5 Marks):** Match words... ($1 \times 5 = 5$)
-    // or 1. Matching Words: 5 marks
-    const qMatch = line.match(/^(?:[-*•]\s*)?(?:\*\*)?(\d+)[\.\)]\s*(.*?)(?:\*\*)?(?::\s*(.*))?$/);
-    if (qMatch) {
-      const qNum = qMatch[1];
-      let qTitlePart = qMatch[2] ? qMatch[2].replace(/\*\*/g, '').trim() : '';
-      let qDesc = qMatch[3] ? qMatch[3].replace(/\*\*/g, '').trim() : '';
+    // Check for reading context or general section instructions
+    const isContextInstruction = /^(?:read\s+the\s+text|context\s*instruction|instructions?\s*:|direction\s*:|\(this\s+text)/i.test(cleanLineForCheck) ||
+      (/^\(/.test(cleanLineForCheck) && !/\d+\s*marks?/i.test(cleanLineForCheck));
+    if (isContextInstruction) {
+      resultLines.push(`   - ${cleanLineForCheck.replace(/^[-–—*•\s]+/, '')}`);
+      continue;
+    }
 
-      // Look for (5 Marks) or (1 × 5 = 5) in title or description
-      let marksPart = '';
-      let formulaPart = '';
+    // Check for bulleted or standard numbered questions OR unnumbered questions with marks/formulas
+    const numMatch = line.match(/^(?:[-*•]\s*)?(?:\*\*)?(\d+)[\.\)]\s*(.*)/);
+    const hasFormulaOrMarks = /(\d+(?:\s*[×x*·+]\s*\d+)*\s*=\s*\d+|\d+\s*marks?)/i.test(line);
 
-      const formulaMatch = (qTitlePart + ' ' + qDesc).match(/(\d+\s*[×x*]\s*\d+\s*=\s*\d+)/i);
-      if (formulaMatch) formulaPart = formulaMatch[1].replace(/\s+/g, ' ');
+    if (numMatch || hasFormulaOrMarks) {
+      qCounter++;
+      let qNum = numMatch ? parseInt(numMatch[1], 10) : qCounter;
+      qCounter = Math.max(qCounter, qNum);
 
-      const marksMatch = (qTitlePart + ' ' + qDesc).match(/(\d+)\s*marks?/i);
-      if (marksMatch) marksPart = `${marksMatch[1]} marks`;
+      let rest = numMatch ? numMatch[2].replace(/\*\*/g, '').trim() : line.replace(/^[-*•]\s*/, '').replace(/\*\*/g, '').trim();
 
-      // Clean title from marks parens, e.g. "Matching Words / Fill in the Blanks (5 Marks)" -> "Matching Words / Fill in the Blanks"
-      let cleanTitle = qTitlePart
+      let title = rest;
+      let marksInfo = '';
+
+      if (rest.includes(':')) {
+        const parts = rest.split(':');
+        title = parts[0].trim();
+        marksInfo = parts.slice(1).join(':').trim();
+      } else {
+        const mm = rest.match(/(.*?)((\d+(?:\s*[×x*·+]\s*\d+)*\s*=\s*\d+)\s*(?:marks?)?|(\d+)\s*marks?)$/i);
+        if (mm) {
+          title = mm[1].trim().replace(/[-–—]\s*$/, '');
+          marksInfo = mm[2].trim();
+        }
+      }
+
+      let formulaMatch = (title + ' ' + marksInfo).match(/(\d+(?:\s*[×x*·+]\s*\d+)+)\s*=\s*(\d+)/i);
+      let marksMatch = (title + ' ' + marksInfo).match(/(\d+)\s*marks?/i);
+
+      let formulaPart = formulaMatch ? formulaMatch[1].replace(/\s+/g, ' ') : '';
+      let marksVal = formulaMatch ? formulaMatch[2] : (marksMatch ? marksMatch[1] : '');
+
+      let cleanTitle = title
         .replace(/\(\s*\d+\s*marks?\s*\)/gi, '')
-        .replace(/\(\s*\d+\s*[×x*]\s*\d+\s*=\s*\d+\s*\)/gi, '')
+        .replace(/\(\s*\d+(?:\s*[×x*·+]\s*\d+)*\s*=\s*\d+\s*\)/gi, '')
         .replace(/[-–—:]+$/, '')
         .trim();
 
-      // Clean desc from formula/marks parens
-      let cleanDesc = qDesc
-        .replace(/\(\s*\d+\s*[×x*]\s*\d+\s*=\s*\d+\s*\)/gi, '')
-        .replace(/\(\s*\d+\s*marks?\s*\)/gi, '')
-        .replace(/\s+\./g, '.')
-        .replace(/[-–—:]+$/, '')
-        .trim();
+      const isJustMarksOrFormula = /^(?:\d+(?:\s*[×x*·+]\s*\d+)*\s*=\s*\d+|\d+)\s*(?:marks?)?$/i.test(marksInfo.trim());
+      let cleanDesc = '';
+      if (marksInfo && !isJustMarksOrFormula) {
+        cleanDesc = marksInfo
+          .replace(/(\d+(?:\s*[×x*·+]\s*\d+)*\s*=\s*\d+)\s*(?:marks?)?/gi, '')
+          .replace(/\(\s*\d+(?:\s*[×x*·+]\s*\d+)*\s*=\s*\d+\s*\)/gi, '')
+          .replace(/\(\s*\d+\s*marks?\s*\)/gi, '')
+          .replace(/\d+\s*marks?/gi, '')
+          .replace(/[-–—:]+$/, '')
+          .trim();
+      }
 
-      const isJustMarksOrFormula = /^(?:\d+\s*[×x*]\s*\d+\s*=\s*\d+|\d+)\s*marks?$/i.test(cleanDesc);
+      let headerInfo = '';
+      if (formulaPart && marksVal) {
+        headerInfo = `${formulaPart} = ${marksVal} marks`;
+      } else if (marksVal) {
+        headerInfo = `${marksVal} marks`;
+      }
 
-      let headerInfo = formulaPart ? `${formulaPart} marks` : (marksPart || '');
-      let lineHeader = headerInfo ? `${qNum}. ${cleanTitle}: ${headerInfo}` : `${qNum}. ${cleanTitle}`;
+      let lineHeader = headerInfo ? `${qCounter}. ${cleanTitle}: ${headerInfo}` : `${qCounter}. ${cleanTitle}`;
       resultLines.push(lineHeader);
-      if (cleanDesc && !isJustMarksOrFormula) {
+      if (cleanDesc && cleanDesc.length > 3) {
         resultLines.push(`   - ${cleanDesc}`);
       }
       continue;
     }
 
-    // Check for parenthetical notes like *(Based on the textbook English for Today)*
+    // Explanatory note or sub-instruction
     const cleanNote = line
       .replace(/^[#*•–—\s]+/, '')
       .replace(/^\*\(/, '(')
@@ -113,7 +142,7 @@ export function cleanAndFormatMarkDistribution(raw) {
 
   if (detectedTotal) {
     resultLines.push('');
-    resultLines.push(`Total: ${detectedTotal} marks`);
+    resultLines.push(`Total: ${detectedTotal} Marks`);
   }
 
   return resultLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
@@ -121,7 +150,8 @@ export function cleanAndFormatMarkDistribution(raw) {
 
 /**
  * Parses raw mark distribution text into structured sections.
- * Robust against Markdown (###, **), LaTeX ($ \times), and section groups.
+ * Robust against Markdown (###, **), LaTeX ($ \times), section groups,
+ * compound formulas (1 + 2 + 2 = 5), and multi-part blueprints.
  */
 export function parseMarkDistribution(text) {
   if (!text || !text.trim()) {
@@ -142,6 +172,7 @@ export function parseMarkDistribution(text) {
   let explicitTotal = null;
   let currentItem = null;
   let currentGroup = null;
+  let pendingGroupNotes = [];
 
   for (const rawLine of lines) {
     let line = rawLine;
@@ -163,24 +194,28 @@ export function parseMarkDistribution(text) {
       continue;
     }
 
-    // Check for Section / Part headers like "[Part-A: Reading Test...]" or "#### Part-A..."
+    // Check for Section / Part headers like "[Part-A: Reading Test...]" or "Part–A..."
     const partMatch = line.match(/^(?:#{1,6}\s*|\[)?(?:part|section|group)\s*[-–—:]?\s*([A-Za-z0-9][^\n:\]]*)(?::\s*([^\n\]]+))?\]?/i);
     if (partMatch) {
       currentGroup = line.replace(/^#{1,6}\s*/, '').replace(/[\[\]]/g, '').replace(/\*\*/g, '').trim();
+      currentItem = null;
       continue;
     }
 
-    // Check if line is a question item, even if bulleted like "* **1. Matching Words..." or "1. ..."
     const numMatch = line.match(/^(?:[-*•]\s*)?(?:\*\*)?(\d+)[\.\)]\s*(.*)/);
-    let isQuestionItem = Boolean(numMatch);
+    const hasFormulaOrMarks = /(\d+(?:\s*[×x*+·]\s*\d+)*\s*=\s*\d+|\d+\s*marks?)/i.test(line);
+    const isContextOrInstruction = /^(?:read\s+the\s+text|context\s*instruction|instructions?\s*:|direction\s*:)/i.test(unstyled);
+    const isSubLine = /^[-–—•*]\s*/.test(line) || /^\(/.test(line) || /^(chapters?|note|instructions?|scope):/i.test(line) || isContextOrInstruction;
 
-    // If it's a sub-note (and not a question item):
-    const isSubLine = !isQuestionItem && (/^[-–—•*]\s*/.test(line) || /^\(/.test(line) || /^(chapters?|note|instructions?|scope):/i.test(line));
-
-    if (isSubLine) {
+    // If it is a sub-note or general instruction:
+    if (isSubLine || (!numMatch && !hasFormulaOrMarks)) {
       const cleanSub = line.replace(/^[-–—•*]\s*/, '').replace(/^\*\(/, '(').replace(/\)\*$/, ')').trim();
-      if (currentItem) {
-        currentItem.notes.push(cleanSub);
+      if (cleanSub) {
+        if (currentItem) {
+          currentItem.notes.push(cleanSub);
+        } else {
+          pendingGroupNotes.push(cleanSub);
+        }
       }
       continue;
     }
@@ -202,7 +237,7 @@ export function parseMarkDistribution(text) {
       title = parts[0].trim();
       marksInfo = parts.slice(1).join(':').trim();
     } else {
-      const marksMatch = restOfLine.match(/(.*?)((\d+\s*[×x*]\s*\d+\s*=\s*\d+)\s*marks?|(\d+)\s*marks?)$/i);
+      const marksMatch = restOfLine.match(/(.*?)((\d+(?:\s*[×x*+·]\s*\d+)*\s*=\s*\d+)\s*(?:marks?)?|(\d+)\s*marks?)$/i);
       if (marksMatch) {
         title = marksMatch[1].trim().replace(/[-–—]\s*$/, '');
         marksInfo = marksMatch[2].trim();
@@ -218,7 +253,7 @@ export function parseMarkDistribution(text) {
 
     let formula = null;
     let marks = null;
-    const formulaMatch = marksInfo.match(/(\d+\s*[×x*]\s*\d+)\s*=\s*(\d+)\s*marks?/i);
+    const formulaMatch = marksInfo.match(/(\d+(?:\s*[×x*+·]\s*\d+)+)\s*=\s*(\d+)(?:\s*marks?)?/i);
     if (formulaMatch) {
       formula = formulaMatch[1].replace(/\s+/g, ' ');
       marks = parseInt(formulaMatch[2], 10);
@@ -233,8 +268,8 @@ export function parseMarkDistribution(text) {
     let noteFromDesc = null;
     if (marksInfo) {
       const cleanNoteFromInfo = marksInfo
-        .replace(/\(\s*\d+\s*[×x*]\s*\d+\s*=\s*\d+\s*\)/gi, '')
-        .replace(/(\d+\s*[×x*]\s*\d+\s*=\s*\d+)\s*marks?/gi, '')
+        .replace(/\(\s*\d+(?:\s*[×x*+·]\s*\d+)*\s*=\s*\d+\s*\)/gi, '')
+        .replace(/(\d+(?:\s*[×x*+·]\s*\d+)*\s*=\s*\d+)(?:\s*marks?)?/gi, '')
         .replace(/\(\s*\d+\s*marks?\s*\)/gi, '')
         .replace(/\d+\s*marks?/gi, '')
         .replace(/[-–—:]+$/, '')
@@ -244,6 +279,10 @@ export function parseMarkDistribution(text) {
       }
     }
 
+    const initialNotes = [...pendingGroupNotes];
+    pendingGroupNotes = [];
+    if (noteFromDesc) initialNotes.push(noteFromDesc);
+
     currentItem = {
       index: indexStr || (items.length + 1).toString(),
       title: title || `Section ${items.length + 1}`,
@@ -251,7 +290,7 @@ export function parseMarkDistribution(text) {
       rawMarksInfo: marksInfo,
       formula,
       marks: !isNaN(marks) ? marks : null,
-      notes: noteFromDesc ? [noteFromDesc] : []
+      notes: initialNotes
     };
     items.push(currentItem);
   }
@@ -271,6 +310,40 @@ export function parseMarkDistribution(text) {
 }
 
 const PRESETS = [
+  {
+    name: 'Class 5 English (100M)',
+    text: `Part–A: Seen Passage (25 Marks)
+   - Read the text/dialogue and answer questions 1, 2, 3 and 4. (This text/dialogue will be taken from English for Today, Class Five.)
+1. Multiple Choice Questions (MCQ): 1 × 5 = 5 marks
+2. Fill in the Blanks: 1 × 5 = 5 marks
+3. Write True/False for each statement: 1 × 5 = 5 marks
+4. Answering Short Questions: 2 × 5 = 10 marks
+   - Five questions will be set based on the text. Students must answer them in complete sentences demonstrating understanding of the passage.
+
+Part–B: Unseen Passage (10 Marks)
+   - Read the text/dialogue and answer the questions 5 and 6. (This text/dialogue will be taken beyond the textbook, maintaining a Class Five standard.)
+5. Matching words with their meanings: 1 × 5 = 5 marks
+6. Writing question answers in short: 1 + 2 + 2 = 5 marks
+   - Three (3) short questions will be given, and students will have to answer all of them. Knowledge, understanding, and higher-order thinking questions need to be considered.
+
+Part–C: Grammar & Vocabulary (35 Marks)
+7. Rearranging words to make meaningful sentences: 1 × 5 = 5 marks
+8. WH-Questions: 2 × 5 = 10 marks
+   - Five statements will be provided. Students will frame WH-questions (Who, What, When, Where, Why, How) using the underlined parts of the statements.
+9. Use of Punctuation and Capital Letters: 1 × 5 = 5 marks
+   - A short text or a few sentences will be given without punctuation. Students must rewrite them using correct capital letters and punctuation (Full stop, Comma, Question mark, Exclamation mark).
+10. Complete the sentences with the correct form of verbs in brackets: 1 × 5 = 5 marks
+11. Using correct prepositions (Filling in the blanks): 1 × 5 = 5 marks
+12. Articles (Filling in the blanks): 1 × 5 = 5 marks
+
+Part–D: Writing Part (30 Marks)
+13. Writing a Short Composition with or without clues: 10 marks
+   - Students will write at least ten sentences related to the given topic. Capital letters, punctuation marks, spelling, sentence structure, and content need to be considered for marking.
+14. Writing informal/formal letter with or without clues: 10 marks
+15. Writing an email with or without clues: 10 marks
+
+Total: 100 Marks`
+  },
   {
     name: '100 Marks Standard',
     text: `1. Multiple Choice Questions: 20 × 1 = 20 Marks
@@ -300,6 +373,25 @@ export default function MarkDistributionField({
   maxHeight = '280px'
 }) {
   const [isEditing, setIsEditing] = useState(false);
+  const [isCleaningAI, setIsCleaningAI] = useState(false);
+
+  const handleCleanWithAI = async () => {
+    if (!value || !value.trim() || isCleaningAI) return;
+    setIsCleaningAI(true);
+    try {
+      const organized = await organizeMarkDistributionWithAI(value);
+      if (organized) {
+        onChange?.(organized);
+      } else {
+        onChange?.(cleanAndFormatMarkDistribution(value));
+      }
+    } catch (err) {
+      console.warn('AI clean failed, falling back to rule cleaner:', err);
+      onChange?.(cleanAndFormatMarkDistribution(value));
+    } finally {
+      setIsCleaningAI(false);
+    }
+  };
 
   const parsed = useMemo(() => parseMarkDistribution(value), [value]);
   const hasItems = parsed.items.length > 0;
@@ -602,28 +694,38 @@ export default function MarkDistributionField({
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
               <button
                 type="button"
-                onClick={() => {
-                  if (value) {
-                    onChange?.(cleanAndFormatMarkDistribution(value));
-                  }
-                }}
+                onClick={handleCleanWithAI}
+                disabled={isCleaningAI}
                 style={{
                   fontSize: '0.72rem',
                   fontWeight: 600,
-                  padding: '0.2rem 0.55rem',
-                  background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.25) 0%, rgba(99, 102, 241, 0.25) 100%)',
+                  padding: '0.22rem 0.65rem',
+                  background: isCleaningAI
+                    ? 'rgba(139, 92, 246, 0.4)'
+                    : 'linear-gradient(135deg, rgba(139, 92, 246, 0.25) 0%, rgba(99, 102, 241, 0.25) 100%)',
                   border: '1px solid rgba(139, 92, 246, 0.45)',
                   borderRadius: '5px',
                   color: '#c4b5fd',
-                  cursor: 'pointer',
+                  cursor: isCleaningAI ? 'wait' : 'pointer',
                   display: 'inline-flex',
                   alignItems: 'center',
-                  gap: '0.25rem'
+                  gap: '0.35rem',
+                  opacity: isCleaningAI ? 0.75 : 1,
+                  transition: 'all 0.15s ease'
                 }}
-                title="Clean markdown symbols, LaTeX math ($ \times), and organize into clean question items"
+                title="Use AI to structure syllabus by Part, standardize question numbers, and clean mark formulas"
               >
-                <span>✨</span>
-                <span>Clean & Organize</span>
+                {isCleaningAI ? (
+                  <>
+                    <span>⏳</span>
+                    <span>Structuring with AI...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>✨</span>
+                    <span>Clean & Organize</span>
+                  </>
+                )}
               </button>
             </div>
             <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary, #94a3b8)' }}>

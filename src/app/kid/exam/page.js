@@ -1,11 +1,11 @@
 "use client";
 
-import { Suspense, useEffect, useState, useRef } from 'react';
+import { Suspense, useEffect, useState, useRef, useMemo } from 'react';
 import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { auth, database } from '../../../lib/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { ref, onValue, set, push, remove } from 'firebase/database';
-import { generateGeminiContent } from '../../../lib/gemini';
+import { generateGeminiContent, organizeMarkDistributionWithAI, autoReviewExamWithAI } from '../../../lib/gemini';
 import Link from 'next/link';
 import MarkDistributionField, { cleanAndFormatMarkDistribution } from '../../../components/MarkDistributionField';
 import MarkDistributionView from '../../../components/MarkDistributionView';
@@ -31,6 +31,25 @@ function ExamPageContent() {
   // Mark Distribution state
   const [isEditingMarkDist, setIsEditingMarkDist] = useState(false);
   const [markDistValue, setMarkDistValue] = useState('');
+  const [isCleaningMarkDistAI, setIsCleaningMarkDistAI] = useState(false);
+
+  const handleCleanMarkDistWithAI = async () => {
+    if (!markDistValue || !markDistValue.trim() || isCleaningMarkDistAI) return;
+    setIsCleaningMarkDistAI(true);
+    try {
+      const organized = await organizeMarkDistributionWithAI(markDistValue);
+      if (organized) {
+        setMarkDistValue(organized);
+      } else {
+        setMarkDistValue(cleanAndFormatMarkDistribution(markDistValue));
+      }
+    } catch (err) {
+      console.warn('AI clean failed, falling back to rule cleaner:', err);
+      setMarkDistValue(cleanAndFormatMarkDistribution(markDistValue));
+    } finally {
+      setIsCleaningMarkDistAI(false);
+    }
+  };
 
   // Model test generator state
   const [showGeneratorModal, setShowGeneratorModal] = useState(false);
@@ -49,6 +68,14 @@ function ExamPageContent() {
   const [editingDurationModal, setEditingDurationModal] = useState(null);
   const [tempDurationValue, setTempDurationValue] = useState(60);
 
+  // Multi-book & Collapsible Subject Material state
+  const [isPdfSectionCollapsed, setIsPdfSectionCollapsed] = useState(false);
+  const [selectedBookId, setSelectedBookId] = useState(null);
+  const [selectedBookIdsForTest, setSelectedBookIdsForTest] = useState([]);
+  const [showBookModal, setShowBookModal] = useState(false);
+  const [editingBookData, setEditingBookData] = useState({ id: null, title: '', url: '', isGovtTextbook: false });
+  const [bookSaveLoading, setBookSaveLoading] = useState(false);
+
   // Model test viewer, sliding & grading state
   const [viewingModelTest, setViewingModelTest] = useState(null);
   const [testViewMode, setTestViewMode] = useState('student'); // 'student' or 'examiner'
@@ -66,6 +93,8 @@ function ExamPageContent() {
   const [notificationMsg, setNotificationMsg] = useState('');
   const [showAnswerKeys, setShowAnswerKeys] = useState({});
   const [copiedSuccess, setCopiedSuccess] = useState(false);
+  const [isAiReviewing, setIsAiReviewing] = useState(false);
+  const [aiReviewingQId, setAiReviewingQId] = useState(null);
 
   // Chapter & Topics state
   const [showAddChapterModal, setShowAddChapterModal] = useState(false);
@@ -87,6 +116,7 @@ function ExamPageContent() {
   const [navigatorViewMode, setNavigatorViewMode] = useState('collapsible'); // 'collapsible' or 'scroller'
   const [selectedSetFilter, setSelectedSetFilter] = useState('all');
   const [collapsedSets, setCollapsedSets] = useState({});
+  const [isNavigatorCollapsed, setIsNavigatorCollapsed] = useState(false);
   const pillsScrollRef = useRef(null);
 
   const saveDebounceTimer = useRef(null);
@@ -313,7 +343,35 @@ function ExamPageContent() {
         const clean = raw.replace(/```json\s*/gi, '').replace(/```\s*$/gi, '').trim();
         const parsed = JSON.parse(clean);
         result = extractArray(parsed);
-      } catch (_) {}
+      } catch (_) {
+        // Robust recovery for truncated JSON (e.g. cut off at max output tokens)
+        try {
+          const clean = raw.replace(/```json\s*/gi, '').replace(/```\s*$/gi, '').trim();
+          let lastIdx = clean.lastIndexOf('},');
+          if (lastIdx === -1) lastIdx = clean.lastIndexOf('}');
+          while (lastIdx > 50) {
+            const slice = clean.slice(0, lastIdx + 1);
+            const candidates = [
+              slice + '\n]}',
+              slice + ']}',
+              slice + '\n}',
+              slice + '}'
+            ];
+            for (const att of candidates) {
+              try {
+                const repaired = JSON.parse(att);
+                const salvaged = extractArray(repaired);
+                if (salvaged && salvaged.length > 0) {
+                  result = salvaged;
+                  break;
+                }
+              } catch (_) {}
+            }
+            if (result && result.length > 0) break;
+            lastIdx = clean.lastIndexOf('}', lastIdx - 1);
+          }
+        } catch (_) {}
+      }
 
       if (!result || result.length === 0) {
         // Fallback robust line-by-line parser (handles text/markdown-formatted responses)
@@ -510,9 +568,209 @@ function ExamPageContent() {
   const examStatus = examSetting.status || (progressPercent === 100 && totalChaptersCount > 0 ? 'Completed' : (progressPercent > 0 ? 'In Progress' : 'Not Started'));
 
   const rawModelTests = (subject && exam && subject.modelTests && subject.modelTests[exam.id]) || {};
+  // Helper to extract timestamp from test (handles createdAt or decodes Firebase push ID)
+  const getTestCreatedAt = (test, allowDateFallback = false) => {
+    if (!test) return 0;
+    if (typeof test.createdAt === 'number' && !isNaN(test.createdAt) && test.createdAt > 0) {
+      return test.createdAt;
+    }
+    if (test.createdAt) {
+      const parsed = new Date(test.createdAt).getTime();
+      if (!isNaN(parsed) && parsed > 0) return parsed;
+    }
+    // Fallback: extract millisecond timestamp from Firebase push ID (starts with - and length >= 8)
+    if (test.id && typeof test.id === 'string' && test.id.length >= 8 && test.id.startsWith('-')) {
+      const PUSH_CHARS = "-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz";
+      let time = 0;
+      let valid = true;
+      for (let i = 0; i < 8; i++) {
+        const c = test.id.charAt(i);
+        const val = PUSH_CHARS.indexOf(c);
+        if (val === -1) { valid = false; break; }
+        time = time * 64 + val;
+      }
+      if (valid && time > 1577836800000 && time < 2524608000000) {
+        return time;
+      }
+    }
+    if (allowDateFallback && test.date) {
+      const d = new Date(test.date).getTime();
+      if (!isNaN(d) && d > 0) return d;
+    }
+    return 0;
+  };
+
   const modelTestsList = Object.entries(rawModelTests)
     .map(([tId, test]) => ({ id: tId, ...test }))
-    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    .sort((a, b) => getTestCreatedAt(b, true) - getTestCreatedAt(a, true));
+
+  // Helper to format human-readable generation time (e.g. "3:45 PM")
+  const formatGeneratedTime = (test) => {
+    if (!test) return null;
+    if (test.generatedTime) return test.generatedTime;
+    const ts = getTestCreatedAt(test, false);
+    if (ts > 1577836800000) {
+      try {
+        const d = new Date(ts);
+        return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+      } catch (_) {
+        return null;
+      }
+    }
+    return null;
+  };
+
+  // Helper to auto-number duplicate titles (e.g. "Model Test - Oct 22, 2026 #2")
+  const getNextNumberedTitle = (desiredTitle, existingTests = []) => {
+    if (!desiredTitle) return '';
+    const trimmed = desiredTitle.trim();
+    const existingTitles = existingTests.map(t => (t.title || '').trim()).filter(Boolean);
+
+    const hasExact = existingTitles.some(t => t.toLowerCase() === trimmed.toLowerCase());
+    if (!hasExact) return trimmed;
+
+    const cleanBase = trimmed.replace(/\s*#\d+$/, '').replace(/\s*\(\d+\)$/, '').trim();
+    let countWithBase = 0;
+    let maxNum = 1;
+    for (const t of existingTitles) {
+      const tBase = t.replace(/\s*#\d+$/, '').replace(/\s*\(\d+\)$/, '').trim();
+      if (tBase.toLowerCase() === cleanBase.toLowerCase()) {
+        countWithBase++;
+        const match = t.match(/#(\d+)$/) || t.match(/\((\d+)\)$/);
+        if (match) {
+          const num = parseInt(match[1], 10);
+          if (num > maxNum) maxNum = num;
+        }
+      }
+    }
+    const nextNum = Math.max(maxNum + 1, countWithBase + 1);
+    return `${cleanBase} #${nextNum}`;
+  };
+
+  // Map duplicate titles across existing tests to chronologically numbered display titles
+  const numberedTitleMap = useMemo(() => {
+    const titleCounts = {};
+    for (const t of modelTestsList) {
+      const rawTitle = (t.title || `Model Test - ${t.date || ''}`).trim();
+      titleCounts[rawTitle] = (titleCounts[rawTitle] || 0) + 1;
+    }
+
+    const chronological = [...modelTestsList].sort((a, b) => getTestCreatedAt(a, true) - getTestCreatedAt(b, true));
+    const titleSeq = {};
+    const map = {};
+
+    for (const t of chronological) {
+      const rawTitle = (t.title || `Model Test - ${t.date || ''}`).trim();
+      if (titleCounts[rawTitle] > 1) {
+        titleSeq[rawTitle] = (titleSeq[rawTitle] || 0) + 1;
+        map[t.id] = `${rawTitle} #${titleSeq[rawTitle]}`;
+      } else {
+        map[t.id] = rawTitle;
+      }
+    }
+    return map;
+  }, [modelTestsList]);
+
+  // Count existing questions across all prior model tests for zero-duplication transparency
+  const totalExistingQuestionsCount = useMemo(() => {
+    let count = 0;
+    (modelTestsList || []).forEach(test => {
+      const parsed = parseQuestionsData(test.questions);
+      count += parsed.length;
+    });
+    return count;
+  }, [modelTestsList]);
+
+  // Multi-book helper
+  const getSubjectBooks = (subj) => {
+    if (!subj) return [];
+    if (subj.books && typeof subj.books === 'object' && Object.keys(subj.books).length > 0) {
+      const arr = Object.entries(subj.books).map(([id, b]) => ({
+        id,
+        title: b.title || 'Textbook',
+        url: (b.url || '').trim(),
+        isGovtTextbook: Boolean(b.isGovtTextbook)
+      })).filter(b => b.url);
+      if (arr.length > 0) return arr;
+    }
+    if (subj.bookUrl && typeof subj.bookUrl === 'string' && subj.bookUrl.trim()) {
+      return [{
+        id: 'default_book',
+        title: 'Govt Textbook',
+        url: subj.bookUrl.trim(),
+        isGovtTextbook: true
+      }];
+    }
+    return [];
+  };
+
+  const handleSaveBook = async (bookData) => {
+    if (!user || !kid || !subject) return;
+    setBookSaveLoading(true);
+    try {
+      const dataOwnerUid = searchParams.get("parentId") || user.uid;
+      const booksBasePath = `users/${dataOwnerUid}/kids/${kid.id}/subjects/${subject.id}/books`;
+      
+      let bookId = bookData.id;
+      if (!bookId || bookId === 'default_book') {
+        const newRef = push(ref(database, booksBasePath));
+        bookId = newRef.key;
+      }
+      
+      const toSave = {
+        title: (bookData.title || '').trim() || 'Textbook',
+        url: (bookData.url || '').trim(),
+        isGovtTextbook: Boolean(bookData.isGovtTextbook),
+        updatedAt: Date.now()
+      };
+      
+      await set(ref(database, `${booksBasePath}/${bookId}`), toSave);
+
+      if (toSave.isGovtTextbook || !subject.bookUrl) {
+        await set(ref(database, `users/${dataOwnerUid}/kids/${kid.id}/subjects/${subject.id}/bookUrl`), toSave.url);
+      }
+
+      setSubject(prev => {
+        if (!prev) return prev;
+        const currentBooks = prev.books && typeof prev.books === 'object' ? { ...prev.books } : {};
+        currentBooks[bookId] = { id: bookId, ...toSave };
+        return {
+          ...prev,
+          books: currentBooks,
+          bookUrl: toSave.isGovtTextbook ? toSave.url : (prev.bookUrl || toSave.url)
+        };
+      });
+
+      setSelectedBookId(bookId);
+      setShowBookModal(false);
+      setEditingBookData({ id: null, title: '', url: '', isGovtTextbook: false });
+    } catch (err) {
+      console.error('Error saving book:', err);
+    } finally {
+      setBookSaveLoading(false);
+    }
+  };
+
+  const handleDeleteBook = async (bookId) => {
+    if (!user || !kid || !subject || !bookId) return;
+    if (!window.confirm('Are you sure you want to remove this book reference?')) return;
+    try {
+      const dataOwnerUid = searchParams.get("parentId") || user.uid;
+      const bookPath = `users/${dataOwnerUid}/kids/${kid.id}/subjects/${subject.id}/books/${bookId}`;
+      await remove(ref(database, bookPath));
+
+      setSubject(prev => {
+        if (!prev || !prev.books) return prev;
+        const copy = { ...prev.books };
+        delete copy[bookId];
+        return { ...prev, books: copy };
+      });
+
+      setSelectedBookId(null);
+    } catch (err) {
+      console.error('Error deleting book:', err);
+    }
+  };
 
   // Handlers for Chapter completion and status
   const handleToggleChapterComplete = async (chapId, currentCompleted) => {
@@ -681,10 +939,14 @@ function ExamPageContent() {
   const handleOpenGenerator = () => {
     const today = new Date().toISOString().split('T')[0];
     const formattedToday = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    const baseTitle = `Model Test - ${formattedToday}`;
+    const nextTitle = getNextNumberedTitle(baseTitle, modelTestsList);
+    const books = getSubjectBooks(subject);
     setModelTestDate(today);
-    setModelTestTitle(`Model Test - ${formattedToday}`);
+    setModelTestTitle(nextTitle);
     setModelTestResult('0');
     setSelectedChaptersForTest(chaptersList.map(c => c.id));
+    setSelectedBookIdsForTest(books.map(b => b.id));
     setTestMarkDistribution(markDistValue);
     setTestDifficulty('Standard');
     setTestGuidelines(['Follow best practice', 'Standard curriculum']);
@@ -708,12 +970,99 @@ function ExamPageContent() {
         }
         return c.title;
       }).filter(Boolean);
+
+      const allSubjectBooks = getSubjectBooks(subject);
+      const checkedBooks = allSubjectBooks.filter(b => selectedBookIdsForTest.includes(b.id));
+      const govtBook = checkedBooks.find(b => b.isGovtTextbook) || checkedBooks[0] || null;
+      const govtTextbookUrl = govtBook ? govtBook.url : (subject?.bookUrl || bookUrl || '').trim();
+
+      // Collect all previously generated questions from existing model tests to strictly avoid similarity & repetition
+      const existingQuestionsList = [];
+      const usedPassageSnippets = new Set();
+
+      (modelTestsList || []).forEach(test => {
+        const parsed = parseQuestionsData(test.questions);
+        parsed.forEach(q => {
+          const rawQ = (q.question || '').trim();
+          if (rawQ) {
+            existingQuestionsList.push({
+              testTitle: test.title || test.date || 'Previous Model Test',
+              section: q.section || '',
+              question: rawQ
+            });
+
+            const doubleNewline = rawQ.split(/\n\n+/);
+            if (doubleNewline.length > 1 && (doubleNewline[0].toLowerCase().includes('read the') || doubleNewline[0].toLowerCase().includes('passage'))) {
+              usedPassageSnippets.add(doubleNewline[0].replace(/\s+/g, ' ').slice(0, 160));
+            }
+          }
+        });
+      });
+
+      // Also collect questions from selected chapters practice banks
+      (selectedChaptersForTest || []).forEach(chId => {
+        const ch = chaptersMap[chId];
+        if (ch && Array.isArray(ch.questions)) {
+          ch.questions.forEach(cq => {
+            const rawQ = cleanText(cq.question || cq.prompt || '');
+            if (rawQ) {
+              existingQuestionsList.push({
+                testTitle: `Chapter: ${ch.title}`,
+                section: cq.type || 'Practice Question',
+                question: rawQ
+              });
+            }
+          });
+        }
+      });
+
+      // Format anti-duplication instruction
+      const antiDuplicationSection = existingQuestionsList.length > 0 ? `
+================================================================================
+CRITICAL ANTI-DUPLICATION & ZERO-SIMILARITY MANDATE:
+The student has ALREADY taken previous model tests covering this syllabus and has already completed the following ${existingQuestionsList.length} questions.
+EVERY SINGLE QUESTION IN THIS NEW MODEL TEST MUST BE COMPLETELY FRESH, UNIQUE, AND UNLIKE ANY OF THE QUESTIONS LISTED BELOW.
+
+STRICT NON-SIMILARITY REQUIREMENTS:
+1. ABSOLUTELY NO REPETITION: Do NOT generate any question that is identical, similar, or an obvious variation of any question listed below.
+2. NO SHALLOW REPHRASING: Do NOT take an existing question and merely swap names, minor numbers, or synonyms into the same question template.
+3. SEEN PASSAGE ROTATION: If this model test has a Seen Passage (Reading Comprehension):
+   - You MUST select a COMPLETELY DIFFERENT authentic story/lesson/unit from the official Government Textbook ("${govtBook ? govtBook.title : 'Official Textbook'}") than any passage used in previous tests.
+   ${usedPassageSnippets.size > 0 ? `- Previously used passages to strictly avoid:\n${Array.from(usedPassageSnippets).map(p => `     * "${p}..."`).join('\n')}` : ''}
+   - For example: if a previous test used Maria ("Life is Beautiful"), YOU ARE STRICTLY FORBIDDEN from using Maria again. Instead, choose from other textbook lessons such as: Raju the Firefighter (Unit 9), Babul and Cyclone Aila (Unit 24), Saikat's Family (Unit 3), A Visit to the Liberation War Museum (Unit 19), The Olympic Games (Unit 17), St. Martin's Island (Unit 12), Eat Healthy (Unit 6), etc.
+4. NOVEL GRAMMAR & VOCABULARY:
+   - For Fill in the Blanks, Rearrange, WH-questions, Prepositions, Right Form of Verbs, and Punctuation: use brand-new sentence structures, different vocabulary words, and different grammatical contexts.
+5. MATHEMATICS & SCIENCE DIVERSITY:
+   - Use completely different numerical numbers, different formulas, different scenarios, and different real-world problem settings.
+6. FRESH PERSPECTIVES:
+   - Explore untested topics, different question angles, and novel problem contexts from the selected chapters.
+
+LIST OF ${existingQuestionsList.length} PREVIOUS QUESTIONS TO STRICTLY EXCLUDE (DO NOT MAKE SIMILAR QUESTIONS):
+${existingQuestionsList.map((item, idx) => {
+  let text = item.question;
+  const parts = text.split(/\n\n+/);
+  if (parts.length > 1 && (parts[0].toLowerCase().includes('read the') || parts[0].toLowerCase().includes('passage'))) {
+    text = `[Passage: ${parts[0].slice(0, 90)}...] Q: ${parts[parts.length - 1]}`;
+  }
+  if (text.length > 220) text = text.slice(0, 215) + '...';
+  return `${idx + 1}. [${item.section || 'Question'}] "${text}" (${item.testTitle})`;
+}).join('\n')}
+================================================================================
+` : `
+NOTE: This is the first model test for this exam. Ensure questions have rich, comprehensive, and balanced coverage across all selected syllabus chapters.
+`;
+
       const promptText = `You are an expert school examiner creating a realistic, high quality Model Test for student: ${kid.name || 'Student'}.
 Generate a comprehensive Model Test with structured questions strictly formatted according to the syllabus and mark distribution.
 
 Subject: ${subject.title}
 Exam Type: ${exam.title}
 Model Test Date: ${modelTestDate || 'Today'}
+${kid.grade ? `Class / Grade: ${kid.grade}\n` : ''}
+Selected Reference Books (from Subject Material PDF section):
+${checkedBooks.length > 0
+  ? checkedBooks.map((b, idx) => `${idx + 1}. ${b.title}${b.isGovtTextbook ? ' [Official Government Textbook]' : ''}: ${b.url}`).join('\n')
+  : '- None selected (use standard curriculum)'}
 
 Syllabus Chapters to cover:
 ${selectedChapterTitles.length > 0 ? selectedChapterTitles.map(t => `- ${t}`).join('\n') : '- Entire course curriculum'}
@@ -727,11 +1076,22 @@ ${testGuidelines.length > 0 ? testGuidelines.map(g => `- ${g}`).join('\n') : '- 
 
 ${customInstructions ? `Additional Custom Instructions:\n${customInstructions}\n` : ''}
 
+${antiDuplicationSection}
+
 CRITICAL RULES FOR GENERATION:
-1. MANDATORY - INCLUDE ALL PARTS & SECTIONS: You MUST generate individual question items for EVERY section and question count specified in the Mark Distribution above (e.g. Part 1: MCQ, Part 2: Short Questions, Part 3: Short-Answer, Part 4: Competency-Based / Creative). DO NOT skip or omit Part 1 or Part 2. The output "questions" array MUST include questions for all parts starting from Part 1 to the final part!
-2. STRICT ADHERENCE TO MARK DISTRIBUTION: For instance, if a section specifies "8 questions x 7 marks = 56 Marks from chapters 3, 6, 7, 8, 10", generate all individual questions covering those specific chapters with 7 marks each!
-3. ZERO MARKDOWN AND ZERO LATEX: DO NOT use markdown bold (**), headers (###), backticks (\`), or LaTeX ($). Use standard plain keyboard symbols: "x", "÷", "+", "-", "/", "%". Every question and answer must be clean, readable text.
-4. Return STRICTLY a valid JSON object matching this schema:
+1. GOVERNMENT TEXTBOOK & REFERENCE BOOKS MANDATE (FROM SUBJECT MATERIAL PDF SECTION):
+   ${checkedBooks.length > 0 ? `You MUST take instructions, content, and lessons from the checked books from the Subject Material (PDF) section:\n${checkedBooks.map(b => `   - "${b.title}"${b.isGovtTextbook ? ' (Official Government Textbook)' : ''}: ${b.url}`).join('\n')}` : ''}
+   ${govtBook ? `- Primary Government Textbook: "${govtBook.title}" (URL: ${govtBook.url}).
+   - For all reading comprehension sections, Seen Passages, dialogues, lessons, and textbook questions (e.g. Part-A: Seen Passage / Questions 1 to 4 for "English for Today, Class Five"):
+     a) The text/dialogue MUST be an authentic passage or dialogue directly taken from this official Government Textbook ("${govtBook.title}").
+     b) NEVER fabricate or make up imaginary passages when the syllabus specifies a Seen Passage from the government textbook. Use authentic textbook stories, dialogues, characters, and lessons.
+     c) ROTATE LESSONS: Do NOT reuse the same passage or characters as previous tests. Pick a fresh story/unit from the textbook (e.g. Raju the Firefighter, Babul & Cyclone Aila, Saikat's Family, A Visit to the Liberation War Museum, The Olympic Games, St. Martin's Island, Eat Healthy, etc.).
+     d) All Seen Passage comprehension questions (MCQs, Fill in the blanks, True/False, and Short Questions) must strictly test the student's understanding of this authentic government textbook passage.` : ''}
+   - For grammar, vocabulary, or composition questions, align them with the exercises, question patterns, and syllabus items in the selected reference books.
+2. MANDATORY - INCLUDE ALL PARTS & SECTIONS: You MUST generate individual question items for EVERY section and question count specified in the Mark Distribution above (e.g. Part 1: MCQ, Part 2: Short Questions, Part 3: Short-Answer, Part 4: Competency-Based / Creative). DO NOT skip or omit Part 1 or Part 2. The output "questions" array MUST include questions for all parts starting from Part 1 to the final part!
+3. STRICT ADHERENCE TO MARK DISTRIBUTION: For instance, if a section specifies "8 questions x 7 marks = 56 Marks from chapters 3, 6, 7, 8, 10", generate all individual questions covering those specific chapters with 7 marks each!
+4. ZERO MARKDOWN AND ZERO LATEX: DO NOT use markdown bold (**), headers (###), backticks (\`), or LaTeX ($). Use standard plain keyboard symbols: "x", "÷", "+", "-", "/", "%". Every question and answer must be clean, readable text.
+5. Return STRICTLY a valid JSON object matching this schema:
 {
   "title": "${modelTestTitle.trim() || `${subject.title} - ${exam.title} Model Test`}",
   "fullMarks": 100,
@@ -763,15 +1123,25 @@ CRITICAL RULES FOR GENERATION:
     }
   ]
 }
-Ensure the "questions" array contains ALL the individual generated questions covering the required mark distribution without skipping any section.`;
+Ensure the "questions" array contains ALL the individual generated questions covering the required mark distribution without skipping any section.
+5. PASSAGE EFFICIENCY: For reading comprehension sections (Seen or Unseen Passages), provide the full reading text in the FIRST question of that passage section (e.g. Question 1 or Question 5). For subsequent questions in that same section, refer to "Based on the passage above" instead of repeating the entire multi-paragraph text.
+6. CONCISE ANSWER KEYS: Keep answer keys clear, correct, and succinct.`;
 
-      const questionsText = await generateGeminiContent(promptText);
+      const questionsText = await generateGeminiContent(promptText, { temperature: 0.85 });
+
+      const rawUserTitle = modelTestTitle.trim() || `Model Test - ${modelTestDate || 'Today'}`;
+      const finalTitle = getNextNumberedTitle(rawUserTitle, modelTestsList);
+      const now = Date.now();
+      const generatedTime = new Date(now).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
 
       const testsRef = ref(database, `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${subject.id}/modelTests/${exam.id}`);
       const newTestRef = push(testsRef);
       const testData = {
-        title: modelTestTitle.trim() || `Model Test - ${modelTestDate}`,
+        title: finalTitle,
         date: modelTestDate,
+        generatedTime: generatedTime,
+        govtBookUrl: govtTextbookUrl,
+        checkedBooks: checkedBooks.map(b => ({ id: b.id, title: b.title, url: b.url, isGovtTextbook: b.isGovtTextbook })),
         duration: Number(modelTestDuration) || 60,
         result: modelTestResult.trim() || '0',
         difficulty: testDifficulty,
@@ -783,7 +1153,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
         studentAnswers: {},
         uploadedPages: [],
         examinerGrading: null,
-        createdAt: Date.now()
+        createdAt: now
       };
       await set(newTestRef, testData);
 
@@ -792,6 +1162,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
         subjectId: subject.id,
         examId: exam.id,
         testId: newTestRef.key,
+        displayTitle: finalTitle,
         ...testData
       });
     } catch (err) {
@@ -1054,6 +1425,106 @@ Ensure the "questions" array contains ALL the individual generated questions cov
     saveExaminerGrading(updatedMarks, updatedNotes, overallExaminerFeedback, qId);
   };
 
+  // AI Auto Review & Marking for all questions before final teacher review
+  const handleAiAutoReview = async () => {
+    if (!viewingModelTest) return;
+    const qList = parseQuestionsData(viewingModelTest.questions);
+    if (!qList || qList.length === 0) {
+      alert("No questions found in this model test to evaluate.");
+      return;
+    }
+
+    if (!isExamFinished) {
+      const proceed = window.confirm("The student has not officially submitted this exam yet.\n\nDo you want to submit the exam now and run AI auto-review?");
+      if (!proceed) return;
+      await handleFinishAndSubmitExam();
+    }
+
+    setIsAiReviewing(true);
+    setNotificationMsg("🤖 AI is reviewing and marking all answers against the rubric. Please wait...");
+
+    try {
+      const evaluationResult = await autoReviewExamWithAI({
+        questions: qList,
+        studentAnswers: studentAnswers,
+        subjectTitle: subject?.title || '',
+        examTitle: exam?.title || '',
+        kidGrade: kid?.grade || ''
+      });
+
+      const newAwardedMarks = { ...awardedMarks };
+      const newExaminerNotes = { ...examinerNotes };
+
+      if (Array.isArray(evaluationResult.evaluations)) {
+        evaluationResult.evaluations.forEach(ev => {
+          const matchedQ = qList.find(q => String(q.id) === String(ev.questionId));
+          const max = matchedQ ? (Number(matchedQ.marks) || 5) : 5;
+          const mark = Math.min(Math.max(0, Number(ev.awardedMarks) || 0), max);
+          newAwardedMarks[ev.questionId] = mark;
+          if (ev.feedback) {
+            newExaminerNotes[ev.questionId] = ev.feedback;
+          }
+        });
+      }
+
+      const overallFeedback = evaluationResult.overallFeedback || overallExaminerFeedback || '';
+
+      setAwardedMarks(newAwardedMarks);
+      setExaminerNotes(newExaminerNotes);
+      if (overallFeedback) {
+        setOverallExaminerFeedback(overallFeedback);
+      }
+
+      // Switch to examiner mode so teacher can review the results immediately
+      setTestViewMode('examiner');
+
+      // Save to Firebase
+      await saveExaminerGrading(newAwardedMarks, newExaminerNotes, overallFeedback);
+
+      const totalAwarded = Object.values(newAwardedMarks).reduce((a, b) => a + (Number(b) || 0), 0);
+      const totalMax = qList.reduce((a, b) => a + (Number(b.marks) || 0), 0) || 100;
+      setNotificationMsg(`✓ AI Auto-Marking Complete! Awarded ${totalAwarded}/${totalMax} Marks. Pre-filled for your final review.`);
+      setTimeout(() => setNotificationMsg(''), 6000);
+    } catch (err) {
+      console.error("AI Auto Review Error:", err);
+      alert("AI Review Failed: " + (err.message || 'Unknown error. Please check your Gemini API key.'));
+      setNotificationMsg('');
+    } finally {
+      setIsAiReviewing(false);
+    }
+  };
+
+  // AI evaluation for a single question
+  const handleAiGradeSingleQuestion = async (q) => {
+    if (!q || !viewingModelTest) return;
+    setAiReviewingQId(q.id);
+    try {
+      const res = await autoReviewExamWithAI({
+        questions: [q],
+        studentAnswers: studentAnswers,
+        subjectTitle: subject?.title || '',
+        examTitle: exam?.title || '',
+        kidGrade: kid?.grade || ''
+      });
+
+      if (res && Array.isArray(res.evaluations) && res.evaluations.length > 0) {
+        const ev = res.evaluations[0];
+        const max = Number(q.marks) || 5;
+        const mark = Math.min(Math.max(0, Number(ev.awardedMarks) || 0), max);
+        const feedback = ev.feedback || '';
+        
+        handleAwardMarkAndConfirm(q.id, mark, max, feedback);
+        setNotificationMsg(`✓ AI evaluated Q${q.displayNumber || q.id}: ${mark}/${max} marks awarded.`);
+        setTimeout(() => setNotificationMsg(''), 4000);
+      }
+    } catch (err) {
+      console.error('Error in single question AI grade:', err);
+      alert('AI Grading failed for this question: ' + (err.message || 'Unknown error'));
+    } finally {
+      setAiReviewingQId(null);
+    }
+  };
+
   const handleUploadAnswerSheet = async (e) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
@@ -1195,17 +1666,253 @@ Ensure the "questions" array contains ALL the individual generated questions cov
     return Array.from(map.values());
   })();
 
+  const isSetCollapsed = (setNum) => {
+    if (collapsedSets[setNum] !== undefined) {
+      return Boolean(collapsedSets[setNum]);
+    }
+    // Default: When there are multiple sets, keep only the currently active question's set open, others collapsed!
+    const activeSetNum = modalQuestions[currentSlideIndex]?.setNumber;
+    return questionSets.length > 1 ? setNum !== activeSetNum : false;
+  };
+
   const toggleSetCollapse = (setNum) => {
+    const currentlyCollapsed = isSetCollapsed(setNum);
     setCollapsedSets(prev => ({
       ...prev,
-      [setNum]: !prev[setNum]
+      [setNum]: !currentlyCollapsed
     }));
+  };
+
+  const handleCollapseAllSets = () => {
+    const all = {};
+    questionSets.forEach(s => { all[s.setNumber] = true; });
+    setCollapsedSets(all);
+  };
+
+  const handleExpandAllSets = () => {
+    const all = {};
+    questionSets.forEach(s => { all[s.setNumber] = false; });
+    setCollapsedSets(all);
   };
 
   const handleScrollPills = (direction) => {
     if (!pillsScrollRef.current) return;
     const distance = direction === 'left' ? -260 : 260;
     pillsScrollRef.current.scrollBy({ left: distance, behavior: 'smooth' });
+  };
+
+  const getQuestionGradingStatus = (q) => {
+    const isAns = Boolean(studentAnswers[q.id]?.trim());
+    const isGrd = awardedMarks[q.id] !== undefined && awardedMarks[q.id] !== '';
+    const qMax = Number(q.marks) || 5;
+    const awd = isGrd ? Number(awardedMarks[q.id]) : null;
+
+    if (isGrd) {
+      if (awd >= qMax) {
+        return {
+          isGrd: true,
+          isAns,
+          awd,
+          qMax,
+          status: 'correct',
+          color: '#34d399',
+          bg: 'rgba(16, 185, 129, 0.15)',
+          border: 'rgba(16, 185, 129, 0.35)',
+          symbol: '✓',
+          markText: `[${awd}/${qMax}]`,
+          studentTag: `✓ [${awd}/${qMax}]`,
+          examinerTag: `[${awd}/${qMax}]`,
+          badgeText: `✓ Correct (${awd}/${qMax})`,
+          examinerBadgeText: `✓ Awarded: ${awd}/${qMax}`,
+          badgeBg: 'rgba(16, 185, 129, 0.15)',
+          badgeBorder: 'rgba(16, 185, 129, 0.3)',
+          badgeColor: '#34d399'
+        };
+      } else if (awd > 0) {
+        return {
+          isGrd: true,
+          isAns,
+          awd,
+          qMax,
+          status: 'partial',
+          color: '#facc15',
+          bg: 'rgba(234, 179, 8, 0.15)',
+          border: 'rgba(234, 179, 8, 0.35)',
+          symbol: '~',
+          markText: `[${awd}/${qMax}]`,
+          studentTag: `~ [${awd}/${qMax}]`,
+          examinerTag: `[${awd}/${qMax}]`,
+          badgeText: `~ Partial (${awd}/${qMax})`,
+          examinerBadgeText: `~ Partial: ${awd}/${qMax}`,
+          badgeBg: 'rgba(234, 179, 8, 0.15)',
+          badgeBorder: 'rgba(234, 179, 8, 0.3)',
+          badgeColor: '#facc15'
+        };
+      } else {
+        // awd === 0 -> Incorrect!
+        return {
+          isGrd: true,
+          isAns,
+          awd: 0,
+          qMax,
+          status: 'incorrect',
+          color: '#f87171',
+          bg: 'rgba(239, 68, 68, 0.15)',
+          border: 'rgba(239, 68, 68, 0.35)',
+          symbol: '✗',
+          markText: `[0/${qMax}]`,
+          studentTag: `✗ [0/${qMax}]`,
+          examinerTag: `[0/${qMax}]`,
+          badgeText: `✗ Incorrect (0/${qMax})`,
+          examinerBadgeText: `✗ Incorrect: 0/${qMax}`,
+          badgeBg: 'rgba(239, 68, 68, 0.15)',
+          badgeBorder: 'rgba(239, 68, 68, 0.3)',
+          badgeColor: '#f87171'
+        };
+      }
+    }
+
+    if (isExamFinished) {
+      // Check MCQ auto key if available
+      const hasOptions = Array.isArray(q.options) && q.options.length > 0;
+      if (hasOptions && q.answerKey && isAns) {
+        const studentAns = studentAnswers[q.id].trim();
+        const matchedOpt = q.options.find(opt => 
+          studentAns === opt.trim() || 
+          (opt.trim().length >= 2 && studentAns.startsWith(opt.trim().slice(0, 2)))
+        );
+        const isCorrectKey = matchedOpt && (
+          q.answerKey.toLowerCase().includes(matchedOpt.slice(0, 2).toLowerCase()) ||
+          q.answerKey.toLowerCase().includes(matchedOpt.toLowerCase())
+        );
+        if (isCorrectKey) {
+          return {
+            isGrd: false,
+            isAns: true,
+            awd: qMax,
+            qMax,
+            status: 'correct',
+            color: '#34d399',
+            bg: 'rgba(16, 185, 129, 0.15)',
+            border: 'rgba(16, 185, 129, 0.35)',
+            symbol: '✓',
+            markText: `[${qMax}/${qMax}]`,
+            studentTag: `✓ [${qMax}/${qMax}]`,
+            examinerTag: `✓ [${qMax}/${qMax}]`,
+            badgeText: `✓ Correct (${qMax}/${qMax})`,
+            examinerBadgeText: `✓ Key Match (${qMax}/${qMax})`,
+            badgeBg: 'rgba(16, 185, 129, 0.15)',
+            badgeBorder: 'rgba(16, 185, 129, 0.3)',
+            badgeColor: '#34d399'
+          };
+        } else {
+          return {
+            isGrd: false,
+            isAns: true,
+            awd: 0,
+            qMax,
+            status: 'incorrect',
+            color: '#f87171',
+            bg: 'rgba(239, 68, 68, 0.15)',
+            border: 'rgba(239, 68, 68, 0.35)',
+            symbol: '✗',
+            markText: `[0/${qMax}]`,
+            studentTag: `✗ [0/${qMax}]`,
+            examinerTag: `✗ [0/${qMax}]`,
+            badgeText: `✗ Incorrect (0/${qMax})`,
+            examinerBadgeText: `✗ Wrong Option (0/${qMax})`,
+            badgeBg: 'rgba(239, 68, 68, 0.15)',
+            badgeBorder: 'rgba(239, 68, 68, 0.3)',
+            badgeColor: '#f87171'
+          };
+        }
+      }
+
+      if (isAns) {
+        return {
+          isGrd: false,
+          isAns: true,
+          awd: null,
+          qMax,
+          status: 'pending',
+          color: '#38bdf8',
+          bg: 'rgba(56, 189, 248, 0.12)',
+          border: 'rgba(56, 189, 248, 0.3)',
+          symbol: '•',
+          markText: `[Pending]`,
+          studentTag: `• [Pending]`,
+          examinerTag: `[Pending]`,
+          badgeText: `⏳ Under Review`,
+          examinerBadgeText: `⏳ Pending Marking`,
+          badgeBg: 'rgba(56, 189, 248, 0.15)',
+          badgeBorder: 'rgba(56, 189, 248, 0.3)',
+          badgeColor: '#38bdf8'
+        };
+      }
+
+      return {
+        isGrd: false,
+        isAns: false,
+        awd: 0,
+        qMax,
+        status: 'unanswered',
+        color: 'rgba(248, 113, 113, 0.7)',
+        bg: 'rgba(239, 68, 68, 0.05)',
+        border: 'rgba(239, 68, 68, 0.2)',
+        symbol: '○',
+        markText: `[0/${qMax}]`,
+        studentTag: `○ [0/${qMax}]`,
+        examinerTag: `○ [0/${qMax}]`,
+        badgeText: `○ Unanswered`,
+        examinerBadgeText: `○ Unanswered (0/${qMax})`,
+        badgeBg: 'rgba(239, 68, 68, 0.1)',
+        badgeBorder: 'rgba(239, 68, 68, 0.25)',
+        badgeColor: '#f87171'
+      };
+    }
+
+    // Active test in progress (!isExamFinished)
+    if (isAns) {
+      return {
+        isGrd: false,
+        isAns: true,
+        awd: null,
+        qMax,
+        status: 'answered',
+        color: '#34d399',
+        bg: 'rgba(16, 185, 129, 0.15)',
+        border: 'rgba(16, 185, 129, 0.3)',
+        symbol: '✓',
+        markText: `✓`,
+        studentTag: `✓`,
+        examinerTag: `✓`,
+        badgeText: `✓ Answered`,
+        examinerBadgeText: `✓ Answered`,
+        badgeBg: 'rgba(16, 185, 129, 0.15)',
+        badgeBorder: 'rgba(16, 185, 129, 0.25)',
+        badgeColor: '#34d399'
+      };
+    }
+
+    return {
+      isGrd: false,
+      isAns: false,
+      awd: null,
+      qMax,
+      status: 'empty',
+      color: 'var(--text-secondary)',
+      bg: 'rgba(255, 255, 255, 0.03)',
+      border: 'rgba(255, 255, 255, 0.08)',
+      symbol: '',
+      markText: ``,
+      studentTag: ``,
+      examinerTag: ``,
+      badgeText: `○ Not Answered`,
+      examinerBadgeText: `⏳ Pending Marking`,
+      badgeBg: 'rgba(255, 255, 255, 0.06)',
+      badgeBorder: 'rgba(255, 255, 255, 0.08)',
+      badgeColor: 'var(--text-secondary)'
+    };
   };
 
   return (
@@ -1342,201 +2049,427 @@ Ensure the "questions" array contains ALL the individual generated questions cov
         </div>
 
         {/* 0. Subject Material Section (Textbook) */}
-        <div id="subject-pdf-section" style={{ background: 'none', border: 'none', borderRadius: 0, padding: 0, marginBottom: '3rem', width: '100%' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', paddingBottom: '0.75rem', borderBottom: '1px solid rgba(255,255,255,0.08)', flexWrap: 'wrap', gap: '0.75rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16c0 1.1.9 2 2 2h12a2 2 0 0 0 2-2V8l-6-6z"></path><path d="M14 3v5h5M16 13H8M16 17H8M10 9H8"></path></svg>
-              <h2 style={{ margin: 0, fontSize: '1.2rem', color: '#fff', fontWeight: 600 }}>Subject Material (PDF)</h2>
-              <span style={{ fontSize: '0.72rem', padding: '0.12rem 0.5rem', borderRadius: '12px', background: 'rgba(139, 92, 246, 0.15)', color: 'var(--accent-primary)', fontWeight: 600 }}>
-                {pdfViewMode === 'single' ? 'Single Page View' : 'Full Width View'}
-              </span>
-            </div>
+        {(() => {
+          const subjectBooks = getSubjectBooks(subject);
+          const activeBook = subjectBooks.find(b => b.id === selectedBookId) || subjectBooks[0] || null;
+          const activeBookUrl = activeBook ? activeBook.url : (subject?.bookUrl || '');
 
-            {subject.bookUrl && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
-                {/* View Mode Toggle */}
-                <div style={{ display: 'inline-flex', background: 'rgba(0,0,0,0.3)', borderRadius: '8px', padding: '2px', border: '1px solid rgba(255,255,255,0.08)' }}>
-                  <button
-                    type="button"
-                    onClick={() => setPdfViewMode('single')}
-                    style={{
-                      padding: '0.2rem 0.55rem',
-                      fontSize: '0.72rem',
-                      fontWeight: 600,
-                      borderRadius: '6px',
-                      border: 'none',
-                      background: pdfViewMode === 'single' ? 'var(--accent-primary)' : 'transparent',
-                      color: pdfViewMode === 'single' ? '#fff' : 'var(--text-secondary)',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.3rem',
-                      transition: 'all 0.15s ease'
-                    }}
-                    title="Single Page Mode (fits exactly 1 page in viewport)"
-                  >
-                    <span>📄</span>
-                    <span>Single Page</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPdfViewMode('wide')}
-                    style={{
-                      padding: '0.2rem 0.55rem',
-                      fontSize: '0.72rem',
-                      fontWeight: 600,
-                      borderRadius: '6px',
-                      border: 'none',
-                      background: pdfViewMode === 'wide' ? 'var(--accent-primary)' : 'transparent',
-                      color: pdfViewMode === 'wide' ? '#fff' : 'var(--text-secondary)',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.3rem',
-                      transition: 'all 0.15s ease'
-                    }}
-                    title="Full Width Mode"
-                  >
-                    <span>↔️</span>
-                    <span>Full Width</span>
-                  </button>
-                </div>
+          return (
+            <div id="subject-pdf-section" style={{ background: 'none', border: 'none', borderRadius: 0, padding: 0, marginBottom: '2.5rem', width: '100%' }}>
+              {/* Header Bar */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.85rem', paddingBottom: '0.75rem', borderBottom: '1px solid rgba(255,255,255,0.08)', flexWrap: 'wrap', gap: '0.75rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16c0 1.1.9 2 2 2h12a2 2 0 0 0 2-2V8l-6-6z"></path><path d="M14 3v5h5M16 13H8M16 17H8M10 9H8"></path></svg>
+                  <h2 style={{ margin: 0, fontSize: '1.2rem', color: '#fff', fontWeight: 600 }}>Subject Material (PDF)</h2>
+                  
+                  {subjectBooks.length > 0 && (
+                    <span style={{ fontSize: '0.72rem', padding: '0.12rem 0.55rem', borderRadius: '12px', background: 'rgba(99, 102, 241, 0.15)', color: '#a5b4fc', border: '1px solid rgba(99, 102, 241, 0.3)', fontWeight: 600 }}>
+                      {subjectBooks.length} {subjectBooks.length === 1 ? 'Book' : 'Books'}
+                    </span>
+                  )}
 
-                {/* Scale buttons */}
-                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', background: 'rgba(0,0,0,0.3)', borderRadius: '8px', padding: '2px 5px', border: '1px solid rgba(255,255,255,0.08)' }}>
-                  <button
-                    type="button"
-                    onClick={() => setPdfScale(prev => Math.max(0.7, parseFloat((prev - 0.1).toFixed(1))))}
-                    style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', padding: '0.1rem 0.3rem', fontSize: '0.78rem', fontWeight: 700 }}
-                    title="Zoom Out"
-                  >
-                    −
-                  </button>
-                  <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', minWidth: '34px', textAlign: 'center' }}>
-                    {Math.round(pdfScale * 100)}%
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setPdfScale(prev => Math.min(1.4, parseFloat((prev + 0.1).toFixed(1))))}
-                    style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', padding: '0.1rem 0.3rem', fontSize: '0.78rem', fontWeight: 700 }}
-                    title="Zoom In"
-                  >
-                    +
-                  </button>
-                  {pdfScale !== 1 && (
-                    <button
-                      type="button"
-                      onClick={() => setPdfScale(1)}
-                      style={{ background: 'none', border: 'none', color: 'var(--accent-primary)', cursor: 'pointer', fontSize: '0.68rem', padding: '0 0.15rem' }}
-                      title="Reset Zoom"
-                    >
-                      Reset
-                    </button>
+                  {!isPdfSectionCollapsed && (
+                    <span style={{ fontSize: '0.72rem', padding: '0.12rem 0.5rem', borderRadius: '12px', background: 'rgba(139, 92, 246, 0.15)', color: 'var(--accent-primary)', fontWeight: 600 }}>
+                      {pdfViewMode === 'single' ? 'Single Page View' : 'Full Width View'}
+                    </span>
                   )}
                 </div>
 
-                {/* Pop out link */}
-                <a
-                  href={getEmbedUrl(subject.bookUrl, currentPdfPage)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '0.3rem',
-                    background: 'rgba(255,255,255,0.06)',
-                    color: '#fff',
-                    textDecoration: 'none',
-                    padding: '0.22rem 0.55rem',
-                    borderRadius: '6px',
-                    fontSize: '0.74rem',
-                    fontWeight: 500,
-                    border: '1px solid rgba(255,255,255,0.1)',
-                    transition: 'all 0.15s ease'
-                  }}
-                  title="Open Textbook in New Tab"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
-                  <span>Pop Out</span>
-                </a>
-              </div>
-            )}
-          </div>
-
-          {!subject.bookUrl ? (
-            <div style={{ background: 'rgba(0,0,0,0.2)', border: '1px dashed rgba(255,255,255,0.1)', borderRadius: '12px', padding: '2rem', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>
-              <span style={{ fontSize: '1rem', fontWeight: '500', color: '#fff', marginBottom: '0.5rem' }}>No Book Configured</span>
-              <span style={{ fontSize: '0.85rem', opacity: 0.7, textAlign: 'center', maxWidth: '300px' }}>Go to the Subject Settings to configure a Book URL.</span>
-            </div>
-          ) : (
-            <div
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                width: '100%',
-                background: 'none',
-                borderRadius: 0,
-                padding: 0,
-                border: 'none'
-              }}
-            >
-              {/* Single page viewport-optimized frame */}
-              <div
-                style={{
-                  position: 'relative',
-                  width: pdfViewMode === 'single' ? 'min(100%, calc(82vh * 0.73))' : '100%',
-                  height: 'clamp(520px, 82vh, 880px)',
-                  maxHeight: '85vh',
-                  borderRadius: '10px',
-                  overflow: 'hidden',
-                  background: '#121214',
-                  boxShadow: '0 8px 30px rgba(0,0,0,0.45)',
-                  border: '1px solid rgba(255,255,255,0.08)',
-                  display: 'flex',
-                  justifyContent: 'center',
-                  alignItems: 'center',
-                  transition: 'width 0.25s ease'
-                }}
-              >
-                <iframe
-                  key={`${getEmbedUrl(subject.bookUrl, currentPdfPage)}-${pdfScale}`}
-                  src={getEmbedUrl(subject.bookUrl, currentPdfPage)}
-                  width="100%"
-                  height="100%"
-                  title="Subject PDF Viewer"
-                  style={{
-                    width: pdfScale === 1 ? '100%' : `${100 / pdfScale}%`,
-                    height: pdfScale === 1 ? '100%' : `${100 / pdfScale}%`,
-                    transform: pdfScale === 1 ? 'none' : `scale(${pdfScale})`,
-                    transformOrigin: 'top center',
-                    border: 'none',
-                    background: '#fff'
-                  }}
-                />
-              </div>
-
-              {/* Informative footer */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', marginTop: '0.65rem', padding: '0 0.35rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-                <span style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
-                  Viewing single page viewport. Use scale controls or click chapter pages below to navigate.
-                </span>
-                {currentPdfPage > 1 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                  {/* Collapsible toggle button */}
                   <button
                     type="button"
-                    onClick={() => setCurrentPdfPage(1)}
-                    style={{ background: 'none', border: 'none', color: 'var(--accent-primary)', fontSize: '0.74rem', cursor: 'pointer', padding: 0 }}
+                    onClick={() => setIsPdfSectionCollapsed(prev => !prev)}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.35rem',
+                      background: isPdfSectionCollapsed ? 'rgba(99, 102, 241, 0.2)' : 'rgba(255,255,255,0.06)',
+                      color: isPdfSectionCollapsed ? '#a5b4fc' : 'var(--text-secondary)',
+                      border: `1px solid ${isPdfSectionCollapsed ? 'rgba(99, 102, 241, 0.4)' : 'rgba(255,255,255,0.1)'}`,
+                      padding: '0.24rem 0.6rem',
+                      borderRadius: '6px',
+                      fontSize: '0.74rem',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease'
+                    }}
+                    title={isPdfSectionCollapsed ? 'Expand PDF section' : 'Collapse PDF section to save space'}
                   >
-                    Jump to Cover (p. 1)
+                    <span>{isPdfSectionCollapsed ? '▼' : '▲'}</span>
+                    <span>{isPdfSectionCollapsed ? 'Expand Reader' : 'Collapse'}</span>
                   </button>
-                )}
+
+                  {/* Add Book Button in Header */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingBookData({ id: null, title: '', url: '', isGovtTextbook: false });
+                      setShowBookModal(true);
+                    }}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.3rem',
+                      background: 'rgba(99, 102, 241, 0.18)',
+                      color: '#c7d2fe',
+                      border: '1px solid rgba(99, 102, 241, 0.35)',
+                      padding: '0.24rem 0.6rem',
+                      borderRadius: '6px',
+                      fontSize: '0.74rem',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease'
+                    }}
+                    title="Add a new reference book or material"
+                  >
+                    <span>+</span>
+                    <span>Add Book</span>
+                  </button>
+
+                  {activeBookUrl && !isPdfSectionCollapsed && (
+                    <>
+                      {/* View Mode Toggle */}
+                      <div style={{ display: 'inline-flex', background: 'rgba(0,0,0,0.3)', borderRadius: '8px', padding: '2px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                        <button
+                          type="button"
+                          onClick={() => setPdfViewMode('single')}
+                          style={{
+                            padding: '0.2rem 0.55rem',
+                            fontSize: '0.72rem',
+                            fontWeight: 600,
+                            borderRadius: '6px',
+                            border: 'none',
+                            background: pdfViewMode === 'single' ? 'var(--accent-primary)' : 'transparent',
+                            color: pdfViewMode === 'single' ? '#fff' : 'var(--text-secondary)',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.3rem',
+                            transition: 'all 0.15s ease'
+                          }}
+                          title="Single Page Mode (fits exactly 1 page in viewport)"
+                        >
+                          <span>📄</span>
+                          <span>Single Page</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPdfViewMode('wide')}
+                          style={{
+                            padding: '0.2rem 0.55rem',
+                            fontSize: '0.72rem',
+                            fontWeight: 600,
+                            borderRadius: '6px',
+                            border: 'none',
+                            background: pdfViewMode === 'wide' ? 'var(--accent-primary)' : 'transparent',
+                            color: pdfViewMode === 'wide' ? '#fff' : 'var(--text-secondary)',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.3rem',
+                            transition: 'all 0.15s ease'
+                          }}
+                          title="Full Width Mode"
+                        >
+                          <span>↔️</span>
+                          <span>Full Width</span>
+                        </button>
+                      </div>
+
+                      {/* Scale buttons */}
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', background: 'rgba(0,0,0,0.3)', borderRadius: '8px', padding: '2px 5px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                        <button
+                          type="button"
+                          onClick={() => setPdfScale(prev => Math.max(0.7, parseFloat((prev - 0.1).toFixed(1))))}
+                          style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', padding: '0.1rem 0.3rem', fontSize: '0.78rem', fontWeight: 700 }}
+                          title="Zoom Out"
+                        >
+                          −
+                        </button>
+                        <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', minWidth: '34px', textAlign: 'center' }}>
+                          {Math.round(pdfScale * 100)}%
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setPdfScale(prev => Math.min(1.4, parseFloat((prev + 0.1).toFixed(1))))}
+                          style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', padding: '0.1rem 0.3rem', fontSize: '0.78rem', fontWeight: 700 }}
+                          title="Zoom In"
+                        >
+                          +
+                        </button>
+                        {pdfScale !== 1 && (
+                          <button
+                            type="button"
+                            onClick={() => setPdfScale(1)}
+                            style={{ background: 'none', border: 'none', color: 'var(--accent-primary)', cursor: 'pointer', fontSize: '0.68rem', padding: '0 0.15rem' }}
+                            title="Reset Zoom"
+                          >
+                            Reset
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Pop out link */}
+                      <a
+                        href={getEmbedUrl(activeBookUrl, currentPdfPage)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.3rem',
+                          background: 'rgba(255,255,255,0.06)',
+                          color: '#fff',
+                          textDecoration: 'none',
+                          padding: '0.22rem 0.55rem',
+                          borderRadius: '6px',
+                          fontSize: '0.74rem',
+                          fontWeight: 500,
+                          border: '1px solid rgba(255,255,255,0.1)',
+                          transition: 'all 0.15s ease'
+                        }}
+                        title="Open Active Book in New Tab"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                        <span>Pop Out</span>
+                      </a>
+                    </>
+                  )}
+                </div>
               </div>
+
+              {/* Book Switcher Pills / Tabs Bar */}
+              {subjectBooks.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.85rem', flexWrap: 'wrap' }}>
+                  {subjectBooks.map((b) => {
+                    const isCurrent = activeBook?.id === b.id;
+                    return (
+                      <div
+                        key={b.id}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.4rem',
+                          padding: '0.28rem 0.65rem',
+                          borderRadius: '8px',
+                          background: isCurrent ? 'rgba(99, 102, 241, 0.25)' : 'rgba(255,255,255,0.04)',
+                          border: `1px solid ${isCurrent ? 'var(--accent-primary, #6366f1)' : 'rgba(255,255,255,0.08)'}`,
+                          cursor: 'pointer',
+                          transition: 'all 0.15s ease'
+                        }}
+                        onClick={() => setSelectedBookId(b.id)}
+                      >
+                        <span style={{ fontSize: '0.85rem' }}>{b.isGovtTextbook ? '🏛️' : '📖'}</span>
+                        <span style={{ fontSize: '0.78rem', fontWeight: isCurrent ? 600 : 500, color: isCurrent ? '#fff' : 'var(--text-secondary)' }}>
+                          {b.title}
+                        </span>
+                        {b.isGovtTextbook && (
+                          <span style={{ fontSize: '0.65rem', padding: '0.05rem 0.35rem', borderRadius: '4px', background: 'rgba(245, 158, 11, 0.2)', color: '#fcd34d', border: '1px solid rgba(245, 158, 11, 0.35)', fontWeight: 600 }}>
+                            Govt
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditingBookData({ id: b.id, title: b.title, url: b.url, isGovtTextbook: b.isGovtTextbook });
+                            setShowBookModal(true);
+                          }}
+                          style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.5)', cursor: 'pointer', padding: '0 0.15rem', fontSize: '0.72rem', marginLeft: '0.2rem' }}
+                          title="Edit book details"
+                        >
+                          ✏️
+                        </button>
+                      </div>
+                    );
+                  })}
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingBookData({ id: null, title: '', url: '', isGovtTextbook: false });
+                      setShowBookModal(true);
+                    }}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.3rem',
+                      padding: '0.28rem 0.65rem',
+                      borderRadius: '8px',
+                      background: 'rgba(255,255,255,0.03)',
+                      border: '1px dashed rgba(255,255,255,0.2)',
+                      color: 'var(--text-secondary)',
+                      fontSize: '0.78rem',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <span>+</span>
+                    <span>Add Another Book</span>
+                  </button>
+                </div>
+              )}
+
+              {/* Collapsed State Summary */}
+              {isPdfSectionCollapsed ? (
+                <div style={{
+                  padding: '0.75rem 1rem',
+                  borderRadius: '10px',
+                  background: 'rgba(0,0,0,0.25)',
+                  border: '1px solid rgba(255,255,255,0.08)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '1rem',
+                  flexWrap: 'wrap'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                    <span style={{ fontSize: '1.2rem' }}>📚</span>
+                    <div>
+                      <div style={{ fontSize: '0.85rem', fontWeight: 600, color: '#fff' }}>
+                        {activeBook ? activeBook.title : 'No Book Selected'}
+                        {activeBook?.isGovtTextbook && (
+                          <span style={{ marginLeft: '0.5rem', fontSize: '0.68rem', padding: '0.08rem 0.4rem', borderRadius: '4px', background: 'rgba(245, 158, 11, 0.2)', color: '#fcd34d', border: '1px solid rgba(245, 158, 11, 0.35)', fontWeight: 600 }}>
+                            Govt Textbook
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+                        PDF reader collapsed to save screen space. Click &quot;Expand Reader&quot; to view pages.
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    {activeBookUrl && (
+                      <a
+                        href={getEmbedUrl(activeBookUrl, currentPdfPage)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          fontSize: '0.76rem',
+                          color: '#818cf8',
+                          padding: '0.3rem 0.6rem',
+                          background: 'rgba(99, 102, 241, 0.1)',
+                          borderRadius: '6px',
+                          border: '1px solid rgba(99, 102, 241, 0.25)',
+                          textDecoration: 'none'
+                        }}
+                      >
+                        Pop Out ↗
+                      </a>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setIsPdfSectionCollapsed(false)}
+                      style={{
+                        fontSize: '0.76rem',
+                        fontWeight: 600,
+                        color: '#fff',
+                        padding: '0.3rem 0.75rem',
+                        background: 'var(--accent-primary, #6366f1)',
+                        borderRadius: '6px',
+                        border: 'none',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      ▼ Expand Reader
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                /* Expanded State: Empty card or Iframe viewer */
+                !activeBookUrl ? (
+                  <div style={{ background: 'rgba(0,0,0,0.2)', border: '1px dashed rgba(255,255,255,0.1)', borderRadius: '12px', padding: '2rem', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>
+                    <span style={{ fontSize: '1.5rem', marginBottom: '0.35rem' }}>📚</span>
+                    <span style={{ fontSize: '1rem', fontWeight: '500', color: '#fff', marginBottom: '0.35rem' }}>No Books Configured</span>
+                    <span style={{ fontSize: '0.85rem', opacity: 0.7, textAlign: 'center', maxWidth: '340px', marginBottom: '1rem' }}>
+                      Add your Government Textbook or Reference PDFs to view lessons here and auto-populate AI question generation.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingBookData({ id: null, title: '', url: '', isGovtTextbook: true });
+                        setShowBookModal(true);
+                      }}
+                      className="primary"
+                      style={{ padding: '0.45rem 1rem', fontSize: '0.82rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}
+                    >
+                      + Add First Book
+                    </button>
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      width: '100%',
+                      background: 'none',
+                      borderRadius: 0,
+                      padding: 0,
+                      border: 'none'
+                    }}
+                  >
+                    {/* Single page viewport-optimized frame */}
+                    <div
+                      style={{
+                        position: 'relative',
+                        width: pdfViewMode === 'single' ? 'min(100%, calc(82vh * 0.73))' : '100%',
+                        height: 'clamp(520px, 82vh, 880px)',
+                        maxHeight: '85vh',
+                        borderRadius: '10px',
+                        overflow: 'hidden',
+                        background: '#121214',
+                        boxShadow: '0 8px 30px rgba(0,0,0,0.45)',
+                        border: '1px solid rgba(255,255,255,0.08)',
+                        display: 'flex',
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                        transition: 'width 0.25s ease'
+                      }}
+                    >
+                      <iframe
+                        key={`${getEmbedUrl(activeBookUrl, currentPdfPage)}-${pdfScale}`}
+                        src={getEmbedUrl(activeBookUrl, currentPdfPage)}
+                        width="100%"
+                        height="100%"
+                        title="Subject PDF Viewer"
+                        style={{
+                          width: pdfScale === 1 ? '100%' : `${100 / pdfScale}%`,
+                          height: pdfScale === 1 ? '100%' : `${100 / pdfScale}%`,
+                          transform: pdfScale === 1 ? 'none' : `scale(${pdfScale})`,
+                          transformOrigin: 'top center',
+                          border: 'none',
+                          background: '#fff'
+                        }}
+                      />
+                    </div>
+
+                    {/* Informative footer */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', marginTop: '0.65rem', padding: '0 0.35rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                      <span style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+                        Currently viewing: <strong style={{ color: '#fff' }}>{activeBook?.title}</strong> ({pdfViewMode === 'single' ? 'Single page' : 'Full width'}). Use scale controls or click chapter pages below to navigate.
+                      </span>
+                      {currentPdfPage > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => setCurrentPdfPage(1)}
+                          style={{ background: 'none', border: 'none', color: 'var(--accent-primary)', fontSize: '0.74rem', cursor: 'pointer', padding: 0 }}
+                        >
+                          Jump to Cover (p. 1)
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )
+              )}
             </div>
-          )}
-        </div>
+          );
+        })()}
 
         {/* 1. Mark Distribution Section */}
-        <div style={{ background: 'none', border: 'none', borderRadius: 0, padding: 0, marginBottom: '3rem', width: '100%' }}>
+        <div style={{ background: 'none', border: 'none', borderRadius: 0, padding: 0, marginBottom: '3rem', width: '100%', textAlign: 'left' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', paddingBottom: '0.75rem', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 20V10"></path><path d="M12 20V4"></path><path d="M6 20v-6"></path></svg>
@@ -1579,28 +2512,38 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                 </span>
                 <button
                   type="button"
-                  onClick={() => {
-                    const cleaned = cleanAndFormatMarkDistribution(markDistValue);
-                    setMarkDistValue(cleaned);
-                  }}
+                  onClick={handleCleanMarkDistWithAI}
+                  disabled={isCleaningMarkDistAI}
                   style={{
                     padding: '0.24rem 0.65rem',
                     fontSize: '0.74rem',
                     fontWeight: 600,
-                    background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.25) 0%, rgba(99, 102, 241, 0.25) 100%)',
+                    background: isCleaningMarkDistAI
+                      ? 'rgba(139, 92, 246, 0.4)'
+                      : 'linear-gradient(135deg, rgba(139, 92, 246, 0.25) 0%, rgba(99, 102, 241, 0.25) 100%)',
                     border: '1px solid rgba(139, 92, 246, 0.45)',
                     borderRadius: '5px',
                     color: '#c4b5fd',
-                    cursor: 'pointer',
+                    cursor: isCleaningMarkDistAI ? 'wait' : 'pointer',
                     display: 'inline-flex',
                     alignItems: 'center',
                     gap: '0.3rem',
+                    opacity: isCleaningMarkDistAI ? 0.75 : 1,
                     transition: 'all 0.15s ease'
                   }}
-                  title="Clean markdown symbols, LaTeX math ($ \times), remove duplicate headers, and format into neat question items"
+                  title="Use AI to structure syllabus by Part, standardize question numbers, and clean mark formulas"
                 >
-                  <span>✨</span>
-                  <span>Clean & Organize</span>
+                  {isCleaningMarkDistAI ? (
+                    <>
+                      <span>⏳</span>
+                      <span>Structuring with AI...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>✨</span>
+                      <span>Clean & Organize</span>
+                    </>
+                  )}
                 </button>
               </div>
 
@@ -1627,28 +2570,45 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                 <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', alignItems: 'center' }}>
                   <button
                     type="button"
-                    onClick={() => {
-                      const cleaned = cleanAndFormatMarkDistribution(markDistValue);
-                      setMarkDistValue(cleaned);
-                    }}
+                    onClick={handleCleanMarkDistWithAI}
+                    disabled={isCleaningMarkDistAI}
                     style={{
                       padding: '0.22rem 0.6rem',
                       fontSize: '0.74rem',
                       fontWeight: 600,
-                      background: 'rgba(139, 92, 246, 0.2)',
+                      background: isCleaningMarkDistAI
+                        ? 'rgba(139, 92, 246, 0.4)'
+                        : 'rgba(139, 92, 246, 0.2)',
                       border: '1px solid rgba(139, 92, 246, 0.4)',
                       borderRadius: '5px',
                       color: '#c4b5fd',
-                      cursor: 'pointer',
+                      cursor: isCleaningMarkDistAI ? 'wait' : 'pointer',
                       display: 'inline-flex',
                       alignItems: 'center',
-                      gap: '0.25rem'
+                      gap: '0.25rem',
+                      opacity: isCleaningMarkDistAI ? 0.75 : 1
                     }}
                   >
-                    <span>✨</span>
-                    <span>Clean & Organize</span>
+                    {isCleaningMarkDistAI ? (
+                      <>
+                        <span>⏳</span>
+                        <span>Structuring with AI...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>✨</span>
+                        <span>Clean & Organize</span>
+                      </>
+                    )}
                   </button>
 
+                  <button
+                    type="button"
+                    onClick={() => setMarkDistValue(`Part\u2013A: Seen Passage (25 Marks)\n   - Read the text/dialogue and answer questions 1, 2, 3 and 4. (This text/dialogue will be taken from English for Today, Class Five.)\n1. Multiple Choice Questions (MCQ): 1 \u00d7 5 = 5 marks\n2. Fill in the Blanks: 1 \u00d7 5 = 5 marks\n3. Write True/False for each statement: 1 \u00d7 5 = 5 marks\n4. Answering Short Questions: 2 \u00d7 5 = 10 marks\n   - Five questions will be set based on the text. Students must answer them in complete sentences demonstrating understanding of the passage.\n\nPart\u2013B: Unseen Passage (10 Marks)\n   - Read the text/dialogue and answer the questions 5 and 6.\n5. Matching words with their meanings: 1 \u00d7 5 = 5 marks\n6. Writing question answers in short: 1 + 2 + 2 = 5 marks\n   - Three (3) short questions will be given covering knowledge, understanding, and higher-order thinking.\n\nPart\u2013C: Grammar & Vocabulary (35 Marks)\n7. Rearranging words to make meaningful sentences: 1 \u00d7 5 = 5 marks\n8. WH-Questions: 2 \u00d7 5 = 10 marks\n   - Five statements will be provided. Students will frame WH-questions (Who, What, When, Where, Why, How).\n9. Use of Punctuation and Capital Letters: 1 \u00d7 5 = 5 marks\n10. Complete the sentences with the correct form of verbs in brackets: 1 \u00d7 5 = 5 marks\n11. Using correct prepositions (Filling in the blanks): 1 \u00d7 5 = 5 marks\n12. Articles (Filling in the blanks): 1 \u00d7 5 = 5 marks\n\nPart\u2013D: Writing Part (30 Marks)\n13. Writing a Short Composition with or without clues: 10 marks\n14. Writing informal/formal letter with or without clues: 10 marks\n15. Writing an email with or without clues: 10 marks\n\nTotal: 100 Marks`)}
+                    style={{ padding: '0.2rem 0.6rem', fontSize: '0.72rem', background: 'linear-gradient(135deg, rgba(99,102,241,0.18), rgba(139,92,246,0.18))', border: '1px solid rgba(99,102,241,0.45)', borderRadius: '4px', color: '#c7d2fe', cursor: 'pointer', fontWeight: 600 }}
+                  >
+                    📚 Class 5 English (100M)
+                  </button>
                   <button
                     type="button"
                     onClick={() => setMarkDistValue("MCQ: 20 marks\nShort Questions: 30 marks\nCreative/Descriptive: 50 marks\nTotal: 100 marks")}
@@ -1962,6 +2922,8 @@ Ensure the "questions" array contains ALL the individual generated questions cov
           {modelTestsList.length > 0 ? (
             <div style={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
               {modelTestsList.map((test, idx) => {
+                const displayTitle = numberedTitleMap[test.id] || test.title || `Model Test - ${test.date}`;
+                const genTime = formatGeneratedTime(test);
                 const displayScore = test.examinerGrading?.totalAwarded !== undefined 
                   ? `${test.examinerGrading.totalAwarded}/${test.examinerGrading.totalMax || 100}`
                   : (test.result && test.result !== '40/100' && test.result !== 'Pending' ? test.result : '0');
@@ -1987,7 +2949,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                     <div style={{ textAlign: 'left' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.2rem', flexWrap: 'wrap' }}>
                         <span style={{ fontSize: '0.94rem', fontWeight: 600, color: '#fff' }}>
-                          {test.title || `Model Test - ${test.date}`}
+                          {displayTitle}
                         </span>
                         {test.difficulty && (
                           <span style={{ fontSize: '0.68rem', padding: '0.1rem 0.45rem', borderRadius: '10px', background: 'rgba(139, 92, 246, 0.2)', color: 'var(--accent-primary)', fontWeight: 600 }}>
@@ -2002,6 +2964,11 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                       </div>
                       <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', display: 'flex', gap: '0.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
                         <span>📅 {test.date || 'No date'}</span>
+                        {genTime && (
+                          <span style={{ color: '#cbd5e1', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+                            • 🕒 {genTime}
+                          </span>
+                        )}
                         {test.chapters && test.chapters.length > 0 && (
                           <span>• {test.chapters.length} chapters covered</span>
                         )}
@@ -2018,7 +2985,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                         onClick={() => {
                           setEditingDurationModal({
                             testId: test.id,
-                            title: test.title || `Model Test - ${test.date}`,
+                            title: displayTitle,
                             currentDuration: test.duration || 60
                           });
                           setTempDurationValue(test.duration || 60);
@@ -2062,7 +3029,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                       {/* Open Test Button */}
                       <button
                         type="button"
-                        onClick={() => openTestViewer({ subjectId: subject.id, examId: exam.id, testId: test.id, ...test })}
+                        onClick={() => openTestViewer({ ...test, subjectId: subject.id, examId: exam.id, testId: test.id, displayTitle, generatedTime: genTime || test.generatedTime })}
                         style={{ padding: '0.25rem 0.65rem', fontSize: '0.74rem', background: 'rgba(139, 92, 246, 0.18)', color: 'var(--accent-primary)', border: '1px solid rgba(139, 92, 246, 0.35)', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.3rem', fontWeight: 600 }}
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
@@ -2344,6 +3311,114 @@ Ensure the "questions" array contains ALL the individual generated questions cov
         </div>
       )}
 
+      {/* Add / Edit Book Modal */}
+      {showBookModal && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 120, padding: '1rem' }}>
+          <div className="card" style={{ maxWidth: '520px', width: '100%', padding: '1.5rem', textAlign: 'left', borderRadius: '12px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: '0.75rem' }}>
+              <h3 style={{ margin: 0, fontSize: '1.15rem', color: '#fff', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span>📚</span>
+                <span>{editingBookData.id ? 'Edit Book / Material' : 'Add Book / Material'}</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => { setShowBookModal(false); setEditingBookData({ id: null, title: '', url: '', isGovtTextbook: false }); }}
+                style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1.2rem', padding: '0.2rem' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              handleSaveBook(editingBookData);
+            }}>
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.35rem', fontWeight: 500 }}>
+                  Book / Material Title <span style={{ color: '#f87171' }}>*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. English for Today (Govt Textbook) or Grammar Guide"
+                  value={editingBookData.title}
+                  onChange={(e) => setEditingBookData(prev => ({ ...prev, title: e.target.value }))}
+                  style={{ width: '100%', boxSizing: 'border-box', padding: '0.6rem 0.75rem', background: 'rgba(0,0,0,0.35)', border: '1px solid var(--glass-border)', borderRadius: '8px', color: '#fff', fontSize: '0.85rem' }}
+                />
+              </div>
+
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.35rem', fontWeight: 500 }}>
+                  PDF URL or Link <span style={{ color: '#f87171' }}>*</span>
+                </label>
+                <input
+                  type="url"
+                  required
+                  placeholder="https://... (Google Drive preview, direct PDF, or web link)"
+                  value={editingBookData.url}
+                  onChange={(e) => setEditingBookData(prev => ({ ...prev, url: e.target.value }))}
+                  style={{ width: '100%', boxSizing: 'border-box', padding: '0.6rem 0.75rem', background: 'rgba(0,0,0,0.35)', border: '1px solid var(--glass-border)', borderRadius: '8px', color: '#fff', fontSize: '0.85rem' }}
+                />
+                <span style={{ display: 'block', fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '0.3rem' }}>
+                  Supports Google Drive PDF links (e.g. drive.google.com/file/d/.../view) and direct .pdf links.
+                </span>
+              </div>
+
+              <div style={{ marginBottom: '1.25rem', padding: '0.75rem', background: 'rgba(99, 102, 241, 0.08)', border: '1px solid rgba(99, 102, 241, 0.25)', borderRadius: '8px' }}>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.55rem', cursor: 'pointer', margin: 0 }}>
+                  <input
+                    type="checkbox"
+                    checked={editingBookData.isGovtTextbook}
+                    onChange={(e) => setEditingBookData(prev => ({ ...prev, isGovtTextbook: e.target.checked }))}
+                    style={{ width: '16px', height: '16px', marginTop: '2px', accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
+                  />
+                  <div>
+                    <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#c7d2fe', display: 'block' }}>
+                      ⭐ Official Government Textbook
+                    </span>
+                    <span style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.7)', lineHeight: 1.35, display: 'block', marginTop: '0.15rem' }}>
+                      Mark this as the official board textbook. The AI question generator will strictly use it as the source for Seen Passages and curriculum lessons.
+                    </span>
+                  </div>
+                </label>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: editingBookData.id ? 'space-between' : 'flex-end', alignItems: 'center', paddingTop: '0.75rem', borderTop: '1px solid rgba(255,255,255,0.08)', gap: '0.5rem' }}>
+                {editingBookData.id && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleDeleteBook(editingBookData.id);
+                      setShowBookModal(false);
+                    }}
+                    style={{ padding: '0.45rem 0.85rem', fontSize: '0.78rem', background: 'rgba(239, 68, 68, 0.15)', color: '#f87171', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: '6px', cursor: 'pointer', fontWeight: 500 }}
+                  >
+                    Delete Book
+                  </button>
+                )}
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button
+                    type="button"
+                    onClick={() => { setShowBookModal(false); setEditingBookData({ id: null, title: '', url: '', isGovtTextbook: false }); }}
+                    style={{ padding: '0.45rem 0.85rem', fontSize: '0.8rem', background: 'rgba(255,255,255,0.08)', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={bookSaveLoading}
+                    className="primary"
+                    style={{ padding: '0.45rem 1rem', fontSize: '0.8rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}
+                  >
+                    {bookSaveLoading ? 'Saving...' : (editingBookData.id ? 'Save Changes' : 'Add Book')}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Model Test Generator Modal */}
       {showGeneratorModal && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 110, padding: '1rem' }}>
@@ -2367,6 +3442,28 @@ Ensure the "questions" array contains ALL the individual generated questions cov
               {generateError && (
                 <div style={{ background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#f87171', padding: '0.75rem', borderRadius: '8px', fontSize: '0.85rem' }}>
                   {generateError}
+                </div>
+              )}
+
+              {/* Anti-Duplication Active Banner */}
+              {modelTestsList.length > 0 && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.65rem',
+                  background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.12) 0%, rgba(6, 182, 212, 0.08) 100%)',
+                  border: '1px solid rgba(16, 185, 129, 0.35)',
+                  borderRadius: '10px',
+                  padding: '0.65rem 0.85rem',
+                  fontSize: '0.78rem',
+                  color: '#a7f3d0',
+                  lineHeight: 1.45
+                }}>
+                  <span style={{ fontSize: '1.15rem', flexShrink: 0 }}>🛡️</span>
+                  <div>
+                    <strong style={{ color: '#34d399' }}>Zero-Duplication Engine Active:</strong>{' '}
+                    <span>All {totalExistingQuestionsCount > 0 ? <strong>{totalExistingQuestionsCount}</strong> : ''} previous questions across your <strong>{modelTestsList.length}</strong> existing model {modelTestsList.length === 1 ? 'test' : 'tests'} are strictly excluded. Gemini will rotate Seen Passages and generate 100% fresh, non-repetitive questions.</span>
+                  </div>
                 </div>
               )}
 
@@ -2427,6 +3524,135 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                   </button>
                 ))}
               </div>
+
+              {/* Reference Books to Include with Interactive Checkboxes */}
+              {(() => {
+                const books = getSubjectBooks(subject);
+                const allSelected = books.length > 0 && books.every(b => selectedBookIdsForTest.includes(b.id));
+
+                return (
+                  <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '10px', padding: '0.85rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>
+                      <label style={{ fontSize: '0.82rem', fontWeight: 600, color: '#e2e8f0', margin: 0, display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                        <span>📚</span>
+                        <span>Reference Books for Generation</span>
+                        {books.length > 0 && (
+                          <span style={{ fontSize: '0.7rem', padding: '0.1rem 0.45rem', borderRadius: '10px', background: 'rgba(99, 102, 241, 0.15)', border: '1px solid rgba(99, 102, 241, 0.3)', color: '#a5b4fc', fontWeight: 600 }}>
+                            {selectedBookIdsForTest.length} of {books.length} selected
+                          </span>
+                        )}
+                      </label>
+                      {books.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (allSelected) {
+                              setSelectedBookIdsForTest([]);
+                            } else {
+                              setSelectedBookIdsForTest(books.map(b => b.id));
+                            }
+                          }}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: 'var(--accent-primary, #818cf8)',
+                            fontSize: '0.74rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            padding: '0.1rem 0.3rem',
+                            textDecoration: 'underline'
+                          }}
+                        >
+                          {allSelected ? 'Deselect All' : 'Select All'}
+                        </button>
+                      )}
+                    </div>
+
+                    {books.length === 0 ? (
+                      <div style={{ padding: '0.65rem 0.85rem', background: 'rgba(234, 179, 8, 0.08)', border: '1px solid rgba(234, 179, 8, 0.2)', borderRadius: '8px', fontSize: '0.75rem', color: '#facc15', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span>No books added in Subject Material. Generation will use general syllabus curriculum.</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingBookData({ id: null, title: '', url: '', isGovtTextbook: true });
+                            setShowBookModal(true);
+                          }}
+                          style={{ background: 'rgba(234, 179, 8, 0.2)', border: '1px solid rgba(234, 179, 8, 0.35)', color: '#fff', fontSize: '0.72rem', padding: '0.2rem 0.5rem', borderRadius: '5px', cursor: 'pointer', fontWeight: 600 }}
+                        >
+                          + Add Book
+                        </button>
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+                        {books.map(b => {
+                          const isChecked = selectedBookIdsForTest.includes(b.id);
+                          return (
+                            <label
+                              key={b.id}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                padding: '0.45rem 0.7rem',
+                                borderRadius: '8px',
+                                background: isChecked ? 'rgba(99, 102, 241, 0.12)' : 'rgba(255,255,255,0.02)',
+                                border: `1px solid ${isChecked ? 'rgba(99, 102, 241, 0.35)' : 'rgba(255,255,255,0.06)'}`,
+                                cursor: 'pointer',
+                                transition: 'all 0.15s ease'
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', minWidth: 0 }}>
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setSelectedBookIdsForTest(prev => [...prev, b.id]);
+                                    } else {
+                                      setSelectedBookIdsForTest(prev => prev.filter(id => id !== b.id));
+                                    }
+                                  }}
+                                  style={{ width: '15px', height: '15px', accentColor: 'var(--accent-primary, #6366f1)', cursor: 'pointer' }}
+                                />
+                                <span style={{ fontSize: '0.8rem', fontWeight: isChecked ? 600 : 500, color: isChecked ? '#fff' : 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {b.title}
+                                </span>
+                                {b.isGovtTextbook && (
+                                  <span style={{ fontSize: '0.66rem', padding: '0.08rem 0.4rem', borderRadius: '4px', background: 'rgba(245, 158, 11, 0.2)', color: '#fcd34d', border: '1px solid rgba(245, 158, 11, 0.35)', fontWeight: 600, flexShrink: 0 }}>
+                                    🏛️ Govt Textbook (Seen Passage Source)
+                                  </span>
+                                )}
+                              </div>
+
+                              {b.url && (
+                                <a
+                                  href={b.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  style={{
+                                    color: '#818cf8',
+                                    fontWeight: 500,
+                                    fontSize: '0.72rem',
+                                    textDecoration: 'underline',
+                                    flexShrink: 0,
+                                    marginLeft: '0.5rem'
+                                  }}
+                                >
+                                  Open PDF ↗
+                                </a>
+                              )}
+                            </label>
+                          );
+                        })}
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
+                          💡 Checked books provide passage readings, lessons, and textbook reference for AI question generation.
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Syllabus Chapters to Cover with Modern Styled Checkboxes */}
               <div>
@@ -2668,7 +3894,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                   <h1 style={{ margin: 0, fontSize: '1.2rem', color: '#fff', fontWeight: 700 }}>
-                    {viewingModelTest.title || 'Model Test'}
+                    {viewingModelTest.displayTitle || viewingModelTest.title || 'Model Test'}
                   </h1>
                   {viewingModelTest.difficulty && (
                     <span style={{ padding: '0.1rem 0.5rem', borderRadius: '10px', background: 'rgba(139, 92, 246, 0.2)', border: '1px solid rgba(139, 92, 246, 0.3)', color: '#c4b5fd', fontWeight: 600, fontSize: '0.72rem' }}>
@@ -2678,11 +3904,47 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                 </div>
                 <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
                   <span>📅 {viewingModelTest.date || 'Today'}</span>
+                  {(viewingModelTest.generatedTime || formatGeneratedTime(viewingModelTest)) && (
+                    <span style={{ color: '#e2e8f0', display: 'inline-flex', alignItems: 'center', gap: '0.2rem' }}>
+                      • 🕒 {viewingModelTest.generatedTime || formatGeneratedTime(viewingModelTest)}
+                    </span>
+                  )}
                   <span>•</span>
                   <span>Total Marks: <strong style={{ color: '#fff' }}>{modalTotalMax}</strong></span>
                   <span>•</span>
                   <span style={{ color: '#34d399', fontWeight: 600 }}>Result {currentModalDisplayResult}</span>
                 </div>
+                {viewingModelTest.checkedBooks && viewingModelTest.checkedBooks.length > 0 && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap', marginTop: '0.25rem' }}>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>Reference Books:</span>
+                    {viewingModelTest.checkedBooks.map((b, bIdx) => (
+                      <a
+                        key={b.id || bIdx}
+                        href={b.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.25rem',
+                          padding: '0.1rem 0.45rem',
+                          borderRadius: '4px',
+                          background: 'rgba(99, 102, 241, 0.15)',
+                          border: '1px solid rgba(99, 102, 241, 0.3)',
+                          color: '#c7d2fe',
+                          fontSize: '0.7rem',
+                          textDecoration: 'none',
+                          fontWeight: 500
+                        }}
+                        title={`Open ${b.title} in new tab`}
+                      >
+                        <span>{b.isGovtTextbook ? '🏛️' : '📖'}</span>
+                        <span>{b.title}</span>
+                        <span>↗</span>
+                      </a>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -2821,6 +4083,41 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                 </button>
               </div>
 
+              {/* AI Auto Review & Mark Button */}
+              <button
+                type="button"
+                onClick={handleAiAutoReview}
+                disabled={isAiReviewing}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.45rem',
+                  padding: '0.4rem 0.85rem',
+                  fontSize: '0.82rem',
+                  fontWeight: 700,
+                  background: isAiReviewing ? 'rgba(168, 85, 247, 0.4)' : 'linear-gradient(135deg, #8b5cf6 0%, #d946ef 100%)',
+                  border: '1px solid rgba(255,255,255,0.25)',
+                  borderRadius: '6px',
+                  color: '#fff',
+                  cursor: isAiReviewing ? 'not-allowed' : 'pointer',
+                  boxShadow: '0 2px 10px rgba(168, 85, 247, 0.35)',
+                  transition: 'all 0.2s ease'
+                }}
+                title="Run AI Auto-Review & Marking across all answers before final teacher review"
+              >
+                {isAiReviewing ? (
+                  <>
+                    <span style={{ width: '0.85rem', height: '0.85rem', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', borderRadius: '50%', display: 'inline-block', animation: 'spin 1s linear infinite' }} />
+                    <span>AI Reviewing...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>🤖</span>
+                    <span>AI Auto Review</span>
+                  </>
+                )}
+              </button>
+
               <button
                 type="button"
                 onClick={handleCopyTest}
@@ -2878,7 +4175,40 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                     </div>
                   </div>
                 </div>
-                <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    onClick={handleAiAutoReview}
+                    disabled={isAiReviewing}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.45rem',
+                      padding: '0.45rem 1.05rem',
+                      fontSize: '0.84rem',
+                      fontWeight: 700,
+                      background: isAiReviewing ? 'rgba(139, 92, 246, 0.4)' : 'linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%)',
+                      border: '1px solid rgba(255, 255, 255, 0.3)',
+                      color: '#fff',
+                      borderRadius: '8px',
+                      cursor: isAiReviewing ? 'not-allowed' : 'pointer',
+                      boxShadow: '0 4px 14px rgba(139, 92, 246, 0.4)',
+                      transition: 'all 0.2s ease'
+                    }}
+                    title="Auto-evaluate all student answers with AI before final teacher review"
+                  >
+                    {isAiReviewing ? (
+                      <>
+                        <span style={{ width: '0.8rem', height: '0.8rem', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', borderRadius: '50%', display: 'inline-block', animation: 'spin 1s linear infinite' }} />
+                        <span>AI Reviewing & Marking...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>🤖</span>
+                        <span>AI Auto Review & Mark</span>
+                      </>
+                    )}
+                  </button>
                   <span style={{ fontSize: '0.85rem', color: '#34d399', background: 'rgba(16, 185, 129, 0.2)', padding: '0.3rem 0.8rem', borderRadius: '12px', fontWeight: 700 }}>
                     ⏱️ Time Taken: {formatDuration(elapsedSeconds)}
                   </span>
@@ -3049,6 +4379,28 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                 <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', padding: '0.15rem 0.6rem', borderRadius: '12px', background: 'rgba(255,255,255,0.06)' }}>
                   {testViewMode === 'student' ? `${modalAnsweredCount}/${modalQuestions.length} Answered` : `${modalGradedCount}/${modalQuestions.length} Graded • Awarded: ${modalAwardedSum}/${modalTotalMax}`}
                 </span>
+                <button
+                  type="button"
+                  onClick={handleAiAutoReview}
+                  disabled={isAiReviewing}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.35rem',
+                    padding: '0.2rem 0.65rem',
+                    fontSize: '0.76rem',
+                    fontWeight: 700,
+                    background: isAiReviewing ? 'rgba(168, 85, 247, 0.4)' : 'linear-gradient(135deg, #9333ea 0%, #db2777 100%)',
+                    border: '1px solid rgba(255,255,255,0.25)',
+                    borderRadius: '12px',
+                    color: '#fff',
+                    cursor: isAiReviewing ? 'not-allowed' : 'pointer',
+                    boxShadow: '0 2px 8px rgba(147, 51, 234, 0.3)'
+                  }}
+                  title="Run AI Auto-Review & Marking across all questions before final teacher review"
+                >
+                  {isAiReviewing ? '⏳ AI Marking...' : '🤖 AI Review & Mark'}
+                </button>
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
@@ -3078,6 +4430,27 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                     ☰ All List
                   </button>
                 </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsNavigatorCollapsed(prev => !prev)}
+                  style={{
+                    padding: '0.22rem 0.65rem',
+                    fontSize: '0.75rem',
+                    fontWeight: 600,
+                    border: '1px solid ' + (isNavigatorCollapsed ? 'rgba(139, 92, 246, 0.4)' : 'rgba(255,255,255,0.12)'),
+                    borderRadius: '6px',
+                    background: isNavigatorCollapsed ? 'rgba(139, 92, 246, 0.2)' : 'rgba(255,255,255,0.06)',
+                    color: isNavigatorCollapsed ? '#d8b4fe' : 'var(--text-secondary)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.3rem'
+                  }}
+                  title="Toggle Question Sets Navigator visibility"
+                >
+                  🧭 {isNavigatorCollapsed ? '▼ Show Sets' : '▲ Hide Sets'}
+                </button>
               </div>
             </div>
 
@@ -3088,8 +4461,61 @@ Ensure the "questions" array contains ALL the individual generated questions cov
               </div>
             )}
 
-            {/* Contained Question Navigator (Collapsible by Question Type & Contained Scroller Strip) */}
-            {modalQuestions.length > 0 && (
+            {/* Contained Question Navigator: Collapsed Single-Line View */}
+            {modalQuestions.length > 0 && isNavigatorCollapsed && (
+              <div
+                onClick={() => setIsNavigatorCollapsed(false)}
+                style={{
+                  width: '100%',
+                  maxWidth: '100%',
+                  boxSizing: 'border-box',
+                  background: 'rgba(15, 23, 42, 0.75)',
+                  border: '1px solid rgba(255, 255, 255, 0.08)',
+                  borderRadius: '10px',
+                  padding: '0.5rem 0.85rem',
+                  marginBottom: '1rem',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  cursor: 'pointer',
+                  boxShadow: '0 2px 10px rgba(0,0,0,0.2)'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: '0.9rem' }}>🧭</span>
+                  <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#fff' }}>
+                    Question Navigator ({modalQuestions.length} Questions • {questionSets.length} Sets)
+                  </span>
+                  {modalQuestions[currentSlideIndex] && (
+                    <span style={{ fontSize: '0.74rem', color: '#c4b5fd', background: 'rgba(139, 92, 246, 0.15)', border: '1px solid rgba(139, 92, 246, 0.25)', padding: '0.12rem 0.5rem', borderRadius: '6px' }}>
+                      Current: Q{modalQuestions[currentSlideIndex].displayNumber} (Set {modalQuestions[currentSlideIndex].setNumber})
+                    </span>
+                  )}
+                  <span style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+                    {testViewMode === 'student' ? `${modalAnsweredCount}/${modalQuestions.length} Answered` : `${modalGradedCount}/${modalQuestions.length} Graded`}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); setIsNavigatorCollapsed(false); }}
+                  style={{
+                    padding: '0.22rem 0.65rem',
+                    fontSize: '0.74rem',
+                    fontWeight: 600,
+                    background: 'rgba(139, 92, 246, 0.2)',
+                    border: '1px solid rgba(139, 92, 246, 0.35)',
+                    borderRadius: '6px',
+                    color: '#d8b4fe',
+                    cursor: 'pointer'
+                  }}
+                >
+                  ▼ Show Sets
+                </button>
+              </div>
+            )}
+
+            {/* Contained Question Navigator: Expanded View (Collapsible by Question Type & Contained Scroller Strip) */}
+            {modalQuestions.length > 0 && !isNavigatorCollapsed && (
               <div style={{
                 width: '100%',
                 maxWidth: '100%',
@@ -3136,6 +4562,10 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                       const isFilterActive = selectedSetFilter === s.setNumber;
                       const isCurrentActive = modalQuestions[currentSlideIndex]?.setNumber === s.setNumber;
                       const sAnswered = s.questions.filter(q => Boolean(studentAnswers[q.id]?.trim())).length;
+                      const sGraded = s.questions.filter(q => awardedMarks[q.id] !== undefined && awardedMarks[q.id] !== '').length;
+                      const sAwarded = s.questions.reduce((sum, q) => sum + (Number(awardedMarks[q.id]) || 0), 0);
+                      const sTotalMarks = s.questions.reduce((sum, q) => sum + (Number(q.marks) || 5), 0);
+                      const setScoreColor = sAwarded === 0 ? '#f87171' : (sAwarded < sTotalMarks ? '#facc15' : '#34d399');
 
                       return (
                         <button
@@ -3163,16 +4593,23 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                           }}
                         >
                           <span>Set {s.setNumber}: {s.title}</span>
-                          <span style={{ fontSize: '0.68rem', opacity: 0.8, color: sAnswered === s.questions.length ? '#34d399' : 'inherit' }}>
-                            ({sAnswered}/{s.questions.length})
+                          <span style={{
+                            fontSize: '0.68rem',
+                            opacity: 0.9,
+                            fontWeight: 700,
+                            color: testViewMode === 'examiner'
+                              ? (sGraded === s.questions.length ? setScoreColor : (sGraded > 0 ? '#38bdf8' : 'inherit'))
+                              : (isExamFinished && sGraded > 0 ? setScoreColor : (sAnswered === s.questions.length ? '#34d399' : 'inherit'))
+                          }}>
+                            {testViewMode === 'examiner' ? `(${sGraded}/${s.questions.length})` : `(${sAnswered}/${s.questions.length})`}
                           </span>
                         </button>
                       );
                     })}
                   </div>
 
-                  {/* Mode Selector & Scroller Arrow Controls */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  {/* Mode Selector & Collapse All/Expand All & Scroller Arrow Controls */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
                     <div style={{ display: 'flex', background: 'rgba(0,0,0,0.4)', borderRadius: '6px', padding: '2px', border: '1px solid rgba(255,255,255,0.08)' }}>
                       <button
                         type="button"
@@ -3209,6 +4646,63 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                         ↔ Scroller Strip
                       </button>
                     </div>
+
+                    {navigatorViewMode === 'collapsible' && (
+                      <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center' }}>
+                        <button
+                          type="button"
+                          onClick={handleCollapseAllSets}
+                          style={{
+                            padding: '0.22rem 0.55rem',
+                            fontSize: '0.72rem',
+                            fontWeight: 600,
+                            background: 'rgba(255,255,255,0.06)',
+                            border: '1px solid rgba(255,255,255,0.12)',
+                            borderRadius: '5px',
+                            color: '#cbd5e1',
+                            cursor: 'pointer'
+                          }}
+                          title="Collapse all question sets"
+                        >
+                          ▲ Collapse All
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleExpandAllSets}
+                          style={{
+                            padding: '0.22rem 0.55rem',
+                            fontSize: '0.72rem',
+                            fontWeight: 600,
+                            background: 'rgba(255,255,255,0.06)',
+                            border: '1px solid rgba(255,255,255,0.12)',
+                            borderRadius: '5px',
+                            color: '#cbd5e1',
+                            cursor: 'pointer'
+                          }}
+                          title="Expand all question sets"
+                        >
+                          ▼ Expand All
+                        </button>
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => setIsNavigatorCollapsed(true)}
+                      style={{
+                        padding: '0.22rem 0.55rem',
+                        fontSize: '0.72rem',
+                        fontWeight: 600,
+                        background: 'rgba(255,255,255,0.06)',
+                        border: '1px solid rgba(255,255,255,0.12)',
+                        borderRadius: '5px',
+                        color: 'var(--text-secondary)',
+                        cursor: 'pointer'
+                      }}
+                      title="Collapse entire Question Navigator box"
+                    >
+                      ▲ Hide Sets
+                    </button>
 
                     {navigatorViewMode === 'scroller' && (
                       <div style={{ display: 'flex', gap: '0.25rem' }}>
@@ -3256,9 +4750,13 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                     {questionSets
                       .filter(s => selectedSetFilter === 'all' || selectedSetFilter === s.setNumber)
                       .map(s => {
-                        const isCollapsed = Boolean(collapsedSets[s.setNumber]);
+                        const isCollapsed = isSetCollapsed(s.setNumber);
                         const isSetCurrent = modalQuestions[currentSlideIndex]?.setNumber === s.setNumber;
                         const sAnswered = s.questions.filter(q => Boolean(studentAnswers[q.id]?.trim())).length;
+                        const sGraded = s.questions.filter(q => awardedMarks[q.id] !== undefined && awardedMarks[q.id] !== '').length;
+                        const sAwarded = s.questions.reduce((sum, q) => sum + (Number(awardedMarks[q.id]) || 0), 0);
+                        const sTotalMarks = s.questions.reduce((sum, q) => sum + (Number(q.marks) || 5), 0);
+                        const setScoreColor = sAwarded === 0 ? '#f87171' : (sAwarded < sTotalMarks ? '#facc15' : '#34d399');
 
                         return (
                           <div
@@ -3280,15 +4778,29 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                                 padding: '0.45rem 0.75rem',
                                 cursor: 'pointer',
                                 background: isSetCurrent ? 'rgba(139, 92, 246, 0.14)' : 'rgba(255,255,255,0.02)',
-                                userSelect: 'none'
+                                userSelect: 'none',
+                                transition: 'background 0.15s ease'
                               }}
                             >
                               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                                 <span style={{ fontSize: '0.82rem', fontWeight: 700, color: isSetCurrent ? '#fff' : '#e2e8f0' }}>
                                   Set {s.setNumber}: {s.title}
                                 </span>
-                                <span style={{ fontSize: '0.7rem', color: sAnswered === s.questions.length ? '#34d399' : 'var(--text-secondary)', background: 'rgba(255,255,255,0.06)', padding: '0.1rem 0.45rem', borderRadius: '10px' }}>
-                                  {sAnswered}/{s.questions.length} Answered
+                                <span style={{
+                                  fontSize: '0.7rem',
+                                  fontWeight: 600,
+                                  color: testViewMode === 'examiner'
+                                    ? (sGraded === s.questions.length ? setScoreColor : (sGraded > 0 ? '#38bdf8' : 'var(--text-secondary)'))
+                                    : (isExamFinished && sGraded > 0 ? setScoreColor : (sAnswered === s.questions.length ? '#34d399' : 'var(--text-secondary)')),
+                                  background: 'rgba(255,255,255,0.06)',
+                                  padding: '0.1rem 0.45rem',
+                                  borderRadius: '10px'
+                                }}>
+                                  {testViewMode === 'examiner'
+                                    ? `${sGraded}/${s.questions.length} Graded • ${sAwarded}/${sTotalMarks} Marks`
+                                    : (isExamFinished && sGraded > 0
+                                        ? `${sAwarded}/${sTotalMarks} Marks (${sAnswered}/${s.questions.length} Ans)`
+                                        : `${sAnswered}/${s.questions.length} Answered`)}
                                 </span>
                                 {isSetCurrent && (
                                   <span style={{ fontSize: '0.65rem', background: 'rgba(16, 185, 129, 0.2)', color: '#34d399', padding: '0.1rem 0.4rem', borderRadius: '4px', fontWeight: 700 }}>
@@ -3296,7 +4808,18 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                                   </span>
                                 )}
                               </div>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', color: 'var(--text-secondary)', fontSize: '0.72rem' }}>
+                              <div style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.35rem',
+                                color: isCollapsed ? '#cbd5e1' : 'var(--accent-primary)',
+                                background: isCollapsed ? 'rgba(255,255,255,0.06)' : 'rgba(139, 92, 246, 0.15)',
+                                border: '1px solid ' + (isCollapsed ? 'rgba(255,255,255,0.1)' : 'rgba(139, 92, 246, 0.3)'),
+                                padding: '0.18rem 0.55rem',
+                                borderRadius: '6px',
+                                fontSize: '0.72rem',
+                                fontWeight: 600
+                              }}>
                                 <span>{isCollapsed ? '▼ Expand' : '▲ Collapse'}</span>
                               </div>
                             </div>
@@ -3311,10 +4834,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                               }}>
                                 {s.questions.map(q => {
                                   const isActive = q.globalIndex === currentSlideIndex;
-                                  const isAns = Boolean(studentAnswers[q.id]?.trim());
-                                  const isGrd = awardedMarks[q.id] !== undefined && awardedMarks[q.id] !== '';
-                                  const awd = awardedMarks[q.id];
-                                  const qMax = Number(q.marks) || 5;
+                                  const stat = getQuestionGradingStatus(q);
 
                                   return (
                                     <button
@@ -3332,28 +4852,39 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                                         fontSize: '0.78rem',
                                         fontWeight: 700,
                                         cursor: 'pointer',
-                                        border: isActive ? '1.5px solid var(--accent-primary)' : '1px solid rgba(255,255,255,0.08)',
+                                        border: isActive
+                                          ? '1.5px solid var(--accent-primary)'
+                                          : `1px solid ${stat.border}`,
                                         background: isActive
                                           ? 'rgba(139, 92, 246, 0.35)'
-                                          : (testViewMode === 'student'
-                                              ? (isAns ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.03)')
-                                              : (isGrd ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.03)')),
-                                        color: isActive
-                                          ? '#fff'
-                                          : (testViewMode === 'student'
-                                              ? (isAns ? '#34d399' : 'var(--text-secondary)')
-                                              : (isGrd ? '#34d399' : 'var(--text-secondary)')),
+                                          : stat.bg,
+                                        color: isActive ? '#fff' : stat.color,
                                         display: 'flex',
                                         alignItems: 'center',
                                         gap: '0.3rem',
                                         boxShadow: isActive ? '0 0 10px rgba(139, 92, 246, 0.35)' : 'none',
                                         transition: 'all 0.12s ease'
                                       }}
-                                      title={`Question ${q.displayNumber} (${q.cleanSectionTitle || cleanText(q.section)})`}
+                                      title={`Question ${q.displayNumber} (${q.cleanSectionTitle || cleanText(q.section)}) - ${stat.badgeText}`}
                                     >
                                       <span>{q.displayNumber || `Q${q.globalIndex + 1}`}</span>
-                                      {testViewMode === 'student' && isAns && <span style={{ fontSize: '0.72rem', color: '#34d399' }}>✓</span>}
-                                      {testViewMode === 'examiner' && isGrd && <span style={{ fontSize: '0.68rem', color: '#34d399' }}>[{awd}/{qMax}]</span>}
+                                      {testViewMode === 'examiner' ? (
+                                        stat.examinerTag ? (
+                                          <span style={{ fontSize: '0.68rem', color: stat.color, fontWeight: 700 }}>
+                                            {stat.examinerTag}
+                                          </span>
+                                        ) : null
+                                      ) : (
+                                        isExamFinished ? (
+                                          stat.studentTag ? (
+                                            <span style={{ fontSize: '0.7rem', color: stat.color, fontWeight: 700 }}>
+                                              {stat.studentTag}
+                                            </span>
+                                          ) : null
+                                        ) : (
+                                          stat.isAns && <span style={{ fontSize: '0.72rem', color: '#34d399' }}>✓</span>
+                                        )
+                                      )}
                                     </button>
                                   );
                                 })}
@@ -3385,10 +4916,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                       const originalIdx = modalQuestions.findIndex(orig => orig.id === q.id);
                       const qIdx = originalIdx !== -1 ? originalIdx : filteredIdx;
                       const isActive = qIdx === currentSlideIndex;
-                      const isAns = Boolean(studentAnswers[q.id]?.trim());
-                      const isGrd = awardedMarks[q.id] !== undefined && awardedMarks[q.id] !== '';
-                      const awd = awardedMarks[q.id];
-                      const qMax = Number(q.marks) || 5;
+                      const stat = getQuestionGradingStatus(q);
 
                       return (
                         <button
@@ -3407,28 +4935,39 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                             fontSize: '0.8rem',
                             fontWeight: 700,
                             cursor: 'pointer',
-                            border: isActive ? '1.5px solid var(--accent-primary)' : '1px solid rgba(255,255,255,0.08)',
+                            border: isActive
+                              ? '1.5px solid var(--accent-primary)'
+                              : `1px solid ${stat.border}`,
                             background: isActive
                               ? 'rgba(139, 92, 246, 0.35)'
-                              : (testViewMode === 'student'
-                                  ? (isAns ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.03)')
-                                  : (isGrd ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.03)')),
-                            color: isActive
-                              ? '#fff'
-                              : (testViewMode === 'student'
-                                  ? (isAns ? '#34d399' : 'var(--text-secondary)')
-                                  : (isGrd ? '#34d399' : 'var(--text-secondary)')),
+                              : stat.bg,
+                            color: isActive ? '#fff' : stat.color,
                             display: 'flex',
                             alignItems: 'center',
                             gap: '0.3rem',
                             boxShadow: isActive ? '0 0 10px rgba(139, 92, 246, 0.35)' : 'none',
                             transition: 'all 0.12s ease'
                           }}
-                          title={`Question ${q.displayNumber} (${q.cleanSectionTitle || cleanText(q.section)})`}
+                          title={`Question ${q.displayNumber} (${q.cleanSectionTitle || cleanText(q.section)}) - ${stat.badgeText}`}
                         >
                           <span>{q.displayNumber || `Q${qIdx + 1}`}</span>
-                          {testViewMode === 'student' && isAns && <span style={{ fontSize: '0.72rem', color: '#34d399' }}>✓</span>}
-                          {testViewMode === 'examiner' && isGrd && <span style={{ fontSize: '0.68rem', color: '#34d399' }}>[{awd}/{qMax}]</span>}
+                          {testViewMode === 'examiner' ? (
+                            stat.examinerTag ? (
+                              <span style={{ fontSize: '0.68rem', color: stat.color, fontWeight: 700 }}>
+                                {stat.examinerTag}
+                              </span>
+                            ) : null
+                          ) : (
+                            isExamFinished ? (
+                              stat.studentTag ? (
+                                <span style={{ fontSize: '0.7rem', color: stat.color, fontWeight: 700 }}>
+                                  {stat.studentTag}
+                                </span>
+                              ) : null
+                            ) : (
+                              stat.isAns && <span style={{ fontSize: '0.72rem', color: '#34d399' }}>✓</span>
+                            )
+                          )}
                         </button>
                       );
                     })}
@@ -3528,17 +5067,42 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                         </div>
 
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
-                          {testViewMode === 'student' && isAns && (
-                            <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#34d399', background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.25)', padding: '0.2rem 0.6rem', borderRadius: '9999px', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
-                              <span>✓</span>
-                              <span>Answered</span>
-                            </span>
-                          )}
-                          {testViewMode === 'examiner' && (
-                            <span style={{ fontSize: '0.75rem', fontWeight: 600, color: isGrd ? '#34d399' : '#facc15', background: isGrd ? 'rgba(16, 185, 129, 0.15)' : 'rgba(234, 179, 8, 0.15)', border: `1px solid ${isGrd ? 'rgba(16, 185, 129, 0.3)' : 'rgba(234, 179, 8, 0.3)'}`, padding: '0.2rem 0.6rem', borderRadius: '9999px' }}>
-                              {isGrd ? `✓ Awarded: ${awarded}/${qMarks}` : 'Pending Marking'}
-                            </span>
-                          )}
+                          {(() => {
+                            const currentQStat = getQuestionGradingStatus(q);
+                            return testViewMode === 'student' ? (
+                              <span style={{
+                                fontSize: '0.75rem',
+                                fontWeight: 600,
+                                color: currentQStat.badgeColor,
+                                background: currentQStat.badgeBg,
+                                border: `1px solid ${currentQStat.badgeBorder}`,
+                                padding: '0.2rem 0.65rem',
+                                borderRadius: '9999px',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.25rem'
+                              }}>
+                                <span>{currentQStat.symbol || '○'}</span>
+                                <span>{currentQStat.badgeText}</span>
+                              </span>
+                            ) : (
+                              <span style={{
+                                fontSize: '0.75rem',
+                                fontWeight: 600,
+                                color: currentQStat.badgeColor,
+                                background: currentQStat.badgeBg,
+                                border: `1px solid ${currentQStat.badgeBorder}`,
+                                padding: '0.2rem 0.65rem',
+                                borderRadius: '9999px',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.25rem'
+                              }}>
+                                <span>{currentQStat.symbol || '⏳'}</span>
+                                <span>{currentQStat.examinerBadgeText}</span>
+                              </span>
+                            );
+                          })()}
                           <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#f1f5f9', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)', padding: '0.2rem 0.65rem', borderRadius: '9999px' }}>
                             [{qMarks} Marks]
                           </span>
@@ -3862,6 +5426,39 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                         </div>
                       )}
 
+                      {/* AFTER FINISH: Show Score & Teacher's Note to Student */}
+                      {isExamFinished && testViewMode === 'student' && isGrd && (
+                        <div style={{
+                          marginTop: '0.85rem',
+                          background: Number(awarded) === 0 ? 'rgba(239, 68, 68, 0.08)' : (Number(awarded) < qMarks ? 'rgba(234, 179, 8, 0.08)' : 'rgba(16, 185, 129, 0.08)'),
+                          border: `1px solid ${Number(awarded) === 0 ? 'rgba(239, 68, 68, 0.25)' : (Number(awarded) < qMarks ? 'rgba(234, 179, 8, 0.25)' : 'rgba(16, 185, 129, 0.25)')}`,
+                          borderRadius: '10px',
+                          padding: '0.85rem 1rem'
+                        }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.4rem' }}>
+                            <div style={{
+                              fontSize: '0.88rem',
+                              fontWeight: 700,
+                              color: Number(awarded) === 0 ? '#f87171' : (Number(awarded) < qMarks ? '#facc15' : '#34d399'),
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.4rem'
+                            }}>
+                              <span>{Number(awarded) === 0 ? '✗' : (Number(awarded) < qMarks ? '~' : '✓')}</span>
+                              <span>Score: {awarded} / {qMarks} Marks</span>
+                              <span style={{ fontSize: '0.75rem', fontWeight: 500, opacity: 0.85 }}>
+                                ({Number(awarded) === 0 ? 'Incorrect' : (Number(awarded) < qMarks ? 'Partially Correct' : 'Full Marks')})
+                              </span>
+                            </div>
+                          </div>
+                          {examinerNotes[q.id] && (
+                            <div style={{ fontSize: '0.82rem', color: '#cbd5e1', marginTop: '0.4rem', borderTop: '1px dashed rgba(255,255,255,0.1)', paddingTop: '0.4rem' }}>
+                              💬 <strong style={{ color: '#fff' }}>Teacher's Note:</strong> {examinerNotes[q.id]}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                       {/* Examiner Evaluation Space */}
                       {testViewMode === 'examiner' && (
                         <div style={{ marginTop: '0.95rem', background: 'rgba(139, 92, 246, 0.06)', border: '1px solid rgba(139, 92, 246, 0.2)', borderRadius: '10px', padding: '0.85rem 1rem' }}>
@@ -3895,12 +5492,40 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                                   setAwardedMarks(prev => ({ ...prev, [q.id]: num }));
                                 }}
                                 placeholder="0"
-                                style={{ width: '60px', padding: '0.3rem 0.5rem', fontSize: '0.88rem', fontWeight: 700, color: '#34d399', textAlign: 'center', background: 'rgba(0,0,0,0.5)', border: '1px solid var(--accent-primary)', borderRadius: '6px' }}
+                                style={{
+                                  width: '60px',
+                                  padding: '0.3rem 0.5rem',
+                                  fontSize: '0.88rem',
+                                  fontWeight: 700,
+                                  color: isGrd ? (Number(awarded) === 0 ? '#f87171' : (Number(awarded) < qMarks ? '#facc15' : '#34d399')) : 'var(--text-secondary)',
+                                  textAlign: 'center',
+                                  background: 'rgba(0,0,0,0.5)',
+                                  border: `1px solid ${isGrd ? (Number(awarded) === 0 ? 'rgba(239, 68, 68, 0.5)' : (Number(awarded) < qMarks ? 'rgba(234, 179, 8, 0.5)' : 'rgba(16, 185, 129, 0.5)')) : 'var(--accent-primary)'}`,
+                                  borderRadius: '6px'
+                                }}
                               />
                               <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>/ {qMarks} Marks</span>
                             </div>
 
                             <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                              <button
+                                type="button"
+                                onClick={() => handleAiGradeSingleQuestion(q)}
+                                disabled={aiReviewingQId === q.id || isAiReviewing}
+                                style={{
+                                  padding: '0.22rem 0.65rem',
+                                  fontSize: '0.75rem',
+                                  fontWeight: 600,
+                                  background: 'rgba(168, 85, 247, 0.2)',
+                                  border: '1px solid rgba(168, 85, 247, 0.45)',
+                                  color: '#d8b4fe',
+                                  borderRadius: '4px',
+                                  cursor: (aiReviewingQId === q.id || isAiReviewing) ? 'not-allowed' : 'pointer'
+                                }}
+                                title="Use AI to check this specific question and suggest marks & note"
+                              >
+                                {aiReviewingQId === q.id ? '⏳ Checking...' : '🤖 AI Mark Q'}
+                              </button>
                               <button type="button" onClick={() => handleAwardMarkAndConfirm(q.id, qMarks, qMarks)} style={{ padding: '0.22rem 0.6rem', fontSize: '0.75rem', background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#34d399', borderRadius: '4px', cursor: 'pointer' }}>
                                 Full ({qMarks})
                               </button>
@@ -4075,6 +5700,39 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                       Total Awarded: <strong style={{ color: '#34d399', fontSize: '1rem' }}>{modalAwardedSum}</strong> / {modalTotalMax} Marks
                     </p>
                   </div>
+                  <button
+                    type="button"
+                    onClick={handleAiAutoReview}
+                    disabled={isAiReviewing}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.45rem',
+                      padding: '0.45rem 1rem',
+                      fontSize: '0.82rem',
+                      fontWeight: 700,
+                      background: isAiReviewing ? 'rgba(147, 51, 234, 0.4)' : 'linear-gradient(135deg, #7c3aed 0%, #db2777 100%)',
+                      border: '1px solid rgba(255, 255, 255, 0.25)',
+                      borderRadius: '8px',
+                      color: '#fff',
+                      cursor: isAiReviewing ? 'not-allowed' : 'pointer',
+                      boxShadow: '0 4px 12px rgba(124, 58, 237, 0.35)',
+                      transition: 'all 0.2s ease'
+                    }}
+                    title="Run or re-run AI auto-marking on all questions"
+                  >
+                    {isAiReviewing ? (
+                      <>
+                        <span style={{ width: '0.8rem', height: '0.8rem', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', borderRadius: '50%', display: 'inline-block', animation: 'spin 1s linear infinite' }} />
+                        <span>AI Marking in Progress...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>🤖</span>
+                        <span>Re-Run AI Auto-Review & Marking</span>
+                      </>
+                    )}
+                  </button>
                 </div>
 
                 <div>
