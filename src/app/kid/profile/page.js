@@ -5,7 +5,7 @@ import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { auth, database } from '../../../lib/firebase';
 import { generateGeminiContent, autoReviewExamWithAI } from '../../../lib/gemini';
 import { onAuthStateChanged, signOut, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth';
-import { ref, get, push, set, onValue, remove } from 'firebase/database';
+import { ref, get, push, set, onValue, remove, update } from 'firebase/database';
 import Link from 'next/link';
 import MarkDistributionField from '../../../components/MarkDistributionField';
 
@@ -17,6 +17,7 @@ function KidProfileContent() {
   const [kid, setKid] = useState(null);
   const [user, setUser] = useState(null);
   const [isStudentView, setIsStudentView] = useState(false);
+  const [isStudentAccount, setIsStudentAccount] = useState(false);
   
   const [subjects, setSubjects] = useState([]);
   const [exams, setExams] = useState([]);
@@ -103,6 +104,9 @@ function KidProfileContent() {
   const [pauseLog, setPauseLog] = useState([]);            // [{ reason, pausedAt, resumedAt }]
   const [showPauseModal, setShowPauseModal] = useState(false);
   const [pauseReasonInput, setPauseReasonInput] = useState('');
+  const [retakeRequestReason, setRetakeRequestReason] = useState('');
+  const [isSubmittingRetakeRequest, setIsSubmittingRetakeRequest] = useState(false);
+  const [isReviewingRetakeRequest, setIsReviewingRetakeRequest] = useState(false);
 
   // Question Navigator State (Scroller vs Collapsible by Question Type)
   const [navigatorViewMode, setNavigatorViewMode] = useState('collapsible'); // 'collapsible' or 'scroller'
@@ -521,6 +525,12 @@ function KidProfileContent() {
             if (foundKid) {
               setKid(foundKid);
               setUser(currentUser);
+              setIsStudentAccount(Boolean(
+                queryParentId &&
+                currentUser.email &&
+                foundKid.email &&
+                currentUser.email.trim().toLowerCase() === foundKid.email.trim().toLowerCase()
+              ));
               
               const subjectsRef = ref(database, `users/${searchParams.get("parentId") || currentUser.uid}/kids/${foundKid.id}/subjects`);
               onValue(subjectsRef, (snap) => {
@@ -1338,6 +1348,210 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
     setPauseLog(test.pauseLog ? Object.values(test.pauseLog) : []);
     setShowPauseModal(false);
     setPauseReasonInput('');
+    setRetakeRequestReason('');
+  };
+
+  const getModelTestPath = () => {
+    if (!user || !kid || !viewingModelTest?.subjectId || !viewingModelTest?.examId) return null;
+    const dataOwnerUid = searchParams.get('parentId') || user.uid;
+    const testId = viewingModelTest.testId || viewingModelTest.id;
+    if (!testId) return null;
+    return `users/${dataOwnerUid}/kids/${kid.id}/subjects/${viewingModelTest.subjectId}/modelTests/${viewingModelTest.examId}/${testId}`;
+  };
+
+  useEffect(() => {
+    const testId = viewingModelTest?.testId || viewingModelTest?.id;
+    const subjectId = viewingModelTest?.subjectId;
+    const examId = viewingModelTest?.examId;
+    const dataOwnerUid = searchParams.get('parentId') || user?.uid;
+    if (!testId || !subjectId || !examId || !dataOwnerUid || !kid?.id) return;
+    const path = `users/${dataOwnerUid}/kids/${kid.id}/subjects/${subjectId}/modelTests/${examId}/${testId}`;
+
+    return onValue(ref(database, `${path}/retakeRequest`), (snapshot) => {
+      const request = snapshot.val() || null;
+      setViewingModelTest(prev => prev ? ({ ...prev, retakeRequest: request }) : prev);
+
+      if (request?.status === 'approved') {
+        setIsExamStarted(false);
+        setIsExamFinished(false);
+        setIsExamPaused(false);
+        setPausedAt(null);
+        setTotalPausedMs(0);
+        setPauseLog([]);
+        setExamStartedAt(null);
+        setExamSubmittedAt(null);
+        setTimerSeconds(0);
+        setStudentAnswers({});
+        setUploadedAnswerPages([]);
+        setAwardedMarks({});
+        setExaminerNotes({});
+        setOverallExaminerFeedback('');
+        setViewingModelTest(prev => prev ? ({
+          ...prev,
+          isFinished: false,
+          submittedAt: null,
+          startedAt: null,
+          timeSpentSeconds: null,
+          studentAnswers: {},
+          uploadedPages: [],
+          examinerGrading: null,
+          result: '0',
+          isPaused: false,
+          pausedAt: null,
+          totalPausedMs: 0,
+          pauseLog: null,
+          retakeRequest: request
+        }) : prev);
+      }
+    });
+  }, [viewingModelTest?.testId, viewingModelTest?.id, user?.uid, kid?.id, viewingModelTest?.subjectId, viewingModelTest?.examId, searchParams.get('parentId')]);
+
+  const handleRequestRetake = async (event) => {
+    event.preventDefault();
+    if (
+      !isStudentAccount ||
+      !isExamFinished ||
+      !viewingModelTest ||
+      viewingModelTest.retakeRequest?.status === 'pending' ||
+      !user ||
+      !kid ||
+      isSubmittingRetakeRequest
+    ) return;
+
+    const path = getModelTestPath();
+    if (!path) return;
+
+    const request = {
+      status: 'pending',
+      reason: retakeRequestReason.trim(),
+      requestedAt: Date.now(),
+      requestedBy: user.uid,
+      requestedByName: user.displayName || kid.name || 'Student'
+    };
+
+    setIsSubmittingRetakeRequest(true);
+    try {
+      await set(ref(database, `${path}/retakeRequest`), request);
+      setViewingModelTest(prev => ({ ...prev, retakeRequest: request }));
+      setRetakeRequestReason('');
+    } catch (err) {
+      console.error('Error requesting exam retake:', err);
+      alert(`Could not send retake request: ${err.message || 'Unknown error'}`);
+    } finally {
+      setIsSubmittingRetakeRequest(false);
+    }
+  };
+
+  const handleReviewRetakeRequest = async (approve) => {
+    if (isStudentAccount || isReviewingRetakeRequest || viewingModelTest?.retakeRequest?.status !== 'pending') return;
+    const path = getModelTestPath();
+    if (!path) return;
+
+    if (approve && !window.confirm('Approve this retake? The submitted answers, uploads, and grading will be saved in attempt history before the exam is reopened.')) {
+      return;
+    }
+
+    setIsReviewingRetakeRequest(true);
+    try {
+      const testRef = ref(database, path);
+      if (!approve) {
+        const request = {
+          ...viewingModelTest.retakeRequest,
+          status: 'rejected',
+          reviewedAt: Date.now(),
+          reviewedBy: user.uid
+        };
+        await set(ref(database, `${path}/retakeRequest`), request);
+        setViewingModelTest(prev => ({ ...prev, retakeRequest: request }));
+        return;
+      }
+
+      const snapshot = await get(testRef);
+      const currentTest = snapshot.val();
+      if (!currentTest || currentTest.retakeRequest?.status !== 'pending') {
+        alert('This retake request is no longer pending. Refresh the exam and try again.');
+        return;
+      }
+
+      const now = Date.now();
+      const attemptId = push(ref(database, `${path}/attemptHistory`)).key;
+      if (!attemptId) throw new Error('Could not create an attempt history record.');
+
+      const approvedRequest = {
+        ...currentTest.retakeRequest,
+        status: 'approved',
+        reviewedAt: now,
+        reviewedBy: user.uid
+      };
+      const previousAttempt = {
+        attemptNumber: Object.keys(currentTest.attemptHistory || {}).length + 1,
+        savedAt: now,
+        retakeRequest: approvedRequest,
+        submittedAt: currentTest.submittedAt || null,
+        startedAt: currentTest.startedAt || null,
+        timeSpentSeconds: currentTest.timeSpentSeconds || null,
+        studentAnswers: currentTest.studentAnswers || {},
+        uploadedPages: currentTest.uploadedPages || [],
+        examinerGrading: currentTest.examinerGrading || null,
+        result: currentTest.result || '0',
+        pauseLog: currentTest.pauseLog || null
+      };
+
+      await update(testRef, {
+        [`attemptHistory/${attemptId}`]: previousAttempt,
+        isFinished: false,
+        submittedAt: null,
+        startedAt: null,
+        timeSpentSeconds: null,
+        studentAnswers: null,
+        uploadedPages: null,
+        examinerGrading: null,
+        result: '0',
+        isPaused: false,
+        pausedAt: null,
+        totalPausedMs: 0,
+        pauseLog: null,
+        retakeRequest: approvedRequest
+      });
+
+      setViewingModelTest(prev => ({
+        ...prev,
+        isFinished: false,
+        submittedAt: null,
+        startedAt: null,
+        timeSpentSeconds: null,
+        studentAnswers: {},
+        uploadedPages: [],
+        examinerGrading: null,
+        result: '0',
+        isPaused: false,
+        pausedAt: null,
+        totalPausedMs: 0,
+        pauseLog: null,
+        retakeRequest: approvedRequest,
+        attemptHistory: { ...(currentTest.attemptHistory || {}), [attemptId]: previousAttempt }
+      }));
+      setStudentAnswers({});
+      setUploadedAnswerPages([]);
+      setAwardedMarks({});
+      setExaminerNotes({});
+      setOverallExaminerFeedback('');
+      setIsExamStarted(false);
+      setIsExamFinished(false);
+      setIsExamPaused(false);
+      setPausedAt(null);
+      setTotalPausedMs(0);
+      setPauseLog([]);
+      setExamStartedAt(null);
+      setExamSubmittedAt(null);
+      setTimerSeconds(0);
+      setNotificationMsg('Retake approved. The submitted attempt has been saved in history.');
+    } catch (err) {
+      console.error(`Error ${approve ? 'approving' : 'rejecting'} exam retake:`, err);
+      alert(`Could not ${approve ? 'approve' : 'decline'} the retake request: ${err.message || 'Unknown error'}`);
+    } finally {
+      setIsReviewingRetakeRequest(false);
+    }
   };
 
   const handleUpdateExamDuration = async (newMinutes) => {
@@ -1376,40 +1590,46 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
     const now = Date.now();
     setExamStartedAt(now);
     setIsExamStarted(true);
+    setIsExamPaused(false);
+    setPausedAt(null);
+    setTotalPausedMs(0);
     try {
       const path = `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${viewingModelTest.subjectId}/modelTests/${viewingModelTest.examId}/${viewingModelTest.testId || viewingModelTest.id}`;
       await set(ref(database, `${path}/startedAt`), now);
       await set(ref(database, `${path}/duration`), defaultDurationMinutes);
+      await set(ref(database, `${path}/isPaused`), false);
+      await set(ref(database, `${path}/totalPausedMs`), 0);
+      await set(ref(database, `${path}/retakeRequest`), null);
       setViewingModelTest(prev => ({
         ...prev,
         startedAt: now,
-        duration: defaultDurationMinutes
+        duration: defaultDurationMinutes,
+        isPaused: false,
+        totalPausedMs: 0,
+        retakeRequest: null
       }));
     } catch (err) {
       console.error('Error starting exam timer:', err);
     }
   };
 
-  // Pause the exam — opens the reason modal
-  const handlePauseExam = () => {
-    setShowPauseModal(true);
-    setPauseReasonInput('');
-  };
-
-  // Confirm pause with a reason
-  const handleConfirmPause = async (reason) => {
-    if (!viewingModelTest || !user || !kid) return;
+  // Pause the exam
+  const handlePauseExam = async (reason = '') => {
+    if (!viewingModelTest || !user || !kid || isExamPaused || !isExamStarted || isExamFinished) return;
     const now = Date.now();
     setIsExamPaused(true);
     setPausedAt(now);
-    setShowPauseModal(false);
+    const effectiveReason = reason || pauseReasonInput || 'Break';
+    const entry = { reason: effectiveReason, pausedAt: now, resumedAt: null };
+    setPauseLog(prev => [...prev, entry]);
+    setViewingModelTest(prev => prev ? ({ ...prev, isPaused: true, pausedAt: now }) : prev);
+
     try {
       const path = `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${viewingModelTest.subjectId}/modelTests/${viewingModelTest.examId}/${viewingModelTest.testId || viewingModelTest.id}`;
-      const entry = { reason: reason || 'No reason given', pausedAt: now, resumedAt: null };
-      await push(ref(database, `${path}/pauseLog`), entry);
-      // Save time-of-pause so we can compute elapsed correctly on reload
+      await set(ref(database, `${path}/isPaused`), true);
+      await set(ref(database, `${path}/pausedAt`), now);
       await set(ref(database, `${path}/totalPausedMs`), totalPausedMs);
-      setPauseLog(prev => [...prev, entry]);
+      await push(ref(database, `${path}/pauseLog`), entry);
     } catch (err) {
       console.error('Error saving pause:', err);
     }
@@ -1417,9 +1637,9 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
 
   // Resume the exam
   const handleResumeExam = async () => {
-    if (!viewingModelTest || !user || !kid) return;
+    if (!viewingModelTest || !user || !kid || !isExamPaused) return;
     const now = Date.now();
-    const additionalPause = pausedAt ? (now - pausedAt) : 0;
+    const additionalPause = pausedAt ? Math.max(0, now - pausedAt) : 0;
     const newTotalPausedMs = totalPausedMs + additionalPause;
     setTotalPausedMs(newTotalPausedMs);
     setPausedAt(null);
@@ -1430,8 +1650,12 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
       if (updated.length > 0) updated[updated.length - 1] = { ...updated[updated.length - 1], resumedAt: now };
       return updated;
     });
+    setViewingModelTest(prev => prev ? ({ ...prev, isPaused: false, pausedAt: null, totalPausedMs: newTotalPausedMs }) : prev);
+
     try {
       const path = `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${viewingModelTest.subjectId}/modelTests/${viewingModelTest.examId}/${viewingModelTest.testId || viewingModelTest.id}`;
+      await set(ref(database, `${path}/isPaused`), false);
+      await set(ref(database, `${path}/pausedAt`), null);
       await set(ref(database, `${path}/totalPausedMs`), newTotalPausedMs);
     } catch (err) {
       console.error('Error resuming exam:', err);
@@ -1446,12 +1670,17 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
     try {
       setSavingStatus('saving');
       const now = Date.now();
-      const timeSpent = examStartedAt ? Math.max(1, Math.floor((now - examStartedAt) / 1000)) : (viewingModelTest.timeSpentSeconds || 0);
+      const currentPause = (isExamPaused && pausedAt) ? Math.max(0, now - pausedAt) : 0;
+      const timeSpent = examStartedAt 
+        ? Math.max(1, Math.floor((now - examStartedAt - totalPausedMs - currentPause) / 1000)) 
+        : (viewingModelTest.timeSpentSeconds || 0);
 
       const path = `users/${searchParams.get("parentId") || user.uid}/kids/${kid.id}/subjects/${viewingModelTest.subjectId}/modelTests/${viewingModelTest.examId}/${viewingModelTest.testId}`;
       await set(ref(database, `${path}/isFinished`), true);
       await set(ref(database, `${path}/submittedAt`), now);
       await set(ref(database, `${path}/timeSpentSeconds`), timeSpent);
+      await set(ref(database, `${path}/isPaused`), false);
+      await set(ref(database, `${path}/pausedAt`), null);
       await set(ref(database, `${path}/studentAnswers`), studentAnswers);
 
       setViewingModelTest(prev => ({
@@ -1459,10 +1688,14 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
         isFinished: true,
         submittedAt: now,
         timeSpentSeconds: timeSpent,
+        isPaused: false,
+        pausedAt: null,
         studentAnswers
       }));
 
       setIsExamFinished(true);
+      setIsExamPaused(false);
+      setPausedAt(null);
       setExamSubmittedAt(now);
       setNotificationMsg('🎉 Exam completed and submitted successfully! Answer keys and solutions are now unlocked.');
       setTimeout(() => setNotificationMsg(''), 4500);
@@ -1874,12 +2107,13 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
         ? Number(viewingModelTest.duration) 
         : (totalMaxMarks <= 20 ? 30 : totalMaxMarks <= 50 ? 60 : totalMaxMarks <= 100 ? 90 : 120));
   const totalDurationSeconds = defaultDurationMinutes * 60;
+  const currentPauseDuration = (isExamPaused && pausedAt) ? Math.max(0, Date.now() - pausedAt) : 0;
   const elapsedSeconds = isExamFinished && viewingModelTest?.timeSpentSeconds 
     ? Number(viewingModelTest.timeSpentSeconds) 
-    : (examStartedAt ? Math.max(0, Math.floor((Date.now() - examStartedAt) / 1000)) : 0);
+    : (examStartedAt ? Math.max(0, Math.floor((Date.now() - examStartedAt - totalPausedMs - currentPauseDuration) / 1000)) : 0);
   const remainingSeconds = Math.max(0, totalDurationSeconds - elapsedSeconds);
-  const isTimeLow = isExamStarted && !isExamFinished && remainingSeconds <= 300 && remainingSeconds > 0;
-  const isTimeUp = isExamStarted && !isExamFinished && remainingSeconds === 0;
+  const isTimeLow = isExamStarted && !isExamFinished && !isExamPaused && remainingSeconds <= 300 && remainingSeconds > 0;
+  const isTimeUp = isExamStarted && !isExamFinished && !isExamPaused && remainingSeconds === 0;
 
   // Group questions by set / question type for contained collapsible & filtered navigation
   const questionSets = (() => {
@@ -3662,6 +3896,21 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                                             <span>{test.duration ? `${test.duration}m` : 'Time'}</span>
                                             <span style={{ fontSize: '0.65rem', opacity: 0.8 }}>✏️</span>
                                           </button>
+                                          {test.retakeRequest?.status === 'pending' && (
+                                            <span
+                                              role="status"
+                                              style={{
+                                                fontSize: '0.66rem',
+                                                fontWeight: 700,
+                                                padding: '0.18rem 0.45rem',
+                                                borderRadius: '6px',
+                                                background: 'rgba(245, 158, 11, 0.16)',
+                                                color: '#fcd34d'
+                                              }}
+                                            >
+                                              Retake requested
+                                            </span>
+                                          )}
                                           <span style={{
                                             fontSize: '0.7rem',
                                             fontWeight: 700,
@@ -4370,14 +4619,20 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                 borderRadius: '8px',
                 background: isExamFinished 
                   ? 'rgba(16, 185, 129, 0.12)' 
-                  : (isTimeLow || isTimeUp ? 'rgba(239, 68, 68, 0.18)' : 'rgba(0, 0, 0, 0.45)'),
+                  : (isExamPaused
+                      ? 'rgba(245, 158, 11, 0.15)'
+                      : (isTimeLow || isTimeUp ? 'rgba(239, 68, 68, 0.18)' : 'rgba(0, 0, 0, 0.45)')),
                 border: `1px solid ${isExamFinished 
                   ? 'rgba(16, 185, 129, 0.35)' 
-                  : (isTimeLow || isTimeUp ? '#ef4444' : 'rgba(255, 255, 255, 0.12)')}`,
-                boxShadow: isTimeLow ? '0 0 10px rgba(239, 68, 68, 0.35)' : 'none'
+                  : (isExamPaused
+                      ? 'rgba(245, 158, 11, 0.5)'
+                      : (isTimeLow || isTimeUp ? '#ef4444' : 'rgba(255, 255, 255, 0.12)'))}`,
+                boxShadow: isExamPaused
+                  ? '0 0 10px rgba(245, 158, 11, 0.25)'
+                  : (isTimeLow ? '0 0 10px rgba(239, 68, 68, 0.35)' : 'none')
               }}>
                 <span style={{ fontSize: '1rem' }}>
-                  {isExamFinished ? '⏱️' : (isTimeLow || isTimeUp ? '⏰' : '⏱️')}
+                  {isExamFinished ? '⏱️' : (isExamPaused ? '⏸️' : (isTimeLow || isTimeUp ? '⏰' : '⏱️'))}
                 </span>
                 <div style={{ textAlign: 'left', minWidth: '70px' }}>
                   <div style={{
@@ -4387,38 +4642,63 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                     letterSpacing: '0.5px',
                     color: isExamFinished 
                       ? '#34d399' 
-                      : (isTimeLow || isTimeUp ? '#f87171' : '#38bdf8')
+                      : (isExamPaused
+                          ? '#fbbf24'
+                          : (isTimeLow || isTimeUp ? '#f87171' : '#38bdf8'))
                   }}>
                     {isExamFinished 
                       ? formatDuration(elapsedSeconds)
                       : (isExamStarted ? formatTime(remainingSeconds) : `${defaultDurationMinutes}m Limit`)}
                   </div>
-                  <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>
-                    {isExamFinished ? 'Time Taken' : (isExamStarted ? 'Time Left' : 'Duration')}
+                  <div style={{ fontSize: '0.65rem', color: isExamPaused ? '#fcd34d' : 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: isExamPaused ? 700 : 400 }}>
+                    {isExamFinished ? 'Time Taken' : (isExamPaused ? 'Paused' : (isExamStarted ? 'Time Left' : 'Duration'))}
                   </div>
                 </div>
 
                 {/* Adjust or extend timer */}
                 {!isExamFinished && (
-                  <div style={{ display: 'flex', gap: '0.25rem', marginLeft: '0.25rem' }}>
+                  <div style={{ display: 'flex', gap: '0.25rem', marginLeft: '0.25rem', alignItems: 'center' }}>
                     {isExamStarted ? (
-                      <button
-                        type="button"
-                        onClick={() => handleUpdateExamDuration(defaultDurationMinutes + 5)}
-                        title="Add +5 minutes extra time"
-                        style={{
-                          padding: '0.2rem 0.45rem',
-                          fontSize: '0.7rem',
-                          fontWeight: 700,
-                          borderRadius: '4px',
-                          background: 'rgba(56, 189, 248, 0.15)',
-                          border: '1px solid rgba(56, 189, 248, 0.35)',
-                          color: '#38bdf8',
-                          cursor: 'pointer'
-                        }}
-                      >
-                        +5m
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          onClick={isExamPaused ? handleResumeExam : () => handlePauseExam()}
+                          title={isExamPaused ? "Resume exam timer" : "Pause exam timer"}
+                          style={{
+                            padding: '0.2rem 0.45rem',
+                            fontSize: '0.7rem',
+                            fontWeight: 700,
+                            borderRadius: '4px',
+                            background: isExamPaused ? 'rgba(16, 185, 129, 0.25)' : 'rgba(245, 158, 11, 0.18)',
+                            border: `1px solid ${isExamPaused ? '#10b981' : 'rgba(245, 158, 11, 0.45)'}`,
+                            color: isExamPaused ? '#34d399' : '#fbbf24',
+                            cursor: 'pointer',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.2rem'
+                          }}
+                        >
+                          <span>{isExamPaused ? '▶️' : '⏸️'}</span>
+                          <span>{isExamPaused ? 'Resume' : 'Pause'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateExamDuration(defaultDurationMinutes + 5)}
+                          title="Add +5 minutes extra time"
+                          style={{
+                            padding: '0.2rem 0.45rem',
+                            fontSize: '0.7rem',
+                            fontWeight: 700,
+                            borderRadius: '4px',
+                            background: 'rgba(56, 189, 248, 0.15)',
+                            border: '1px solid rgba(56, 189, 248, 0.35)',
+                            color: '#38bdf8',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          +5m
+                        </button>
+                      </>
                     ) : (
                       <button
                         type="button"
@@ -4596,32 +4876,89 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                 position: 'fixed',
                 inset: 0,
                 zIndex: 9998,
-                background: 'rgba(5, 10, 25, 0.92)',
-                backdropFilter: 'blur(14px)',
+                background: 'rgba(5, 10, 25, 0.94)',
+                backdropFilter: 'blur(16px)',
                 display: 'flex',
                 flexDirection: 'column',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: '1.5rem',
+                gap: '1.4rem',
                 textAlign: 'center',
                 padding: '2rem',
               }}>
                 <div style={{ fontSize: '4rem', lineHeight: 1 }}>⏸️</div>
                 <div>
-                  <h2 style={{ margin: '0 0 0.4rem 0', fontSize: '2rem', color: '#fcd34d', fontWeight: 800, letterSpacing: '-0.02em' }}>
+                  <h2 style={{ margin: '0 0 0.5rem 0', fontSize: '2rem', color: '#fcd34d', fontWeight: 800, letterSpacing: '-0.02em' }}>
                     Exam Paused
                   </h2>
-                  <p style={{ margin: 0, fontSize: '1rem', color: 'var(--text-secondary)', maxWidth: '420px' }}>
-                    {pauseLog.length > 0 && pauseLog[pauseLog.length - 1]?.reason
-                      ? <><strong style={{ color: '#fff' }}>Reason:</strong> {pauseLog[pauseLog.length - 1].reason}</>
-                      : 'The timer is paused. Resume when you are ready.'}
+                  <div style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.4rem',
+                    background: 'rgba(245, 158, 11, 0.15)',
+                    border: '1px solid rgba(245, 158, 11, 0.4)',
+                    padding: '0.4rem 1rem',
+                    borderRadius: '20px',
+                    color: '#fbbf24',
+                    fontSize: '1rem',
+                    fontWeight: 700,
+                    fontFamily: 'monospace',
+                    marginBottom: '0.75rem'
+                  }}>
+                    <span>⏱️</span>
+                    <span>{formatTime(remainingSeconds)} Remaining</span>
+                  </div>
+                  <p style={{ margin: 0, fontSize: '0.95rem', color: 'var(--text-secondary)', maxWidth: '440px', lineHeight: 1.5 }}>
+                    The timer is stopped. Take your break and click resume whenever you are ready to continue.
                   </p>
                 </div>
+
+                {/* Optional quick reason / note */}
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem', width: '100%', maxWidth: '360px' }}>
+                  <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', justifyContent: 'center' }}>
+                    {['Restroom Break', 'Water / Snack', 'Short Rest', 'Parent Help'].map(tag => (
+                      <button
+                        key={tag}
+                        type="button"
+                        onClick={() => setPauseReasonInput(tag)}
+                        style={{
+                          padding: '0.25rem 0.6rem',
+                          fontSize: '0.75rem',
+                          borderRadius: '6px',
+                          border: pauseReasonInput === tag ? '1px solid #f59e0b' : '1px solid rgba(255,255,255,0.12)',
+                          background: pauseReasonInput === tag ? 'rgba(245, 158, 11, 0.25)' : 'rgba(255,255,255,0.06)',
+                          color: pauseReasonInput === tag ? '#fcd34d' : '#94a3b8',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        {tag}
+                      </button>
+                    ))}
+                  </div>
+                  <input
+                    type="text"
+                    placeholder="Reason for pause (optional)..."
+                    value={pauseReasonInput}
+                    onChange={(e) => setPauseReasonInput(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '0.5rem 0.75rem',
+                      fontSize: '0.82rem',
+                      borderRadius: '8px',
+                      border: '1px solid rgba(255,255,255,0.15)',
+                      background: 'rgba(0,0,0,0.5)',
+                      color: '#fff',
+                      boxSizing: 'border-box',
+                      textAlign: 'center'
+                    }}
+                  />
+                </div>
+
                 <button
                   type="button"
                   onClick={handleResumeExam}
                   style={{
-                    padding: '0.85rem 2.5rem',
+                    padding: '0.85rem 2.6rem',
                     borderRadius: '12px',
                     fontSize: '1.05rem',
                     fontWeight: 700,
@@ -4633,13 +4970,14 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                     display: 'inline-flex',
                     alignItems: 'center',
                     gap: '0.5rem',
+                    marginTop: '0.35rem'
                   }}
                 >
                   <span>▶️</span>
                   <span>Resume Exam</span>
                 </button>
                 <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: 0 }}>
-                  Timer is stopped. Questions and answers are hidden while paused.
+                  Questions and answers are hidden while paused to maintain test integrity.
                 </p>
               </div>
             )}
@@ -4804,6 +5142,146 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                   </span>
                 </div>
               </div>
+            )}
+
+            {isStudentAccount && isExamFinished && (
+              <form
+                onSubmit={handleRequestRetake}
+                style={{
+                  marginBottom: '1.25rem',
+                  padding: '1rem 1.25rem',
+                  background: 'rgba(59, 130, 246, 0.08)',
+                  border: '1px solid rgba(59, 130, 246, 0.28)',
+                  borderRadius: '12px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: '0.85rem'
+                }}
+              >
+                <div style={{ flex: '1 1 260px' }}>
+                  <strong style={{ display: 'block', color: '#fff', fontSize: '0.95rem', marginBottom: '0.2rem' }}>
+                    Need another attempt?
+                  </strong>
+                  {viewingModelTest.retakeRequest?.status === 'pending' ? (
+                    <span role="status" style={{ color: '#93c5fd', fontSize: '0.82rem' }}>
+                      Your request has been sent. Your teacher needs to approve the retake.
+                    </span>
+                  ) : viewingModelTest.retakeRequest?.status === 'rejected' ? (
+                    <span role="status" style={{ color: '#cbd5e1', fontSize: '0.82rem' }}>
+                      Your teacher declined the previous request. You can send a new one if needed.
+                    </span>
+                  ) : (
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.82rem' }}>
+                      If you submitted by mistake, ask your teacher to reopen this exam.
+                    </span>
+                  )}
+                  {viewingModelTest.retakeRequest?.status !== 'pending' && (
+                    <label style={{ display: 'block', marginTop: '0.65rem', color: '#cbd5e1', fontSize: '0.78rem' }}>
+                      Reason (optional)
+                      <textarea
+                        value={retakeRequestReason}
+                        onChange={(event) => setRetakeRequestReason(event.target.value)}
+                        maxLength={300}
+                        rows={2}
+                        placeholder="Tell your teacher what happened"
+                        style={{
+                          display: 'block',
+                          width: 'min(100%, 30rem)',
+                          marginTop: '0.25rem',
+                          padding: '0.5rem 0.65rem',
+                          background: 'rgba(0, 0, 0, 0.25)',
+                          border: '1px solid rgba(255, 255, 255, 0.14)',
+                          borderRadius: '6px',
+                          color: '#f8fafc',
+                          font: 'inherit',
+                          resize: 'vertical'
+                        }}
+                      />
+                    </label>
+                  )}
+                </div>
+                {viewingModelTest.retakeRequest?.status !== 'pending' && (
+                  <button
+                    type="submit"
+                    disabled={isSubmittingRetakeRequest}
+                    style={{
+                      padding: '0.55rem 0.9rem',
+                      background: isSubmittingRetakeRequest ? 'rgba(59, 130, 246, 0.35)' : 'rgba(59, 130, 246, 0.2)',
+                      border: '1px solid rgba(96, 165, 250, 0.55)',
+                      borderRadius: '7px',
+                      color: '#bfdbfe',
+                      fontSize: '0.82rem',
+                      fontWeight: 700,
+                      cursor: isSubmittingRetakeRequest ? 'wait' : 'pointer'
+                    }}
+                  >
+                    {isSubmittingRetakeRequest ? 'Sending…' : 'Request retake'}
+                  </button>
+                )}
+              </form>
+            )}
+
+            {!isStudentAccount && viewingModelTest.retakeRequest?.status === 'pending' && (
+              <section
+                aria-labelledby="retake-request-title"
+                style={{
+                  marginBottom: '1.25rem',
+                  padding: '1rem 1.25rem',
+                  background: 'rgba(245, 158, 11, 0.08)',
+                  border: '1px solid rgba(245, 158, 11, 0.32)',
+                  borderRadius: '12px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: '0.85rem'
+                }}
+              >
+                <div style={{ flex: '1 1 260px' }}>
+                  <strong id="retake-request-title" style={{ display: 'block', color: '#fff', fontSize: '0.95rem', marginBottom: '0.2rem' }}>
+                    Retake requested by {viewingModelTest.retakeRequest.requestedByName || 'student'}
+                  </strong>
+                  <span style={{ color: 'var(--text-secondary)', fontSize: '0.82rem' }}>
+                    {viewingModelTest.retakeRequest.reason || 'No reason provided.'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    onClick={() => handleReviewRetakeRequest(false)}
+                    disabled={isReviewingRetakeRequest}
+                    style={{
+                      padding: '0.5rem 0.8rem',
+                      background: 'rgba(255, 255, 255, 0.06)',
+                      border: '1px solid rgba(255, 255, 255, 0.16)',
+                      borderRadius: '7px',
+                      color: '#cbd5e1',
+                      fontSize: '0.8rem',
+                      fontWeight: 600
+                    }}
+                  >
+                    Decline
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleReviewRetakeRequest(true)}
+                    disabled={isReviewingRetakeRequest}
+                    style={{
+                      padding: '0.5rem 0.8rem',
+                      background: 'rgba(16, 185, 129, 0.2)',
+                      border: '1px solid rgba(52, 211, 153, 0.55)',
+                      borderRadius: '7px',
+                      color: '#a7f3d0',
+                      fontSize: '0.8rem',
+                      fontWeight: 700
+                    }}
+                  >
+                    {isReviewingRetakeRequest ? 'Saving…' : 'Approve & reopen exam'}
+                  </button>
+                </div>
+              </section>
             )}
 
             {/* Student Exam Not Started Screen / Banner */}
