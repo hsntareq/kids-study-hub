@@ -1,0 +1,166 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-21T19:01:48+06:00",
+  "title": "Design System: Kids Study Hub",
+  "extensions": {
+    "colorMeta": {
+      "accent-violet": {
+        "role": "primary",
+        "displayName": "Bright Violet",
+        "canonical": "#8b5cf6",
+        "tonalRamp": [
+          "oklch(15% 0.04 293)",
+          "oklch(25% 0.07 293)",
+          "oklch(35% 0.11 293)",
+          "oklch(45% 0.17 293)",
+          "oklch(55% 0.22 293)",
+          "oklch(65% 0.22 293)",
+          "oklch(80% 0.14 293)",
+          "oklch(95% 0.03 293)"
+        ]
+      },
+      "accent-blue": {
+        "role": "secondary",
+        "displayName": "Clear Blue",
+        "canonical": "#3b82f6",
+        "tonalRamp": [
+          "oklch(15% 0.03 260)",
+          "oklch(25% 0.06 260)",
+          "oklch(35% 0.1 260)",
+          "oklch(45% 0.15 260)",
+          "oklch(55% 0.2 260)",
+          "oklch(65% 0.2 260)",
+          "oklch(80% 0.13 260)",
+          "oklch(95% 0.03 260)"
+        ]
+      },
+      "deep-navy": {
+        "role": "neutral",
+        "displayName": "Deep Navy",
+        "canonical": "#0f172a",
+        "tonalRamp": [
+          "oklch(15% 0.025 264)",
+          "oklch(22% 0.03 264)",
+          "oklch(29% 0.035 264)",
+          "oklch(36% 0.04 264)",
+          "oklch(45% 0.04 264)",
+          "oklch(58% 0.035 264)",
+          "oklch(75% 0.025 264)",
+          "oklch(95% 0.01 264)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Main page headings."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Study instructions and supporting copy."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Compact badges and status labels."
+      }
+    },
+    "shadows": [
+      {
+        "name": "button-hover",
+        "value": "0 6px 14px -4px rgba(0, 0, 0, 0.25)",
+        "purpose": "Subtle interactive emphasis on secondary buttons."
+      },
+      {
+        "name": "focus-ring",
+        "value": "0 0 0 4px rgba(139, 92, 246, 0.15)",
+        "purpose": "Visible focus treatment for fields."
+      }
+    ],
+    "motion": [
+      {
+        "name": "standard-transition",
+        "value": "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
+        "purpose": "Default control-state transition."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "tablet",
+        "value": "768px"
+      },
+      {
+        "name": "mobile",
+        "value": "480px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "accent-gradient",
+      "description": "Main call to action.",
+      "html": "<button class=\"ds-btn-primary\" type=\"button\">Start exam</button>",
+      "css": ".ds-btn-primary { background: linear-gradient(135deg, #8b5cf6, #3b82f6); border: 0; border-radius: 6px; color: #fff; padding: 0.34rem 0.8rem; font: 600 0.8rem Outfit, sans-serif; cursor: pointer; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); } .ds-btn-primary:hover { opacity: 0.95; box-shadow: 0 8px 18px -4px rgba(139, 92, 246, 0.35); } .ds-btn-primary:focus-visible { outline: 2px solid #f8fafc; outline-offset: 2px; } .ds-btn-primary:active { transform: translateY(0); }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button",
+      "description": "Supporting action with a subtle surface.",
+      "html": "<button class=\"ds-btn-secondary\" type=\"button\">Cancel</button>",
+      "css": ".ds-btn-secondary { background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 6px; color: #f8fafc; padding: 0.32rem 0.72rem; font: 500 0.8rem Outfit, sans-serif; cursor: pointer; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); } .ds-btn-secondary:hover { background: rgba(255, 255, 255, 0.1); box-shadow: 0 6px 14px -4px rgba(0, 0, 0, 0.25); } .ds-btn-secondary:focus-visible { outline: 2px solid #8b5cf6; outline-offset: 2px; } .ds-btn-secondary:active { transform: translateY(0); }"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "field",
+      "description": "Dark field with a violet focus state.",
+      "html": "<input class=\"ds-input\" aria-label=\"Search students\" placeholder=\"Search students\" />",
+      "css": ".ds-input { width: 100%; background: rgba(0, 0, 0, 0.2); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 6px; color: #f8fafc; padding: 0.36rem 0.65rem; font: 400 0.82rem Outfit, sans-serif; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); } .ds-input::placeholder { color: #64748b; } .ds-input:focus-visible { border-color: #8b5cf6; background: rgba(0, 0, 0, 0.4); box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.15); outline: none; }"
+    },
+    {
+      "name": "Flat Container",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "Unframed content grouping.",
+      "html": "<section class=\"ds-container\"><h2>Study materials</h2><p>Continue where you left off.</p></section>",
+      "css": ".ds-container { width: 100%; max-width: 100%; background: transparent; border: 0; border-radius: 0; padding: 0; box-shadow: none; } .ds-container h2 { color: #f8fafc; font: 600 1.4rem/1.2 Outfit, sans-serif; margin: 0 0 0.75rem; } .ds-container p { color: #94a3b8; font: 400 0.95rem/1.5 Outfit, sans-serif; margin: 0; }"
+    },
+    {
+      "name": "Badge",
+      "kind": "chip",
+      "refersTo": "pill",
+      "description": "Compact category or status label.",
+      "html": "<span class=\"ds-badge\">Pending</span>",
+      "css": ".ds-badge { display: inline-block; padding: 0.25rem 0.75rem; background: rgba(139, 92, 246, 0.15); color: #a78bfa; border: 1px solid rgba(139, 92, 246, 0.3); border-radius: 9999px; font: 600 0.75rem Outfit, sans-serif; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Focused Study Desk",
+    "overview": "A compact workspace for managing study materials and assessments. Deep navy surfaces keep attention on the task, with violet and blue accents making actions and selection states easy to find.",
+    "keyCharacteristics": [
+      "Calm dark surfaces with bright action cues.",
+      "Compact layouts that keep related study controls close.",
+      "Clear status and selection treatments for exam workflows."
+    ],
+    "rules": [
+      {
+        "name": "The Accent-as-Signal Rule",
+        "body": "Use violet and blue to communicate actions, selection, and status; keep large reading areas on dark neutral surfaces.",
+        "section": "colors"
+      }
+    ],
+    "dos": [
+      "Do use violet and blue as purposeful action and status signals.",
+      "Do keep exam controls flexible and wrapping on smaller screens.",
+      "Do make focus, pending, and completion states explicit.",
+      "Do maintain readable text contrast on dark surfaces."
+    ],
+    "donts": [
+      "Don't nest decorative cards inside other cards.",
+      "Don't communicate exam state through color alone.",
+      "Don't use secondary text for critical instructions or actions."
+    ]
+  }
+}
