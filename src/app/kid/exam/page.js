@@ -78,6 +78,7 @@ function ExamPageContent() {
 
   // Model test viewer, sliding & grading state
   const [viewingModelTest, setViewingModelTest] = useState(null);
+  const [isExamHeaderCollapsed, setIsExamHeaderCollapsed] = useState(false);
   const [testViewMode, setTestViewMode] = useState('student'); // 'student' or 'examiner'
   const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
   const [questionDisplayMode, setQuestionDisplayMode] = useState('slide');
@@ -4149,7 +4150,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
 
       {/* Model Test Question Paper, Answer Sheet & Grading - FULL PAGE VIEW */}
       {viewingModelTest && (
-        <div style={{
+        <div className={`exam-viewer-shell${isExamHeaderCollapsed ? ' exam-header-collapsed' : ''}`} style={{
           position: 'fixed',
           top: 0,
           left: 0,
@@ -4164,7 +4165,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
           flexDirection: 'column'
         }}>
           {/* Top Sticky Header */}
-          <header style={{
+          <header className="exam-viewer-header" style={{
             position: 'sticky',
             top: 0,
             zIndex: 40,
@@ -4178,9 +4179,11 @@ Ensure the "questions" array contains ALL the individual generated questions cov
             flexWrap: 'wrap',
             gap: '0.8rem'
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+            <div className="exam-header-identity" style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
               <button
                 type="button"
+                className="exam-header-exit"
+                aria-label="Exit exam"
                 onClick={() => setViewingModelTest(null)}
                 style={{
                   display: 'inline-flex',
@@ -4201,9 +4204,9 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                 <span>Exit Exam</span>
               </button>
 
-              <div>
+              <div className="exam-header-title-block">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                  <h1 style={{ margin: 0, fontSize: '1.2rem', color: '#fff', fontWeight: 700 }}>
+                  <h1 className="exam-header-title" style={{ margin: 0, fontSize: '1.2rem', color: '#fff', fontWeight: 700 }}>
                     {viewingModelTest.displayTitle || viewingModelTest.title || 'Model Test'}
                   </h1>
                   {viewingModelTest.difficulty && (
@@ -4212,7 +4215,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                     </span>
                   )}
                 </div>
-                <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
+                <div className="exam-header-meta" style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
                   <span>📅 {viewingModelTest.date || 'Today'}</span>
                   {(viewingModelTest.generatedTime || formatGeneratedTime(viewingModelTest)) && (
                     <span style={{ color: '#e2e8f0', display: 'inline-flex', alignItems: 'center', gap: '0.2rem' }}>
@@ -4225,7 +4228,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                   <span style={{ color: '#34d399', fontWeight: 600 }}>Result {currentModalDisplayResult}</span>
                 </div>
                 {viewingModelTest.checkedBooks && viewingModelTest.checkedBooks.length > 0 && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap', marginTop: '0.25rem' }}>
+                  <div className="exam-header-books" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap', marginTop: '0.25rem' }}>
                     <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>Reference Books:</span>
                     {viewingModelTest.checkedBooks.map((b, bIdx) => (
                       <a
@@ -4258,10 +4261,10 @@ Ensure the "questions" array contains ALL the individual generated questions cov
               </div>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+            <div className="exam-header-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
               
               {/* Live Exam Timer Badge */}
-              <div style={{
+              <div className="exam-header-timer" style={{
                 display: 'flex',
                 alignItems: 'center',
                 gap: '0.45rem',
@@ -4380,6 +4383,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
               {/* Pause / Resume Button */}
               {isExamStarted && !isExamFinished && (
                 <button
+                  className="exam-header-duplicate-pause"
                   type="button"
                   onClick={isExamPaused ? handleResumeExam : () => handlePauseExam()}
                   style={{
@@ -4404,7 +4408,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
               )}
 
               {/* Mode Switcher */}
-              <div style={{ display: 'flex', background: 'rgba(0,0,0,0.4)', padding: '0.2rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.08)' }}>
+              <div className="exam-header-mode" style={{ display: 'flex', background: 'rgba(0,0,0,0.4)', padding: '0.2rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.08)' }}>
                 <button
                   type="button"
                   onClick={() => setTestViewMode('student')}
@@ -4453,6 +4457,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
               {/* AI Auto Review & Mark Button */}
               <button
                 type="button"
+                className="exam-header-ai"
                 onClick={handleAiAutoReview}
                 disabled={isAiReviewing}
                 style={{
@@ -4487,6 +4492,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
 
               <button
                 type="button"
+                className="exam-header-copy"
                 onClick={handleCopyTest}
                 style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '6px', color: '#cbd5e1', cursor: 'pointer' }}
               >
@@ -4494,6 +4500,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
               </button>
               <button
                 type="button"
+                className="exam-header-print"
                 onClick={() => window.print()}
                 style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '6px', color: '#cbd5e1', cursor: 'pointer' }}
               >
@@ -4501,16 +4508,41 @@ Ensure the "questions" array contains ALL the individual generated questions cov
               </button>
               <button
                 type="button"
+                className="exam-header-duplicate-exit"
                 onClick={() => setViewingModelTest(null)}
                 style={{ padding: '0.4rem 0.8rem', background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#f87171', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
               >
                 ✕ Exit
               </button>
             </div>
+            {!isExamHeaderCollapsed && (
+              <button
+                type="button"
+                className="exam-header-toggle"
+                onClick={() => setIsExamHeaderCollapsed(true)}
+                aria-expanded="true"
+                aria-label="Hide exam header"
+              >
+                <span>Hide exam header</span>
+                <span aria-hidden="true">⌃</span>
+              </button>
+            )}
           </header>
 
           {/* Full Page Body */}
-          <main style={{ flex: 1, width: '100%', maxWidth: '1020px', margin: '0 auto', padding: 'clamp(0.75rem, 2vw, 1.25rem) clamp(0.5rem, 2.5vw, 1.25rem) clamp(5.5rem, 12vh, 7rem) clamp(0.5rem, 2.5vw, 1.25rem)', boxSizing: 'border-box', textAlign: 'left' }}>
+          <main className="exam-viewer-main" style={{ flex: 1, width: '100%', maxWidth: '1020px', margin: '0 auto', padding: 'clamp(0.75rem, 2vw, 1.25rem) clamp(0.5rem, 2.5vw, 1.25rem) clamp(5.5rem, 12vh, 7rem) clamp(0.5rem, 2.5vw, 1.25rem)', boxSizing: 'border-box', textAlign: 'left' }}>
+            {isExamHeaderCollapsed && (
+              <button
+                type="button"
+                className="exam-header-toggle exam-header-show-toggle"
+                onClick={() => setIsExamHeaderCollapsed(false)}
+                aria-expanded="false"
+                aria-label="Show exam header"
+              >
+                <span>Show exam header</span>
+                <span aria-hidden="true">⌄</span>
+              </button>
+            )}
 
             {/* Paused Exam Overlay */}
             {isExamPaused && (
@@ -4837,7 +4869,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
 
             {/* Student Exam Not Started Screen / Banner */}
             {testViewMode === 'student' && !isExamStarted && !isExamFinished && (
-              <div style={{
+              <div className="exam-start-panel" style={{
                 background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.16) 0%, rgba(56, 189, 248, 0.12) 100%)',
                 border: '1px solid rgba(139, 92, 246, 0.4)',
                 borderRadius: '14px',
@@ -4850,7 +4882,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                 gap: '1.2rem',
                 boxShadow: '0 8px 30px rgba(0,0,0,0.3)'
               }}>
-                <div style={{ flex: '1 1 280px', minWidth: 0 }}>
+                <div className="exam-start-copy" style={{ flex: '1 1 280px', minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.35rem' }}>
                     <span style={{ fontSize: '1.5rem' }}>📝</span>
                     <h2 style={{ fontSize: '1.2rem', color: '#fff', margin: 0, fontWeight: 700 }}>
@@ -4862,9 +4894,9 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                   </p>
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', flexWrap: 'wrap' }}>
+                <div className="exam-start-controls" style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', flexWrap: 'wrap' }}>
                   {/* Duration Selector */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'rgba(0,0,0,0.4)', padding: '0.35rem 0.75rem', borderRadius: '8px', border: '1px solid rgba(56, 189, 248, 0.3)' }}>
+                  <div className="exam-duration-control" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'rgba(0,0,0,0.4)', padding: '0.35rem 0.75rem', borderRadius: '8px', border: '1px solid rgba(56, 189, 248, 0.3)' }}>
                     <span style={{ fontSize: '0.85rem' }}>⏱️</span>
                     <select
                       value={defaultDurationMinutes}
@@ -4889,6 +4921,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
 
                   <button
                     type="button"
+                    className="exam-start-button"
                     onClick={handleStartExam}
                     style={{
                       padding: '0.7rem 1.6rem',
@@ -4914,7 +4947,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
             )}
             {/* Uploaded Answer Paper Gallery */}
             {testViewMode === 'examiner' && (
-              <div style={{ marginBottom: '1.25rem', background: 'rgba(139, 92, 246, 0.08)', border: '1px solid rgba(139, 92, 246, 0.25)', borderRadius: '12px', padding: '0.9rem' }}>
+              <div className="exam-answer-gallery" style={{ marginBottom: '1.25rem', background: 'rgba(139, 92, 246, 0.08)', border: '1px solid rgba(139, 92, 246, 0.25)', borderRadius: '12px', padding: '0.9rem' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.4rem' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                     <span style={{ fontSize: '1rem' }}>📄</span>
@@ -4950,7 +4983,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
             )}
 
             {testViewMode === 'student' && (
-              <div style={{ background: 'rgba(0,0,0,0.22)', border: '1px dashed var(--glass-border)', borderRadius: '12px', padding: '1rem', marginBottom: '1.25rem', textAlign: 'left' }}>
+              <div className="exam-answer-upload" style={{ background: 'rgba(0,0,0,0.22)', border: '1px dashed var(--glass-border)', borderRadius: '12px', padding: '1rem', marginBottom: '1.25rem', textAlign: 'left' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem', flexWrap: 'wrap', gap: '0.5rem' }}>
                   <div>
                     <h3 style={{ margin: '0 0 0.15rem 0', fontSize: '0.98rem', color: '#fff', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
@@ -4983,8 +5016,8 @@ Ensure the "questions" array contains ALL the individual generated questions cov
             )}
 
             {/* Slide Navigation Header Bar */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+            <div className="exam-question-toolbar" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <div className="exam-question-summary" style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
                 <span style={{ fontSize: '1.05rem', fontWeight: 700, color: '#fff' }}>
                   {questionDisplayMode === 'slide' 
                     ? `Question ${modalQuestions[currentSlideIndex]?.displayNumber || currentSlideIndex + 1} of ${modalQuestions.length}`
@@ -5022,7 +5055,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                 </button>
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+              <div className="exam-question-controls" style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
                 {savingStatus === 'saving' && (
                   <span style={{ fontSize: '0.78rem', color: '#facc15', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                     <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#facc15' }} />
@@ -5083,6 +5116,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
             {/* Contained Question Navigator: Collapsed Single-Line View */}
             {modalQuestions.length > 0 && isNavigatorCollapsed && (
               <div
+                className="exam-question-navigator-collapsed"
                 onClick={() => setIsNavigatorCollapsed(false)}
                 style={{
                   width: '100%',
@@ -5135,7 +5169,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
 
             {/* Contained Question Navigator: Expanded View (Collapsible by Question Type & Contained Scroller Strip) */}
             {modalQuestions.length > 0 && !isNavigatorCollapsed && (
-              <div style={{
+              <div className="exam-question-navigator" style={{
                 width: '100%',
                 maxWidth: '100%',
                 boxSizing: 'border-box',
@@ -5156,7 +5190,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                   flexWrap: 'wrap'
                 }}>
                   {/* Set Tabs / Filter */}
-                  <div style={{ display: 'flex', gap: '0.35rem', overflowX: 'auto', maxWidth: '100%', paddingBottom: '2px', alignItems: 'center' }}>
+                  <div className="exam-set-tabs" style={{ display: 'flex', gap: '0.35rem', overflowX: 'auto', maxWidth: '100%', paddingBottom: '2px', alignItems: 'center' }}>
                     <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)', marginRight: '0.2rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                       Sets:
                     </span>
@@ -6183,7 +6217,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
 
             {/* Docked Sticky Slide Navigation Controls */}
             {questionDisplayMode === 'slide' && modalQuestions.length > 0 && (
-              <div style={{
+              <div className="exam-slide-footer" style={{
                 position: 'sticky',
                 bottom: 'clamp(0.5rem, 2vh, 1rem)',
                 zIndex: 35,
@@ -6203,7 +6237,9 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                 width: '100%'
               }}>
                 <button
+                  className="exam-slide-previous"
                   type="button"
+                  aria-label="Previous question"
                   onClick={() => {
                     if (currentSlideIndex > 0) {
                       if (testViewMode === 'student') saveStudentAnswers(studentAnswers, true);
@@ -6248,7 +6284,9 @@ Ensure the "questions" array contains ALL the individual generated questions cov
 
                 {currentSlideIndex < modalQuestions.length - 1 ? (
                   <button
+                    className="exam-slide-next"
                     type="button"
+                    aria-label="Next question"
                     onClick={() => {
                       if (testViewMode === 'student') saveStudentAnswers(studentAnswers, true);
                       else saveExaminerGrading(awardedMarks, examinerNotes, overallExaminerFeedback);
@@ -6276,6 +6314,7 @@ Ensure the "questions" array contains ALL the individual generated questions cov
                   </button>
                 ) : (
                   <button
+                    className="exam-slide-submit"
                     type="button"
                     onClick={() => {
                       if (testViewMode === 'student') {
