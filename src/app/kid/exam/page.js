@@ -78,6 +78,7 @@ function ExamPageContent() {
 
   // Model test viewer, sliding & grading state
   const [viewingModelTest, setViewingModelTest] = useState(null);
+  const viewingModelTestId = viewingModelTest?.testId || viewingModelTest?.id || null;
   const [isExamHeaderCollapsed, setIsExamHeaderCollapsed] = useState(false);
   const [testViewMode, setTestViewMode] = useState('student'); // 'student' or 'examiner'
   const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
@@ -464,12 +465,18 @@ function ExamPageContent() {
 
   // Auto-scroll active question pill into center view
   useEffect(() => {
-    if (!viewingModelTest || questionDisplayMode !== 'slide') return;
+    if (!viewingModelTestId || questionDisplayMode !== 'slide' || navigatorViewMode !== 'scroller') return;
     const activeBtn = document.getElementById(`q-pill-${currentSlideIndex}`);
-    if (activeBtn) {
-      activeBtn.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+    const scrollContainer = pillsScrollRef.current;
+    if (!activeBtn || !scrollContainer?.contains(activeBtn)) return;
+
+    const buttonRect = activeBtn.getBoundingClientRect();
+    const containerRect = scrollContainer.getBoundingClientRect();
+    const scrollOffset = buttonRect.left + buttonRect.width / 2 - (containerRect.left + containerRect.width / 2);
+    if (Math.abs(scrollOffset) > 1) {
+      scrollContainer.scrollBy({ left: scrollOffset, behavior: 'smooth' });
     }
-  }, [viewingModelTest, currentSlideIndex, questionDisplayMode, navigatorViewMode]);
+  }, [viewingModelTestId, currentSlideIndex, questionDisplayMode, navigatorViewMode, selectedSetFilter]);
 
   // Auth and data listener
   useEffect(() => {
