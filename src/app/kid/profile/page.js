@@ -6,6 +6,7 @@ import { auth, database } from '../../../lib/firebase';
 import { generateGeminiContent, autoReviewExamWithAI } from '../../../lib/gemini';
 import { onAuthStateChanged, signOut, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth';
 import { ref, get, push, set, onValue, remove, update } from 'firebase/database';
+import { getStudentEmailKey, normalizeStudentEmails } from '../../../lib/studentEmails';
 import Link from 'next/link';
 import MarkDistributionField from '../../../components/MarkDistributionField';
 
@@ -766,10 +767,10 @@ function KidProfileContent() {
   const handleSaveStudentEmail = async (e) => {
     e.preventDefault();
     if (!studentEmailInput.trim() || !user || !kid) return;
-    const cleanEmail = studentEmailInput.trim().toLowerCase();
+    const studentEmails = normalizeStudentEmails(studentEmailInput);
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(cleanEmail)) {
-      setEmailModalError('Please enter a valid email address.');
+    if (studentEmails.length === 0 || studentEmails.some(email => !emailRegex.test(email))) {
+      setEmailModalError('Enter one or more valid email addresses, separated by commas or new lines.');
       return;
     }
 
@@ -777,29 +778,42 @@ function KidProfileContent() {
     setEmailModalError('');
     try {
       const dataOwnerUid = searchParams.get("parentId") || user.uid;
-      const safeEmail = cleanEmail.replace(/\./g, ',');
-
-      // Update student's email in their profile record
-      await set(ref(database, `users/${dataOwnerUid}/kids/${kid.id}/email`), cleanEmail);
-
-      // Create / update studentLinks entry for fast search and assignment
-      await set(ref(database, `studentLinks/${safeEmail}`), {
-        parentId: dataOwnerUid,
-        kidId: kid.id,
-        name: kid.name,
-        grade: kid.grade || '',
-        email: cleanEmail,
-        color: kid.color || '#3b82f6',
-        updatedAt: Date.now()
-      });
-
-      // If kid previously had a different email, clean up the old link
-      if (kid.email && kid.email.toLowerCase() !== cleanEmail) {
-        const oldSafeEmail = kid.email.toLowerCase().replace(/\./g, ',');
-        await remove(ref(database, `studentLinks/${oldSafeEmail}`));
+      for (const studentEmail of studentEmails) {
+        const existingLink = await get(ref(database, `studentLinks/${getStudentEmailKey(studentEmail)}`));
+        const linkData = existingLink.val();
+        if (linkData && (linkData.parentId !== dataOwnerUid || linkData.kidId !== kid.id)) {
+          setEmailModalError(`${studentEmail} is already linked to another student.`);
+          return;
+        }
       }
 
-      setKid(prev => ({ ...prev, email: cleanEmail }));
+      const previousEmails = normalizeStudentEmails(kid.emails, kid.email);
+      const updates = {
+        [`users/${dataOwnerUid}/kids/${kid.id}/email`]: studentEmails[0],
+        [`users/${dataOwnerUid}/kids/${kid.id}/emails`]: studentEmails
+      };
+
+      studentEmails.forEach(studentEmail => {
+        updates[`studentLinks/${getStudentEmailKey(studentEmail)}`] = {
+          parentId: dataOwnerUid,
+          kidId: kid.id,
+          name: kid.name,
+          grade: kid.grade || '',
+          email: studentEmail,
+          emails: studentEmails,
+          color: kid.color || '#3b82f6',
+          updatedAt: Date.now()
+        };
+      });
+
+      previousEmails
+        .filter(studentEmail => !studentEmails.includes(studentEmail))
+        .forEach(studentEmail => {
+          updates[`studentLinks/${getStudentEmailKey(studentEmail)}`] = null;
+        });
+
+      await update(ref(database), updates);
+      setKid(prev => ({ ...prev, email: studentEmails[0], emails: studentEmails }));
       setShowAssignEmailModal(false);
     } catch (err) {
       console.error('Error assigning student email:', err);
@@ -834,6 +848,7 @@ function KidProfileContent() {
         name: kid.name,
         grade: kid.grade || '',
         email: kid.email || '',
+        emails: normalizeStudentEmails(kid.emails, kid.email),
         color: kid.color || '#3b82f6',
         invitedBy: user.email || 'Parent/Guardian',
         invitedAt: Date.now()
@@ -2416,10 +2431,10 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
 
         {/* Profile Header */}
         <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 'clamp(1rem, 4vw, 2rem)', marginBottom: '2rem', paddingBottom: '1.5rem', borderBottom: '1px solid var(--glass-border)' }}>
-          {kid.email ? (
+          {kid.email || kid.emails?.length ? (
             <>
               <img 
-                src={`https://unavatar.io/${kid.email}?fallback=false`} 
+                src={`https://unavatar.io/${kid.email || normalizeStudentEmails(kid.emails)[0]}?fallback=false`}
                 alt={kid.name}
                 referrerPolicy="no-referrer"
                 style={{ width: 'clamp(72px, 18vw, 120px)', height: 'clamp(72px, 18vw, 120px)', borderRadius: '50%', objectFit: 'cover', boxShadow: `0 8px 24px ${kid.color}40`, border: `4px solid ${kid.color}`, display: 'block' }}
@@ -2461,7 +2476,7 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
 
             {/* Email assignment & Teacher invitation bar */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
-              {kid.email ? (
+              {kid.email || kid.emails?.length ? (
                 <div style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -2474,11 +2489,13 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                   color: '#cbd5e1'
                 }}>
                   <span>✉️</span>
-                  <span style={{ fontWeight: 600 }}>{kid.email}</span>
+                  <span style={{ fontWeight: 600, overflowWrap: 'anywhere' }}>
+                    {normalizeStudentEmails(kid.emails, kid.email).join(', ')}
+                  </span>
                   <button
                     type="button"
                     onClick={() => {
-                      setStudentEmailInput(kid.email || '');
+                      setStudentEmailInput(normalizeStudentEmails(kid.emails, kid.email).join('\n'));
                       setEmailModalError('');
                       setShowAssignEmailModal(true);
                     }}
@@ -2493,7 +2510,7 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                       marginLeft: '0.25rem',
                       padding: 0
                     }}
-                    title="Change student email address"
+                    title="Manage student email addresses"
                   >
                     Edit
                   </button>
@@ -7752,10 +7769,10 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
               <div>
                 <h3 style={{ margin: '0 0 0.35rem 0', fontSize: '1.25rem', color: '#fff', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <span>✉️</span>
-                  <span>{kid?.email ? 'Edit Student Email' : 'Assign Student Email'}</span>
+                  <span>{kid?.email || kid?.emails?.length ? 'Manage Student Emails' : 'Assign Student Email'}</span>
                 </h3>
                 <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-                  Assigning an email enables student direct login and allows teachers to assign this student by email.
+                  Each address can sign in to this same student profile and can be used to find the student for assignment.
                 </p>
               </div>
               <button
@@ -7778,14 +7795,14 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
             <form onSubmit={handleSaveStudentEmail} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
               <div>
                 <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.86rem', color: '#cbd5e1', fontWeight: 600 }}>
-                  Student Email Address
+                  Student Email Addresses
                 </label>
-                <input
-                  type="email"
+                <textarea
                   required
-                  placeholder="e.g. student@school.edu or student@gmail.com"
+                  placeholder={'student@school.edu\nstudent@gmail.com'}
                   value={studentEmailInput}
                   onChange={(e) => setStudentEmailInput(e.target.value)}
+                  rows={4}
                   style={{
                     width: '100%',
                     padding: '0.75rem 1rem',
@@ -7793,7 +7810,8 @@ Ensure the "questions" array contains ALL questions across EVERY section describ
                     border: '1px solid rgba(255, 255, 255, 0.15)',
                     borderRadius: '8px',
                     color: '#fff',
-                    fontSize: '0.95rem'
+                    fontSize: '0.95rem',
+                    resize: 'vertical'
                   }}
                   autoFocus
                 />

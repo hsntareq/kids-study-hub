@@ -4,7 +4,8 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { auth, database } from '../../lib/firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { ref, push, set, onValue, get, remove } from 'firebase/database';
+import { ref, push, set, onValue, get, remove, update } from 'firebase/database';
+import { getStudentEmailKey, normalizeStudentEmails } from '../../lib/studentEmails';
 
 const Icons = {
   add: <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>,
@@ -46,7 +47,7 @@ export default function Dashboard() {
         setUser(currentUser);
         
         // 1. Check if this logged in user is actually a STUDENT
-        const safeEmail = (currentUser.email || '').toLowerCase().replace(/\./g, ',');
+        const safeEmail = getStudentEmailKey(currentUser.email);
         const linkRef = ref(database, `studentLinks/${safeEmail}`);
         
         try {
@@ -76,17 +77,19 @@ export default function Dashboard() {
 
             // Keep the studentLinks index updated with metadata
             kidsList.forEach(kid => {
-              if (kid.email) {
-                const sEmail = kid.email.toLowerCase().replace(/\./g, ',');
+              const studentEmails = normalizeStudentEmails(kid.emails, kid.email);
+              studentEmails.forEach(studentEmail => {
+                const sEmail = getStudentEmailKey(studentEmail);
                 set(ref(database, `studentLinks/${sEmail}`), {
                   parentId: currentUser.uid,
                   kidId: kid.id,
                   name: kid.name,
                   grade: kid.grade || '',
-                  email: kid.email,
+                  email: studentEmail,
+                  emails: studentEmails,
                   color: kid.color || '#6366f1'
                 }).catch(e => console.log('Link sync error:', e));
-              }
+              });
             });
           } else {
             setKids([]);
@@ -159,7 +162,7 @@ export default function Dashboard() {
     setSearchFeedback(null);
 
     try {
-      const safeEmail = cleanEmail.replace(/\./g, ',');
+      const safeEmail = getStudentEmailKey(cleanEmail);
       const linkRef = ref(database, `studentLinks/${safeEmail}`);
       const snap = await get(linkRef);
 
@@ -216,6 +219,7 @@ export default function Dashboard() {
         name: foundStudentData.name || 'Student',
         grade: foundStudentData.grade || '',
         email: foundStudentData.email || searchStudentEmail.trim().toLowerCase(),
+        emails: normalizeStudentEmails(foundStudentData.emails, foundStudentData.email || searchStudentEmail),
         color: foundStudentData.color || '#6366f1',
         assignedAt: Date.now()
       });
@@ -244,6 +248,7 @@ export default function Dashboard() {
         name: invite.name || 'Student',
         grade: invite.grade || '',
         email: invite.email || '',
+        emails: normalizeStudentEmails(invite.emails, invite.email),
         color: invite.color || '#6366f1',
         assignedAt: Date.now()
       });
@@ -295,28 +300,47 @@ export default function Dashboard() {
     const randomColor = colors[Math.floor(Math.random() * colors.length)];
     
     try {
+      const studentEmails = normalizeStudentEmails(newKidEmail);
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (studentEmails.some(email => !emailRegex.test(email))) {
+        alert('Please enter valid email addresses, separated by commas or new lines.');
+        return;
+      }
+
+      for (const studentEmail of studentEmails) {
+        const existingLink = await get(ref(database, `studentLinks/${getStudentEmailKey(studentEmail)}`));
+        if (existingLink.exists()) {
+          alert(`The email address ${studentEmail} is already linked to another student.`);
+          return;
+        }
+      }
+
       const kidsRef = ref(database, `users/${user.uid}/kids`);
       const newKidRef = push(kidsRef);
       const kidData = {
         name: newKidName.trim(),
         grade: newKidGrade.trim(),
-        email: newKidEmail.trim().toLowerCase(),
+        email: studentEmails[0] || '',
+        emails: studentEmails,
         color: randomColor,
         createdAt: Date.now()
       };
-      await set(newKidRef, kidData);
 
-      const sEmail = newKidEmail.trim().toLowerCase().replace(/\./g, ',');
-      if (sEmail) {
-        await set(ref(database, `studentLinks/${sEmail}`), {
+      const updates = {
+        [`users/${user.uid}/kids/${newKidRef.key}`]: kidData
+      };
+      studentEmails.forEach(studentEmail => {
+        updates[`studentLinks/${getStudentEmailKey(studentEmail)}`] = {
           parentId: user.uid,
           kidId: newKidRef.key,
           name: kidData.name,
           grade: kidData.grade,
-          email: kidData.email,
+          email: studentEmail,
+          emails: studentEmails,
           color: kidData.color
-        });
-      }
+        };
+      });
+      await update(ref(database), updates);
       
       setStatusToast(`🎉 Created student profile for ${kidData.name}!`);
       setTimeout(() => setStatusToast(''), 3500);
@@ -961,17 +985,17 @@ export default function Dashboard() {
 
                 <div>
                   <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.85rem', color: '#38bdf8', fontWeight: 600 }}>
-                    Student Email Address (for Login & Teacher Assignment)
+                    Student Email Addresses (for Login & Teacher Assignment)
                   </label>
-                  <input 
-                    type="email" 
+                  <textarea
                     value={newKidEmail} 
                     onChange={(e) => setNewKidEmail(e.target.value)} 
-                    placeholder="e.g. alex@student.edu" 
-                    style={{ width: '100%', boxSizing: 'border-box', padding: '0.65rem 0.8rem', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(56, 189, 248, 0.4)', borderRadius: '8px', color: '#38bdf8', fontSize: '0.9rem' }}
+                    placeholder={'e.g. alex@student.edu\nalex.personal@gmail.com'}
+                    rows={3}
+                    style={{ width: '100%', boxSizing: 'border-box', padding: '0.65rem 0.8rem', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(56, 189, 248, 0.4)', borderRadius: '8px', color: '#38bdf8', fontSize: '0.9rem', resize: 'vertical' }}
                   />
                   <span style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', display: 'block', marginTop: '0.35rem' }}>
-                    Assigning student email allows them to take exams independently and lets teachers assign them.
+                    Enter one or more addresses separated by commas or new lines. Each address can sign in to the same student profile.
                   </span>
                 </div>
                 
